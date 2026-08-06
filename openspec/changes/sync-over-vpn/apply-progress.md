@@ -538,3 +538,162 @@ screen's own address/key fields underneath it.
 ### Status (Phase 3, final)
 9/9 tasks complete (3.1-3.9). No branches/commits created, per
 instruction. Do NOT start Phase 4.
+
+## Phase 4 (PR4 — schema slice 3a, additive DDL): COMPLETE (3/3 tasks, 4.1-4.3)
+
+Mode: Strict TDD. Built on the PR1/PR2/PR3 working tree, no new
+branch/commit created, per instruction. ADDITIVE ONLY — no delete-path
+rewrite, no tombstones; that is slice 3b (PR5), explicitly out of scope
+and not started.
+
+### What was built
+Per design.md "Slice 3 in three sub-slices" (3a row): `nodes` and `edges`
+(`axi/src/axi/store.py:198-222`, `_SCHEMA`) each gain `uuid TEXT`,
+`lamport INTEGER`, `origin_node TEXT`, `deleted_at REAL`, plus a
+`CREATE UNIQUE INDEX ... ON {table}(uuid)` right after each table's
+existing indexes. A fresh DB gets all of this natively via `_SCHEMA`'s
+`CREATE TABLE IF NOT EXISTS` (mirrors how `devices.pubkey_proven` already
+works). For a DB created BEFORE this change, `migrate_nodes_edges_sync_columns()`
+(new function, same shape as `migrate_devices_pubkey_proven`, placed right
+after it in `store.py`) does the work: `PRAGMA table_info` check per
+column -> `ALTER TABLE ... ADD COLUMN` for any missing one -> backfill
+`uuid = str(uuid.uuid4())` for every row where `uuid IS NULL` -> `CREATE
+UNIQUE INDEX IF NOT EXISTS`. Wired into `init_db()` right after
+`migrate_devices_pubkey_proven()`.
+
+**Why a UNIQUE INDEX, not a UNIQUE column constraint**: SQLite's `ALTER
+TABLE ... ADD COLUMN` cannot attach a UNIQUE constraint. The migration
+backfills first, then creates the index — SQLite tolerates any number of
+NULLs in a UNIQUE index, so the identical `CREATE UNIQUE INDEX IF NOT
+EXISTS` statement is safe to run unconditionally on both a freshly
+created empty table and a migrated pre-existing one.
+
+**Why the backfill loop is safe to run on every `init_db()` (not just
+once)**: nothing in this slice sets `uuid` at INSERT time — `node_add`/
+edge-insert paths are untouched, per the additive-only scope. The
+backfill only scopes to `WHERE uuid IS NULL`, so it never re-touches an
+already-backfilled row; it simply converges any row still missing a
+`uuid` (including an ordinary row created after this slice shipped) on
+the next startup, with no behavior change visible to any caller (nothing
+reads the column).
+
+### Idempotency / interruption / uniqueness — verified, not asserted
+The spec (`sync-schema-migration`) requires all three to be proven, not
+just claimed by the migration's own exit code:
+- **Idempotent**: `test_migrate_nodes_edges_sync_columns_is_idempotent`
+  calls the migration twice and asserts the second call is a no-op — same
+  `uuid` before and after the repeat call, no error (an `ALTER TABLE
+  ADD COLUMN` on an already-existing column would raise if the
+  `PRAGMA table_info` guard were missing).
+- **Interrupted mid-migration**: `test_migrate_interrupted_after_nodes_before_edges_resumes_safely`
+  monkeypatches `store.uuid.uuid4` to raise on its 3rd call — the 1st and
+  2nd calls backfill both pre-existing `nodes` rows (that table finishes
+  cleanly), the 3rd call is the `edges` row's backfill, which raises,
+  simulating a kill landing exactly between the two tables. Asserts:
+  `nodes` has all 4 new columns AND both rows have a non-NULL `uuid`;
+  `edges` has all 4 new columns (ALTERed before the backfill loop that
+  crashed) but its one row's `uuid` is still NULL — a real, detectable
+  mid-state, not a silently half-applied one. Restoring the real `uuid4`
+  and calling the migration again completes it: the edge gets its `uuid`,
+  and both nodes keep their EXACT original `uuid` values (proving the
+  resume did not re-touch already-migrated rows).
+- **Row survival with stable identity**: `test_migrate_nodes_edges_sync_columns_alters_pre_change_tables`
+  rebuilds `nodes`/`edges` with the byte-exact pre-change DDL (no new
+  columns), inserts a node pair and an edge between them with real data,
+  runs the migration, and asserts every original column value survived
+  unchanged (`kind`, `label`, `data`, `domain`, `created_at`, `from_id`,
+  `to_id`) with a freshly assigned non-NULL `uuid`, while `lamport`/
+  `origin_node`/`deleted_at` stay NULL (additive-only, untouched).
+- **Uniqueness across more than a couple of rows**:
+  `test_migrate_backfilled_uuids_are_unique_across_many_rows` backfills 6
+  pre-existing node rows, asserts all 6 uuids are distinct AND each
+  parses as a real UUID (`uuid.UUID(u)`), then proves the constraint is
+  REAL (not just statistically unlikely to collide) by attempting to
+  `UPDATE` a second row to reuse the first row's `uuid` and asserting
+  that raises — the UNIQUE INDEX actively rejects it.
+- **Zero observable behavior change**: `test_full_suite_behavior_unaffected_by_slice_3a_migration`
+  round-trips a migrated pre-change row through the PUBLIC API
+  (`store.get_node`), asserting the shape callers see is unchanged. The
+  real proof is broader (see Metrics below): the full pre-existing
+  mandated suite (97 tests) passes IDENTICALLY with `store.py` reverted
+  to its pre-3a state and with the 3a change applied — same 97/97, zero
+  deltas.
+
+### TDD Cycle Evidence
+| Task | Test File | RED proof | GREEN |
+|------|-----------|-----------|-------|
+| 4.1/4.2 | `test_store_migration.py` (5 tests, all written first) | `store.py` reverted to its pre-PR4 committed state (`git checkout`) via a saved patch, ran the 5 new tests — all 5 failed with a genuine `AttributeError: module 'axi.store' has no attribute 'migrate_nodes_edges_sync_columns'` (2 tests) / same error surfaced differently as the test body progressed for the rest, confirming they exercise code that does not exist yet, not a stub assertion | Patch reapplied (`git apply`) — all 5 passed on first run |
+| 4.3 | `store.py` (`_SCHEMA` DDL + `migrate_nodes_edges_sync_columns` + `init_db()` wiring) | (implemented as part of the same RED->GREEN cycle above — the RED tests target this exact function) | Confirmed via the 5/5 GREEN run above |
+
+### Metrics
+Focused command (this unit): `pytest tests/test_store_migration.py -q` —
+**0 -> 5 passing** (RED confirmed on all 5 first, via a temporarily
+reverted `store.py`).
+
+Mandated command (`test_store.py`, `test_devices_store.py`,
+`test_mesh_trust.py`, `test_pair_endpoint.py`, `test_pairing.py`,
+`test_store_migration.py`): **102/102 passing**. Isolated regression
+check (same 5 files, WITHOUT the new test file, run twice — once against
+`store.py` reverted to pre-PR4, once against the PR4 `store.py`): **97/97
+both times**, identical pass count — the direct proof task 4.2 asks for.
+
+Diff size, production vs test (new file not in `git diff --stat`, counted
+explicitly):
+- Production: `axi/src/axi/store.py` modified, **+81/-2 = 83 changed
+  lines** (`import uuid`; 4 columns + 1 unique index each on `nodes`/
+  `edges`; `init_db()` wiring comment+call; the new
+  `migrate_nodes_edges_sync_columns` function).
+- Tests: `axi/tests/test_store_migration.py` new file, **263 lines**.
+- Total: 346 changed lines — under the ~80-120 production estimate for
+  the DDL itself (81 lines) and well under the 400-line PR budget overall
+  (production 83 + tests 263 = 346).
+
+### Runtime harness
+N/A, as forecast in tasks.md's Suggested Work Units table — this is a
+pure pytest-tmp-DB unit, no live network/VPN/backup-host boundary exists
+for a schema migration. The closest available integration check
+(`test_full_suite_behavior_unaffected_by_slice_3a_migration`, which
+round-trips through `store.get_node`) was run and is green.
+
+### Deviations from Design
+None — implementation matches design.md's 3a row exactly. One deliberate
+elaboration beyond the literal task wording: the migration's row-level
+backfill loop was designed to be safely re-runnable on EVERY `init_db()`
+startup (not just once), since nothing sets `uuid` at INSERT time yet —
+this keeps the "every row eventually gets a uuid" invariant true over
+time without touching `node_add`/edge-insert paths, which stays strictly
+out of this slice's additive-only scope. This is a design refinement
+within scope, not a deviation from it.
+
+### Issues Found
+None. No production bug found in existing code — this PR only adds new,
+additive columns/index/migration function; no existing function's body
+was modified.
+
+### Rollback boundary
+Revert `axi/src/axi/store.py`'s diff (4 new columns + 1 unique index on
+each of `nodes`/`edges`, the `migrate_nodes_edges_sync_columns` function,
+and its `init_db()` wiring) and delete
+`axi/tests/test_store_migration.py`. The 4 new columns are unused by any
+other code path — deleting them via a drop-column migration, if ever
+needed, would not affect any other function, since nothing reads them.
+
+### Workload / PR Boundary
+- Mode: chained PR slice (stacked-to-main per tasks.md's Review Workload
+  Forecast; feature-branch-chain per this session's preflight — followed
+  feature-branch-chain: this batch targets the current working tree,
+  built on PR1/PR2/PR3, same as prior phases), PR4 of 6.
+- Boundary: `axi/src/axi/store.py`'s `_SCHEMA` (`nodes`/`edges` CREATE
+  TABLE blocks), `migrate_nodes_edges_sync_columns`, and its `init_db()`
+  call site, plus `axi/tests/test_store_migration.py`. No other file
+  touched. No delete-path rewrite (slice 3b, PR5 — explicitly out of
+  scope and not started, per the gate in tasks.md 5.5).
+- Estimated review budget impact: 346 total changed lines (83 production
+  + 263 tests) — under the 400-line budget, no `size:exception` needed.
+
+### Status (Phase 4, final)
+3/3 tasks complete (4.1-4.3). 102/102 mandated-suite tests passing
+(97 pre-existing + 5 new), with the 97 pre-existing proven byte-identical
+in pass count before and after the DDL change. Ready for verify. Phase 5
+(PR5, schema slice 3b — irreversible tombstones) intentionally NOT
+started, gated on PR4's merge and post-verification per tasks.md 5.5.

@@ -27,6 +27,7 @@ import stat
 import threading
 import time
 import traceback
+import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator
@@ -203,11 +204,23 @@ CREATE TABLE IF NOT EXISTS nodes (
   domain      TEXT,                  -- 'health'|'finance'|'work'|'home'|… or NULL
   created_at  REAL NOT NULL,         -- Unix epoch (absolute moment, UTC)
   updated_at  REAL NOT NULL,
-  created_tz  TEXT                   -- IANA timezone active when this node was created
+  created_tz  TEXT,                  -- IANA timezone active when this node was created
+  -- ── sync-over-vpn schema slice 3a (additive only, nothing reads these
+  -- yet — see design.md "Slice 3 in three sub-slices" and
+  -- migrate_nodes_edges_sync_columns for the pre-existing-DB migration) ──
+  uuid        TEXT,                  -- stable sync identity, backfilled for every row
+  lamport     INTEGER,               -- sync Lamport clock, unused until the sync engine ships
+  origin_node TEXT,                  -- sync origin node id, unused until the sync engine ships
+  deleted_at  REAL                   -- soft-delete tombstone; NULL == not deleted (slice 3b wires the delete path)
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_kind    ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_domain  ON nodes(domain);
 CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
+-- SQLite's ALTER TABLE ADD COLUMN cannot attach a UNIQUE constraint, so this
+-- index (not a column constraint) is what enforces uuid uniqueness on both a
+-- fresh DB (built via this CREATE TABLE) and a migrated pre-existing one
+-- (migrate_nodes_edges_sync_columns creates the same index after backfill).
+CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
 
 CREATE TABLE IF NOT EXISTS edges (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -215,11 +228,17 @@ CREATE TABLE IF NOT EXISTS edges (
   to_id       INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
   kind        TEXT NOT NULL,         -- 'mentioned_in'|'caused_by'|'happened_after'|'belongs_to'|'supersedes'|…
   data        TEXT,                  -- JSON props
-  created_at  REAL NOT NULL
+  created_at  REAL NOT NULL,
+  -- ── sync-over-vpn schema slice 3a (additive only — see nodes above) ──
+  uuid        TEXT,
+  lamport     INTEGER,
+  origin_node TEXT,
+  deleted_at  REAL
 );
 CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to   ON edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid);
 
 -- ─────────────────────── conversation history ───────────────────────
 
@@ -1091,6 +1110,10 @@ def init_db() -> None:
         # PoP hardening: pubkey_proven column for pre-existing DBs (no-op on
         # a fresh DB — CREATE TABLE above already has the column).
         migrate_devices_pubkey_proven()
+        # Sync-over-vpn schema slice 3a: uuid/lamport/origin_node/deleted_at
+        # columns on nodes/edges for pre-existing DBs (no-op on a fresh DB —
+        # CREATE TABLE above already has them). Additive only, unread so far.
+        migrate_nodes_edges_sync_columns()
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
@@ -2637,6 +2660,62 @@ def migrate_devices_pubkey_proven() -> None:
     if "pubkey_proven" not in existing:
         c.execute(
             "ALTER TABLE devices ADD COLUMN pubkey_proven INTEGER NOT NULL DEFAULT 0"
+        )
+
+
+def migrate_nodes_edges_sync_columns() -> None:
+    """Idempotent, additive migration (schema slice 3a — design.md "Slice 3
+    in three sub-slices"): add `uuid`, `lamport`, `origin_node`,
+    `deleted_at` to `nodes` and `edges`.
+
+    A fresh DB already has all four columns via `_SCHEMA`'s
+    `CREATE TABLE IF NOT EXISTS` — this only fires for a DB created BEFORE
+    this change (mirrors `migrate_devices_pubkey_proven`). Purely additive:
+    nothing in the codebase reads these columns yet (the sync engine that
+    will is a later, separate PR) — this slice's whole contract is zero
+    observable behavior change.
+
+    SQLite's `ALTER TABLE ... ADD COLUMN` cannot attach a UNIQUE
+    constraint, so `uuid` uniqueness is enforced by a UNIQUE INDEX created
+    AFTER backfill, not by a column constraint (SQLite tolerates any number
+    of NULLs in a UNIQUE index, so the same index also works on a freshly
+    created, empty table).
+
+    Runs one non-destructive step at a time (add missing columns -> backfill
+    NULL uuids -> create the unique index) for `nodes`, then for `edges`.
+    Every statement commits individually (this connection is opened with
+    isolation_level=None), and every step re-checks the CURRENT
+    schema/data state before acting. That combination is what makes a
+    process kill between any two steps — e.g. after `nodes` finishes but
+    before `edges` starts — safe to resume: a re-run only performs the
+    steps that did not happen yet and never reassigns a `uuid` that was
+    already backfilled. It is also why the backfill loop below is safe to
+    call on every `init_db()` (like the rest of this migration): it
+    converges any row still missing a `uuid` — including an ordinary row
+    written after this slice shipped, since nothing yet sets `uuid` at
+    insert time — without ever touching a row that already has one.
+    """
+    c = _connect()
+    for table in ("nodes", "edges"):
+        existing = {r[1] for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        for column, coltype in (
+            ("uuid", "TEXT"),
+            ("lamport", "INTEGER"),
+            ("origin_node", "TEXT"),
+            ("deleted_at", "REAL"),
+        ):
+            if column not in existing:
+                c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        # Backfill only rows still missing a uuid — never re-touches a row
+        # that already has one, which is what makes this resumable/idempotent.
+        missing = c.execute(f"SELECT id FROM {table} WHERE uuid IS NULL").fetchall()
+        for (row_id,) in missing:
+            c.execute(
+                f"UPDATE {table} SET uuid = ? WHERE id = ?",
+                (str(uuid.uuid4()), row_id),
+            )
+        c.execute(
+            f"CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uuid ON {table}(uuid)"
         )
 
 

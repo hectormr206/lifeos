@@ -71,9 +71,9 @@ Chain strategy: stacked-to-main
 
 ## Phase 4: PR4 — schema slice 3a (additive DDL)
 
-- [ ] 4.1 RED: `axi/tests/test_store_migration.py` — `nodes`/`edges` gain `uuid` (backfilled, UNIQUE), `lamport`, `origin_node`, `deleted_at`; existing rows unaffected in behavior
-- [ ] 4.2 RED: same file — full pre-existing test suite still green (no observable behavior change) after 3a alone
-- [ ] 4.3 GREEN: implement additive DDL in `store.py:198-222`
+- [x] 4.1 RED: `axi/tests/test_store_migration.py` — `nodes`/`edges` gain `uuid` (backfilled, UNIQUE), `lamport`, `origin_node`, `deleted_at`; existing rows unaffected in behavior
+- [x] 4.2 RED: same file — full pre-existing test suite still green (no observable behavior change) after 3a alone
+- [x] 4.3 GREEN: implement additive DDL in `store.py:198-222`
 
 ## Phase 5: PR5 — schema slice 3b (tombstones, irreversible)
 
