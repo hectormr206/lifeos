@@ -1,0 +1,25 @@
+[Unit]
+# Lets the app ask for an immediate update check without holding root.
+#
+# The app runs as the desktop user and cannot write to /opt/lifeos. Instead it
+# creates one empty file in a world-writable, sticky drop directory; systemd
+# notices and starts lifeos-updater.service as root. That is the whole
+# privilege boundary: the unprivileged side can only say "please check now",
+# never what to install or from where — the URL, the key and the sha256
+# verification all live on the root side.
+#
+# NOTE: as of this writing nothing in the Flutter app touches this file yet.
+# The path unit works, and the timer already keeps the machine current; wiring
+# the in-app "update now" button on desktop is a separate change. See
+# tools/README-linux.md.
+Description=Watch for an in-app request to check for a LifeOS update
+Documentation=file:///opt/lifeos/bin/lifeos-install.sh
+
+[Path]
+# Fires whenever the file exists. lifeos-updater.service deletes it in its
+# ExecStartPre, which is what re-arms this unit.
+PathExists=/var/lib/lifeos/trigger/update-requested
+Unit=lifeos-updater.service
+
+[Install]
+WantedBy=multi-user.target

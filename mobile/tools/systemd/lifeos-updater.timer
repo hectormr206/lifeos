@@ -1,0 +1,23 @@
+[Unit]
+Description=Check periodically for a new LifeOS desktop release
+
+[Timer]
+# Every hour on the wall clock. Deliberately NOT OnBootSec/OnUnitActiveSec:
+# those schedule relative to boot and to the last activation *after the timer
+# started*, so enabling the timer long after boot can leave it with no
+# reference and therefore no next trigger at all. OnCalendar always has one.
+#
+# The updater is cheap and idempotent when there is nothing to do (one manifest
+# GET), so a short period only shortens the delay between a publish and the
+# laptop having it.
+OnCalendar=hourly
+
+# A laptop is asleep most of the day. Without this, every check that came due
+# while suspended is simply skipped.
+Persistent=true
+
+# Do not have every machine hit the update endpoint on the same second.
+RandomizedDelaySec=5min
+
+[Install]
+WantedBy=timers.target

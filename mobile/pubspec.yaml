@@ -161,7 +161,33 @@ dependencies:
   # AES-256 encrypted at rest with a per-install key held in
   # flutter_secure_storage. Raw-SQL surface mirrors store.py 1:1; host unit
   # tests run on the standard sqlite backend via sqflite_common_ffi (dev dep).
+  #
+  # MOBILE ONLY. sqflite_sqlcipher 3.4.0 ships `android ios macos` and there is
+  # no federated `_linux`/`_windows` implementation, so on desktop it can only
+  # throw MissingPluginException. Desktop is served by the FFI backend below;
+  # see core/graph/graph_database_backend.dart for the split.
   sqflite_sqlcipher: ^3.1.0
+
+  # DESKTOP (Linux, and Windows when its runner lands) half of the same
+  # encrypted graph DB. `sqflite_common_ffi` drives `package:sqlite3` over
+  # dart:ffi, exposing the IDENTICAL sqflite `Database` API — which is what
+  # lets `local_graph_migrations.dart` be REUSED rather than duplicated for
+  # desktop. It was a dev dependency (host tests only); it is now a real one
+  # because the Linux desktop build depends on it at runtime.
+  #
+  # The encryption itself comes from the `hooks:` block at the bottom of this
+  # file, which makes `package:sqlite3` bundle a SQLCipher build instead of
+  # stock SQLite. Without that block `PRAGMA key` is a SILENT NO-OP and the
+  # graph would be written in plaintext — `SqlCipherFfiGraphBackend` therefore
+  # verifies `PRAGMA cipher_version` on every open and refuses to hand back a
+  # handle if the cipher is missing.
+  sqflite_common_ffi: ^2.3.3
+
+  # The shared `Database`/`OpenDatabaseOptions` types that BOTH backends above
+  # speak. Already in the tree transitively via each of them; declared directly
+  # because `core/graph/graph_database_backend.dart` imports it to describe the
+  # backend seam without depending on either concrete implementation.
+  sqflite_common: ^2.5.5
 
   # RFC-4122 v4 UUIDs for the graph store's sync-forward `uuid` primary sync
   # id (roadmap SLICE A2 / PRD D1). Every node/edge gets a globally-unique id
@@ -230,14 +256,15 @@ dev_dependencies:
   url_launcher_platform_interface: ^2.3.2
   plugin_platform_interface: ^2.1.8
 
-  # Host-side (no device/emulator) unit tests for the on-device graph store
-  # (roadmap SLICE A2). Opens a real in-memory sqlite via dart:ffi on the test
-  # VM so the repository's SQL runs exactly as on-device — minus SQLCipher,
-  # which needs the native encrypted lib only present on a real device. The
-  # keyed-open encryption path is documented + guarded, core logic is proven
-  # against real sqlite here. Same standard-sqlite-in-test tradeoff store.py's
-  # own suite makes.
-  sqflite_common_ffi: ^2.3.3
+  # Test-only: point `getApplicationSupportDirectory()` at a temp directory so
+  # `LocalGraphDatabase.open()` can be driven end-to-end on the host VM without
+  # a device. Already in the tree transitively via path_provider; declared here
+  # because the test imports it directly.
+  path_provider_platform_interface: ^2.1.2
+
+  # NOTE: sqflite_common_ffi moved UP into real dependencies — the Linux
+  # desktop build now needs it at runtime, not only the host tests. Host tests
+  # keep using it exactly as before.
 
   # Generates the Android launcher icons (all mipmap densities + adaptive
   # icon) from the Axi axolotl mark. App-shell slice. Run with:
@@ -311,3 +338,31 @@ flutter:
   #
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/to/font-from-package
+
+# ── Encryption at rest on DESKTOP (roadmap SLICE A2, Linux desktop) ─────────
+#
+# `package:sqlite3` 3.x bundles a copy of SQLite with the app through Dart
+# build hooks. By default that copy is STOCK SQLite, in which `PRAGMA key` is
+# silently ignored — an encrypted-looking open that writes plaintext. This
+# user-define switches the bundled library to the SQLCipher community build
+# (SQLCipher 4.17.0 as of sqlite3 3.5.0), which is what makes the desktop graph
+# DB genuinely AES-256 encrypted with the per-install key from the OS keystore.
+#
+# DO NOT REMOVE. `SqlCipherFfiGraphBackend` fails the open loudly rather than
+# degrading to plaintext if this is missing, so deleting it does not silently
+# leak data — it makes the desktop app unable to open its database at all.
+#
+# On-disk compatibility with the mobile path: sqflite_sqlcipher pins SQLCipher
+# 4.10.0 on Android (net.zetetic:sqlcipher-android) and iOS/macOS (SQLCipher
+# pod). Both are SQLCipher 4.x, which share the same defaults (PBKDF2-HMAC-
+# SHA512 / 256 000 iterations, HMAC-SHA512, 4096-byte pages), so the same file
+# is readable on either side. Bumping a MAJOR SQLCipher version on one side
+# only would break that — see graph_database_backend.dart.
+#
+# The `sqlite3` code asset is built for every target, so Android/iOS release
+# builds also carry this library even though they use sqflite_sqlcipher's own
+# native SQLCipher. It is inert weight there; the mobile open path is untouched.
+hooks:
+  user_defines:
+    sqlite3:
+      source: sqlcipher

@@ -10,9 +10,19 @@ import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 /// lives in the OS keystore (Android Keystore / iOS Keychain) via
 /// [FlutterSecureStorage], not a world-readable file.
 ///
-/// The hex string is handed straight to SQLCipher as a raw key
-/// (`PRAGMA key = "x'<hex>'"`), so SQLCipher skips key derivation and uses
-/// the 32 bytes as the AES-256 key directly — same scheme as store.py.
+/// The hex string is handed to SQLCipher as a PASSPHRASE — `sqlite3_key` with
+/// the 64 characters on mobile, the equivalent `PRAGMA key = '<hex>'` on
+/// desktop. SQLCipher then derives the AES-256 key from it with
+/// PBKDF2-HMAC-SHA512 (256 000 iterations) over the salt stored in the file's
+/// own header. Both backends do the same thing, which is what keeps a graph
+/// file readable on either platform.
+///
+/// (An earlier version of this comment claimed raw-key mode,
+/// `PRAGMA key = "x'<hex>'"`, which skips derivation. That is NOT what
+/// happens: neither `sqflite_sqlcipher` nor the desktop backend wraps the key
+/// in the `x'…'` literal that would trigger it, and
+/// `sqlcipher_ffi_backend_test.dart` asserts the raw-key spelling of the same
+/// bytes cannot open the file. The claim was never measured; it is now.)
 class GraphKeyStore {
   GraphKeyStore({FlutterSecureStorage? storage, Random? random})
       : _storage = storage ?? const FlutterSecureStorage(),

@@ -30,7 +30,12 @@ library;
 
 import 'dart:io';
 
-import 'package:sqflite_sqlcipher/sqflite.dart';
+// The shared migration framework speaks the PLATFORM-NEUTRAL sqflite API, not
+// the mobile-only `sqflite_sqlcipher` plugin. `sqflite_sqlcipher` (mobile) and
+// `sqflite_common_ffi` (desktop) both implement these exact types, which is
+// what lets a single copy of this framework serve both backends — see
+// `graph_database_backend.dart`.
+import 'package:sqflite_common/sqlite_api.dart';
 
 import 'local_graph_schema.dart';
 
@@ -211,9 +216,17 @@ Future<void> graphOnDowngrade(Database db, int oldVersion, int newVersion) async
 /// The canonical open options wiring version + all migration callbacks. Host
 /// tests pass this to the ffi factory so they exercise the REAL migration path;
 /// production adds the SQLCipher password on top of the same callbacks.
-OpenDatabaseOptions graphOpenOptions() => OpenDatabaseOptions(
+///
+/// [onConfigure] overrides the per-connection configuration hook. The desktop
+/// backend needs this seam because on `sqflite_common_ffi` the SQLCipher key is
+/// not an open parameter — it is a `PRAGMA key` that has to be the FIRST
+/// statement on the connection, i.e. inside `onConfigure`, before sqflite reads
+/// `user_version`. An override MUST still call [graphOnConfigure] so foreign
+/// keys stay enforced; `SqlCipherFfiGraphBackend` does.
+OpenDatabaseOptions graphOpenOptions({OnDatabaseConfigureFn? onConfigure}) =>
+    OpenDatabaseOptions(
       version: kLocalGraphSchemaVersion,
-      onConfigure: graphOnConfigure,
+      onConfigure: onConfigure ?? graphOnConfigure,
       onCreate: graphOnCreate,
       onUpgrade: graphOnUpgrade,
       onDowngrade: graphOnDowngrade,

@@ -1,0 +1,45 @@
+[Unit]
+# Keeps the installed LifeOS desktop app on the latest published version.
+#
+# This is a SYSTEM service, not a user service, and that is deliberate: the app
+# lives in /opt/lifeos, which only root can write, and a --user unit dies with
+# the login session, so the machine would silently stop updating the moment the
+# user logged out. A system unit keeps running.
+#
+# The work itself is done by the installer script, which is idempotent: it
+# compares the published versionCode against the installed one and exits 0
+# without touching anything when they match.
+Description=Update the LifeOS desktop app to the latest published release
+Documentation=file:///opt/lifeos/bin/lifeos-install.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# UPDATE_BASE_URL and UPDATE_ACCESS_KEY. Written 0600 by the installer, because
+# the access key gates the public update endpoint. The leading '-' is NOT a
+# convenience: without the file the installer cannot reach the manifest, and it
+# must fail loudly rather than pretend the machine is up to date, so it exits
+# non-zero and the failure shows in `systemctl status`.
+EnvironmentFile=-/etc/lifeos/update.env
+
+# A systemd service does not read a login shell's profile. Every binary the
+# installer calls (curl, tar, sha256sum, install, systemctl) must resolve from
+# this list or the script dies with 127 before printing its own diagnostic.
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Consume the in-app "update now" request, if one is pending, before checking.
+# '-' so a missing file is not an error: the timer fires far more often than
+# the user asks.
+ExecStartPre=-/usr/bin/rm -f /var/lib/lifeos/trigger/update-requested
+ExecStart=/opt/lifeos/bin/lifeos-install.sh --update
+
+# Downloading and unpacking ~260 MB should never compete with the user's own
+# work on the machine.
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=30min
+
+[Install]
+WantedBy=multi-user.target

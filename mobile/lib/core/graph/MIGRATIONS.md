@@ -5,6 +5,31 @@ The on-device graph is the user's memory/RAG/config store, encrypted at rest
 lose this data.** This document is the mandatory protocol for every schema
 change. It is enforced by code (`local_graph_migrations.dart`) and by tests.
 
+## One framework, two backends
+
+The migration framework in this folder is **platform-neutral and
+single-sourced**. Only the keyed open differs, behind `GraphDatabaseBackend`
+(`graph_database_backend.dart`):
+
+| Platform | Backend | SQLCipher |
+|---|---|---|
+| Android / iOS / macOS | `sqflite_sqlcipher` native plugin | 4.10.0 |
+| Linux / Windows | `sqflite_common_ffi` over `package:sqlite3` | 4.17.0 community |
+
+Desktop gets its cipher from the `hooks: user_defines: sqlite3: source:
+sqlcipher` block in `pubspec.yaml`. **Without it, `PRAGMA key` is a silent
+no-op and the graph would be plaintext** — so `SqlCipherFfiGraphBackend` proves
+`PRAGMA cipher_version` on every open and refuses to return a handle otherwise.
+There is no plaintext fallback anywhere on either backend.
+
+Both write the same file: the 64-hex keystore key is a SQLCipher *passphrase*
+(PBKDF2-HMAC-SHA512, 256 000 iterations, HMAC-SHA512, 4096-byte pages —
+asserted in `sqlcipher_ffi_backend_test.dart`). A **major** SQLCipher bump on
+one side only would break that interchange, which matters for device sync.
+
+Adding a migration therefore needs no per-platform work. Adding a *platform*
+means implementing the two methods of `GraphDatabaseBackend` and nothing else.
+
 ## The one rule
 
 > **Every schema change = append ONE additive migration step + a vN→vN+1

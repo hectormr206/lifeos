@@ -1,9 +1,9 @@
 import 'package:path_provider/path_provider.dart';
-import 'package:sqflite_sqlcipher/sqflite.dart';
+import 'package:sqflite_common/sqlite_api.dart';
 
+import 'graph_database_backend.dart';
 import 'graph_key_store.dart';
 import 'local_graph_migrations.dart';
-import 'local_graph_schema.dart';
 
 /// Opens the encrypted on-device graph database (roadmap SLICE A2).
 ///
@@ -12,14 +12,25 @@ import 'local_graph_schema.dart';
 /// keystore through [GraphKeyStore]. The file is unreadable without the key —
 /// there is no plaintext-fallback path.
 ///
-/// The key is passed as `password`; `sqflite_sqlcipher` issues the
-/// corresponding `PRAGMA key` on open. Because the key is already 64 hex chars
-/// (32 raw bytes) it is a full-strength AES-256 key.
+/// The 64-hex key is handed to SQLCipher as a passphrase, from which it derives
+/// the AES-256 key with PBKDF2-HMAC-SHA512 over the file's own salt.
+///
+/// HOW the keyed connection is obtained is platform-specific and lives behind
+/// [GraphDatabaseBackend]: the `sqflite_sqlcipher` native plugin on
+/// Android/iOS/macOS, `sqflite_common_ffi` over a SQLCipher build of
+/// `package:sqlite3` on Linux/Windows. Everything below that seam — schema,
+/// migrations, backup, downgrade refusal — is shared, single-sourced code.
 class LocalGraphDatabase {
-  LocalGraphDatabase({GraphKeyStore? keyStore})
-      : _keyStore = keyStore ?? GraphKeyStore();
+  LocalGraphDatabase({GraphKeyStore? keyStore, GraphDatabaseBackend? backend})
+      : _keyStore = keyStore ?? GraphKeyStore(),
+        _backend = backend ?? defaultGraphDatabaseBackend();
 
   final GraphKeyStore _keyStore;
+
+  /// The platform's keyed-open strategy. Injectable so tests can drive the
+  /// real guard rails against a chosen backend, and so an unsupported platform
+  /// fails at construction rather than halfway through an open.
+  final GraphDatabaseBackend _backend;
 
   static const String _fileName = 'lifeos_graph.db';
 
@@ -49,29 +60,8 @@ class LocalGraphDatabase {
 
     return openGuardedGraphDatabase(
       path: path,
-      peekVersion: () => _peekVersion(path, key),
-      openMigrating: () => openDatabase(
-        path,
-        password: key,
-        version: kLocalGraphSchemaVersion,
-        onConfigure: graphOnConfigure,
-        onCreate: graphOnCreate,
-        onUpgrade: graphOnUpgrade,
-        onDowngrade: graphOnDowngrade,
-      ),
+      peekVersion: () => _backend.peekVersion(path, key),
+      openMigrating: () => _backend.openMigrating(path, key),
     );
-  }
-
-  /// Reads the at-rest schema version WITHOUT migrating, so the guard can decide
-  /// whether to back up (upgrade) or refuse (downgrade) before any write. Opens
-  /// read-only with the key; returns null when the file does not exist yet.
-  Future<int?> _peekVersion(String path, String key) async {
-    if (!await databaseExists(path)) return null;
-    final db = await openReadOnlyDatabase(path, password: key);
-    try {
-      return await db.getVersion();
-    } finally {
-      await db.close();
-    }
   }
 }
