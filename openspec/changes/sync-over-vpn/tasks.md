@@ -48,12 +48,12 @@ Chain strategy: stacked-to-main
 
 ## Phase 2: PR2 — VPN detector
 
-- [ ] 2.1 RED: `mobile/test/core/connectivity/vpn_gate_test.dart` — `10.66.66.1:8099/health` reachable → `VpnGateResult.onVpn`
-- [ ] 2.2 RED: same file — unreachable/timeout (~2s bound) → `VpnGateResult.offVpn`
-- [ ] 2.3 RED: same file — ambiguous/error-not-timeout response → `VpnGateResult.unknown`
-- [ ] 2.4 RED: hostile-LAN spoof test — a fake local responder answering at `10.66.66.1:8099/health` with a plausible payload still yields `onVpn` from the gate alone, asserting the test also verifies server identity via `mobile/lib/core/tls/` is invoked before any sealed payload is sent (gate is attempt-only, TLS boundary is the real defense)
-- [ ] 2.5 GREEN: create `mobile/lib/core/connectivity/reachability_vpn_probe.dart` — Dio-injected probe, ~2s timeout, no `connectivity_plus`
-- [ ] 2.6 GREEN: create `mobile/lib/core/connectivity/vpn_gate.dart` — `VpnGate`, `VpnGateResult {onVpn, offVpn, unknown}`, OS-name-parameterized per `app_platform.dart`
+- [x] 2.1 RED: `mobile/test/core/connectivity/vpn_gate_test.dart` — `10.66.66.1:8099/health` reachable → `VpnGateResult.onVpn`
+- [x] 2.2 RED: same file — unreachable/timeout (~2s bound) → `VpnGateResult.offVpn`
+- [x] 2.3 RED: same file — ambiguous/error-not-timeout response → `VpnGateResult.unknown`
+- [x] 2.4 RED: hostile-LAN spoof test — a fake local responder answering at `10.66.66.1:8099/health` with a plausible payload still yields `onVpn` from the gate alone, asserting the test also verifies server identity via `mobile/lib/core/tls/` is invoked before any sealed payload is sent (gate is attempt-only, TLS boundary is the real defense)
+- [x] 2.5 GREEN: create `mobile/lib/core/connectivity/reachability_vpn_probe.dart` — Dio-injected probe, ~2s timeout, no `connectivity_plus`
+- [x] 2.6 GREEN: create `mobile/lib/core/connectivity/vpn_gate.dart` — `VpnGate`, `VpnGateResult {onVpn, offVpn, unknown}`, OS-name-parameterized per `app_platform.dart`
 - [ ] 2.7 SPIKE (non-blocking, implementation-time): confirm on-device `TRANSPORT_VPN` readable with `ACCESS_NETWORK_STATE` alone; if confirmed, add as optional pre-check only (never authoritative); if it fails, drop with zero behavior change
 - [ ] 2.8 TASK: measure real reachability-probe latency on-VPN and off-VPN timeout behavior on a Pixel device; record the measured numbers (not inference) in `openspec/changes/sync-over-vpn/design.md` Open Questions before Phase 3 fixes the scheduler interval
 

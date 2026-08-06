@@ -151,3 +151,168 @@ None in either correction round. Both post-verify tests (migration ALTER TABLE b
 
 ### Status
 16/16 Phase 1 tasks complete (12 original + 2 apply-phase corrections + 2 post-verify corrections). Both previously-recorded WARNINGs are closed with passing, RED-proven tests. Ready for archive. Phase 2 (VPN detector) NOT started.
+
+## Phase 2: PR2 — VPN detector — COMPLETE (6/6 tasks, 2.1-2.6)
+
+Mode: Strict TDD. Branch: `sync-over-vpn-pr1-mesh-trust` (working tree, per
+coordinator instruction — no new branch/commit created by this phase).
+
+Mandated test command:
+```
+cd mobile && flutter test
+```
+Baseline (start of PR2): 1942 passing. After: **1951 passing** (9 new tests,
+all in `vpn_gate_test.dart`). `flutter analyze`: 0 issues (clean, as required
+— two `prefer_initializing_formals` infos surfaced during development and
+were fixed, see Issues Found below).
+
+### The core design decision (unchanged, not reopened)
+Reachability to `10.66.66.1:8099` is the SOLE authoritative gate on every
+platform. `NetworkCapabilities.TRANSPORT_VPN` stays off the critical path
+(task 2.7, the spike, is explicitly out of scope for this PR and was
+skipped).
+
+### TDD Cycle Evidence
+| Task | Test File | RED proof | GREEN |
+|------|-----------|-----------|-------|
+| 2.1-2.4 | `vpn_gate_test.dart` (9 cases) | Implementation files (`reachability_vpn_probe.dart`, `vpn_gate.dart`) moved out of `lib/`; `flutter test` failed to COMPILE with `Type 'VpnGate' not found` / `Undefined name 'VpnGateResult'` etc. — a real RED, not a stub assertion failure | Files restored; all 9 tests passed on first run |
+| 2.5 | `reachability_vpn_probe.dart` | (created as part of the same RED cycle above) | `ReachabilityVpnProbe.probe()` — 2s `sendTimeout`/`receiveTimeout`, `ReachabilityOutcome {reachable, unreachable, ambiguous}` |
+| 2.6 | `vpn_gate.dart` | (same RED cycle) | `VpnGate.check()` — maps probe outcome to `VpnGateResult {onVpn, offVpn, unknown}`, `operatingSystem` field per `app_platform.dart`'s seam |
+
+RED was proven for the WHOLE gate/probe pair at once (both files created
+together, since `VpnGate` cannot compile without `ReachabilityVpnProbe`) by
+temporarily relocating both implementation files out of `lib/core/connectivity/`
+and re-running the test file — it failed with genuine `Error: Type 'VpnGate'
+not found` / `Undefined name 'VpnGateResult'` compile errors, then files were
+restored and the suite went green (9/9).
+
+### The three-state design, honored explicitly
+`unknown` != `offVpn`. Mapping used:
+- `ReachabilityOutcome.reachable` (2xx response) → `VpnGateResult.onVpn`
+- `ReachabilityOutcome.unreachable` (`connectionTimeout`/`sendTimeout`/`receiveTimeout`/`connectionError`) → `VpnGateResult.offVpn`
+- `ReachabilityOutcome.ambiguous` (any other `DioException` type, OR a completed non-2xx response) → `VpnGateResult.unknown`
+
+A dedicated test (`unknown is never silently upgraded to onVpn`) asserts the
+result is both `isNot(VpnGateResult.onVpn)` and `VpnGateResult.unknown` for a
+non-timeout transport error — this is the hard rule the enum exists to
+enforce, made explicit rather than left implicit in the mapping table above.
+
+### Task 2.4 — the hostile-LAN test, and its accepted boundary
+Two tests in the `hostile-LAN boundary (task 2.4)` group:
+1. A fake responder at `10.66.66.1:8099` answering with a plausible
+   `{"service": "lifeos-backup-host", ...}` payload still yields `onVpn` from
+   `VpnGate` alone — the ACCEPTED behavior, documented as such (the gate is
+   an attempt-gate, not authentication).
+2. A companion test that does NOT call `VpnGate` at all: it proves the real
+   defence actually exists in the codebase already —
+   `PlatformTlsAdapterFactory().build(TlsTrustDecision(pinnedCaPem: ..., host:
+   '10.66.66.1'))` returns a non-null `IOHttpClientAdapter` (pinned-CA chain
+   validation, design D5/D6, `mobile/lib/core/tls/`). This does not wire TLS
+   into a live upload path — there is no upload path yet; that is Phase 3's
+   job — it proves the boundary claimed in test 1's comment is real, not
+   aspirational.
+
+### OS-name-parameterized seam (per `app_platform.dart`)
+`VpnGate(probe:, operatingSystem:)` stores `operatingSystem` as a public
+field. Every OS takes the identical reachability-only path today — there is
+no behavioral branch on it yet, since task 2.7 (the `TRANSPORT_VPN`
+pre-check spike) is non-blocking and explicitly out of scope. The field
+exists now, tested (`stores the operating system it was built for`), as the
+seam that spike attaches to later without a public API change — same
+reasoning `app_platform.dart` itself documents for why it takes an OS-name
+parameter instead of reading `Platform` inline.
+
+### Files Changed (post-correction, see below)
+| File | Action | What Was Done |
+|------|--------|----------------|
+| `mobile/lib/core/connectivity/reachability_vpn_probe.dart` | Created, then corrected | `ReachabilityVpnProbe` (94 lines) — Dio-injected, 2s bound, `ReachabilityOutcome` 3-state raw signal, `defaultUri = 'http://10.66.66.1:8099/v1/health'` |
+| `mobile/lib/core/connectivity/vpn_gate.dart` | Created | `VpnGate` (62 lines) — `VpnGateResult {onVpn, offVpn, unknown}`, maps probe outcome to gate meaning, OS-name seam |
+| `mobile/test/core/connectivity/vpn_gate_test.dart` | Created, then corrected | 12 tests (233 lines): onVpn/offVpn/unknown mappings, timeout-vs-non-timeout distinction, 401/404/500-still-onVpn, endpoint-path assertion, unknown-never-upgrades-to-onVpn, OS-seam storage, hostile-LAN pair |
+
+### Diff size (final, post-correction)
+389 changed lines total (94 + 62 + 233), under the ~400 budget — no
+`size:exception` needed.
+
+### Deviations from Design
+None in substance. Implementation matches design.md's Data Flow (slice 2)
+section: `VpnGate.check()` calls `ReachabilityVpnProbe` over HTTP to the
+VPN-only backup-host address via the app's existing `dio`, no new
+dependency. The exact path (`/v1/health` vs design.md's literal `/health`
+wording) was corrected against the real service — see below.
+
+### Coordinator correction (post-initial-report, before archive)
+The coordinator curled the live backup-host on the VPS and found the
+implementation's endpoint answers 401, not 200: `GET /health -> 401`,
+`GET /v1/health -> 200`. Two defects, both fixed:
+
+**1. Wrong endpoint.** `defaultUri` targeted `http://10.66.66.1:8099/health`,
+which does not exist unauthenticated. Changed to `/v1/health` — the same
+unauthenticated rung-1 path `BackupHostClient.diagnose` already uses.
+
+**2. Wrong classification (the more important fix).** The original
+implementation treated only a 2xx response as `reachable`; anything else
+completed-but-non-2xx read as `ambiguous` -> `VpnGateResult.unknown`. On the
+real VPS this meant a correctly-configured VPN with a wrong/renamed path
+would report `unknown` (or, with a differently-shaped bug, `offVpn`) and
+automatic backups would silently never run — the exact failure mode the
+whole feature exists to prevent. Corrected to the coordinator's stated
+semantics: the gate asks "is the tunnel up?", not "is the backup service
+healthy?" — ANY HTTP response (401, 404, 500, anything) now reads as
+`reachable`/`onVpn`; only a genuine transport-level failure (connection
+refused/unrouted, or the bounded timeout) reads as `unreachable`/`offVpn`.
+Everything else (bad certificate, cancellation, dio's generic `unknown`
+exception type) stays `ambiguous`/`unknown`.
+
+**RED proof (mandatory, honored):** wrote the new tests (401/404/500 ->
+`onVpn`, endpoint-path assertion) against the UNCORRECTED implementation
+first. All four failed exactly as predicted — the three status-code tests
+returned `VpnGateResult.unknown` instead of `onVpn`, and the path assertion
+returned `/health` instead of `/v1/health`. Applied both fixes -> all 12
+tests green (9 original + 4 new − 1 obsolete test removed, since "a non-2xx
+response reads as unknown" was the exact claim being corrected and is no
+longer true).
+
+Net test change: 1951 -> **1954** passing (+3 net: +4 new, −1 removed).
+`flutter analyze`: 0 issues, unchanged.
+
+Comments updated in both the enum doc and the `probe()` method body to state
+explicitly WHY any status counts, per the coordinator's instruction, so a
+future "tightening" to 2xx-only does not silently reintroduce this bug.
+
+### Issues Found
+One non-blocking style issue during initial development, fixed before first
+GREEN report: `flutter analyze` flagged two `prefer_initializing_formals`
+infos (constructors assigned a required named param straight to a
+differently-named private field via the initializer list). Fixed by moving
+both assignments (`_dio`, `_probe`) into the constructor body with `late
+final` fields instead of the initializer list.
+
+One functional defect found by the coordinator via live-service curl (not
+by this phase's own tests, which faked the probe and could not observe the
+real endpoint's behavior) — see "Coordinator correction" above. Both the
+endpoint and the classification semantics were fixed, RED-proven first,
+confirmed GREEN.
+
+### Out of scope, confirmed untouched
+Task 2.7 (TRANSPORT_VPN spike) — skipped per explicit instruction, zero
+behavior change. Task 2.8 (on-device latency measurement) — NOT done, needs
+a real Pixel device; still open in design.md's Open Questions. Phase 3
+(scheduler, Settings UI, backup behavior) — not started, no files under
+`mobile/lib/features/backups/` touched.
+
+### Workload / PR Boundary
+- Mode: chained PR slice (stacked-to-main), PR2 of 6, built on top of PR1's
+  working tree per coordinator instruction (no branch/commit created here).
+- Boundary: `mobile/lib/core/connectivity/{reachability_vpn_probe,vpn_gate}.dart`
+  + their test file only. No scheduler, no Settings UI, no change to
+  existing `BackupHostClient` or `connectivity_status.dart`.
+- Rollback: delete both new lib files and the test file — nothing else
+  references them yet (per tasks.md's stated rollback boundary for unit 2).
+
+### Status (final)
+6/6 Phase 2 tasks complete (2.1-2.6), including the coordinator's post-report
+correction (wrong endpoint + wrong status-code classification), RED-proven
+before GREEN. 1954/1954 mobile tests passing, `flutter analyze` clean, 389
+changed lines (under the 400 budget). Task 2.7 (spike) and 2.8 (on-device
+measurement) intentionally left for their designated non-blocking/gated
+timing. Ready for verify. Phase 3 (backup scheduler) NOT started.
