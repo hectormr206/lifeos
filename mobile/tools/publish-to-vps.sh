@@ -78,11 +78,17 @@ print(json.dumps({
 PY
 
 # ── Upload + repoint current.apk on the VPS ─────────────────────────────────
-if [[ "$VPS_SSH" == "local" || -d "$HOME/$VPS_DIR" ]]; then
-  echo "→ Copiando directamente a $HOME/$VPS_DIR/ …"
-  cp "$LOCAL_COPY" "$HOME/$VPS_DIR/$FN"
-  cp "$MANIFEST" "$HOME/$VPS_DIR/manifest.json"
-  (cd "$HOME/$VPS_DIR" && ln -sfn "$FN" current.apk)
+# shellcheck source=tools/ota-volume.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-volume.sh"
+if [[ "$VPS_SSH" == "local" ]] || ota_volume_present; then
+  # On the VPS: into the Coolify-managed volume, never a host directory.
+  ota_require_volume
+  echo "→ Publicando en el volumen Coolify $OTA_VOLUME …"
+  ota_put "$LOCAL_COPY" "$FN"
+  # current.apk is the symlink served at /download; repointing it is what makes
+  # the new build live, so it moves AFTER the APK is fully written.
+  ota_put "$MANIFEST" "manifest.json"
+  ota_link "$FN" "current.apk"
 else
   echo "→ Subiendo a $VPS_SSH:$VPS_DIR/ …"
   scp -o ConnectTimeout=20 "$LOCAL_COPY" "$VPS_SSH:$VPS_DIR/$FN"

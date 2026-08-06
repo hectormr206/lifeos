@@ -166,16 +166,23 @@ print(json.dumps({
 PY
 
 # ── Upload (payload first, manifest LAST so a half-upload never advertises) ──
-if [[ "$VPS_SSH" == "local" || -d "$HOME/$VPS_DIR" ]]; then
-  echo "→ Copiando directamente a $HOME/$REMOTE_DIR/ …"
-  mkdir -p "$HOME/$REMOTE_DIR"
-  cp "$TARBALL" "$HOME/$REMOTE_DIR/$FN"
-  install -m 0755 "$ROOT/bin/install-linux.sh" "$HOME/$VPS_DIR/linux/install-linux.sh"
-  # install -m 0644, not cp: the manifest is written to a mktemp file whose
-  # 0600 mode cp faithfully preserves, and nginx runs as another user — the
-  # tarball served fine while the manifest 403'd, which reads like a routing
-  # bug and is not one.
-  install -m 0644 "$MANIFEST" "$HOME/$REMOTE_DIR/manifest.json"
+# shellcheck source=tools/ota-volume.sh
+source "$MOBILE_DIR/tools/ota-volume.sh"
+# The route is decided by whether the OTA STORE is reachable here, not by
+# whether some host directory happens to exist. That old test is exactly what
+# would have kept publishing into ~/lifeos-updates after nothing served it.
+if [[ "$VPS_SSH" == "local" ]] || ota_volume_present; then
+  # Publishing on the VPS itself: write straight into the Coolify-managed
+  # volume. There is no host directory to copy into any more — the artifacts
+  # deliberately no longer live loose on the host.
+  ota_require_volume
+  echo "→ Publicando en el volumen Coolify $OTA_VOLUME …"
+  ota_put "$TARBALL" "linux/$ARCH/$FN"
+  ota_put "$ROOT/bin/install-linux.sh" "linux/install-linux.sh" 0755
+  # Manifest LAST: until it moves, nothing advertises the new build, so a
+  # publish interrupted midway never points laptops at a tarball that is not
+  # fully there.
+  ota_put "$MANIFEST" "linux/$ARCH/manifest.json"
 else
   echo "→ Subiendo a $VPS_SSH:$REMOTE_DIR/ …"
   # shellcheck disable=SC2029  # $REMOTE_DIR is ours and must expand locally.
