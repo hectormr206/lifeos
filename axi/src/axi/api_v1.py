@@ -76,8 +76,76 @@ def capabilities() -> dict[str, Any]:
             "domains": {"v": 1, "list": list(_DOMAINS)},
             "graph": {"v": 1, "features": list(_GRAPH_FEATURES)},
             "reminders": {"v": 1, "features": list(_REMINDER_FEATURES)},
+            # Game mode is capability-negotiated rather than assumed, because
+            # whether it means anything is a property of THIS machine: on a box
+            # with no GPU there is no VRAM to hand back, so the app hides the
+            # control instead of showing one that frees nothing. `available` is
+            # the whole point of reporting it.
+            "gameMode": {"v": 1, **_game_mode_capability()},
         },
     }
+
+
+def _game_mode_capability() -> dict[str, Any]:
+    """Availability of game mode, never raising into the capabilities payload.
+
+    Capability negotiation must not fail because one probe did. A machine whose
+    nvidia-smi misbehaves reports "not available" — which is also the honest
+    answer, since a probe that cannot read the GPU cannot promise to free it.
+    """
+    from axi import game_mode  # lazy: keep this module import-light
+
+    try:
+        ready = game_mode.availability()
+    except Exception:  # noqa: BLE001 - a broken probe is "unavailable", not a 500
+        return {"available": False, "gpu": None, "reason": "No se pudo consultar la GPU."}
+    return {k: ready[k] for k in ("available", "gpu", "reason")}
+
+
+# ────────────────────────────── Game mode ────────────────────────────────────
+
+
+class GameModeRequest(BaseModel):
+    """Body of `POST /api/v1/game-mode`.
+
+    Deliberately `active: bool` and not a `toggle` verb. Two clients (the app
+    and the tray) can disagree about the current state, and a toggle would then
+    do the opposite of what the user asked. Stating the target is idempotent.
+    """
+
+    active: bool
+
+
+@router.get("/game-mode")
+def game_mode_status() -> dict[str, Any]:
+    """Current game-mode state plus whether it is available at all.
+
+    Reads only. Running a status probe must never relocate anything — a status
+    call with side effects is how "automatic" behaviour arrives by accident,
+    and the user's rule is that HE activates this, never the software.
+    """
+    from axi import game_mode
+
+    return game_mode.state()
+
+
+@router.post("/game-mode")
+def game_mode_set(body: GameModeRequest) -> dict[str, Any]:
+    """Turn game mode on or off. The only way it ever changes.
+
+    409 when the machine has no GPU: the caller asked for something this box
+    cannot do, and saying so beats running a script that would stop the
+    co-pilot for no gain. 500 when the relocation itself failed — half-applied
+    is a state the user must be told about, not left to discover mid-game.
+    """
+    from axi import game_mode
+
+    try:
+        return game_mode.set_active(body.active)
+    except game_mode.GameModeUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except game_mode.GameModeFailed as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 # ────────────────────────────── QR pairing (M0-5) ────────────────────────────
