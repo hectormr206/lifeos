@@ -8,6 +8,8 @@ library;
 
 import 'package:permission_handler/permission_handler.dart';
 
+import '../../../core/platform/app_platform.dart';
+
 /// One runtime permission LifeOS uses.
 enum AppPermission {
   /// POST_NOTIFICATIONS — avisos de actualización y respuestas de Axi.
@@ -25,6 +27,28 @@ enum AppPermission {
   /// REQUEST_INSTALL_PACKAGES — instalar las actualizaciones automáticas.
   installUnknownApps,
 }
+
+/// The permissions worth showing on [operatingSystem], in declaration order.
+///
+/// [AppPermission.values] stays the complete catalogue — this is the list the
+/// UI iterates. Today the only platform-conditional entry is
+/// [AppPermission.installUnknownApps]: `REQUEST_INSTALL_PACKAGES` exists so the
+/// OTA updater can install a downloaded APK, and only Android does that. On
+/// Linux the updater is the `lifeos-updater` systemd timer + service, so the
+/// row would ask the user to approve something that can never happen.
+///
+/// Note what this does NOT do: it does not hide a permission merely because
+/// `permission_handler` has no implementation for the platform. Those resolve
+/// to [PermissionState.unsupported] and the screen says so — that is the
+/// fail-loudly rule doing its job. Whether the SCREEN is reachable at all is a
+/// separate decision, taken in the Settings hub via
+/// [supportsRuntimePermissionPrompts].
+List<AppPermission> permissionsForPlatform(String operatingSystem) => [
+      for (final permission in AppPermission.values)
+        if (permission != AppPermission.installUnknownApps ||
+            supportsSideloadedApkInstall(operatingSystem))
+          permission,
+    ];
 
 /// Normalised permission status, decoupled from `permission_handler`'s enum so
 /// UI + tests never depend on the plugin's exact states. Mirrors the existing

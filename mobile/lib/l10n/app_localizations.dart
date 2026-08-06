@@ -104,6 +104,120 @@ abstract class AppLocalizations {
   /// **'LifeOS'**
   String get appTitle;
 
+  /// No description provided for @homeDictate.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get homeDictate;
+
+  /// No description provided for @dictateTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Dictate'**
+  String get dictateTitle;
+
+  /// Subtitle of the Dictate screen, matching the wording of the same quick action on the laptop's Axi dashboard.
+  ///
+  /// In en, this message translates to:
+  /// **'Speak and Axi listens'**
+  String get dictateTagline;
+
+  /// No description provided for @dictateIdleHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap the microphone and speak'**
+  String get dictateIdleHint;
+
+  /// No description provided for @dictateRecordingHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening… tap to finish'**
+  String get dictateRecordingHint;
+
+  /// No description provided for @dictateTranscribingHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing on this device…'**
+  String get dictateTranscribingHint;
+
+  /// No description provided for @dictateReviewHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Review the text before sending it'**
+  String get dictateReviewHint;
+
+  /// No description provided for @dictateSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Send to Axi'**
+  String get dictateSend;
+
+  /// No description provided for @dictateCopy.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy'**
+  String get dictateCopy;
+
+  /// No description provided for @dictateCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Text copied'**
+  String get dictateCopied;
+
+  /// No description provided for @dictateDiscard.
+  ///
+  /// In en, this message translates to:
+  /// **'Discard'**
+  String get dictateDiscard;
+
+  /// No description provided for @dictateRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get dictateRetry;
+
+  /// No description provided for @dictateModelMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice model isn\'t downloaded on this device.'**
+  String get dictateModelMissing;
+
+  /// No description provided for @dictateDownloadModel.
+  ///
+  /// In en, this message translates to:
+  /// **'Download voice model'**
+  String get dictateDownloadModel;
+
+  /// No description provided for @dictateMicDenied.
+  ///
+  /// In en, this message translates to:
+  /// **'Without microphone permission I can\'t listen.'**
+  String get dictateMicDenied;
+
+  /// No description provided for @dictateRecorderUnavailable.
+  ///
+  /// In en, this message translates to:
+  /// **'Could not open the microphone.'**
+  String get dictateRecorderUnavailable;
+
+  /// Shown only on desktop when the recorder fails to open. record_linux shells out to these two binaries; tools/install-linux.sh probes for them but only warns, so the app must be able to explain the gap.
+  ///
+  /// In en, this message translates to:
+  /// **'On Linux, recording uses «parecord» and «ffmpeg». Install them with your package manager (on Arch: sudo pacman -S --needed libpulse ffmpeg).'**
+  String get dictateRecorderDesktopHint;
+
+  /// First tab of every domain screen and of Reminders: local CRUD over the on-device encrypted graph. Device-neutral on purpose — the app is installed on a Pixel AND as a Linux desktop app, and this sentence is true on both.
+  ///
+  /// In en, this message translates to:
+  /// **'On this device'**
+  String get domainTabLocal;
+
+  /// Second tab: the pairing-gated view of the Axi ENGINE. Names the engine, not the machine it runs on — the old 'Desde tu laptop' was absurd in the laptop build.
+  ///
+  /// In en, this message translates to:
+  /// **'From the Axi engine'**
+  String get domainTabEngine;
+
   /// No description provided for @languageSystem.
   ///
   /// In en, this message translates to:
@@ -371,7 +485,7 @@ abstract class AppLocalizations {
   /// No description provided for @timezoneAutomaticLabel.
   ///
   /// In en, this message translates to:
-  /// **'Automatic (use the phone\'s)'**
+  /// **'Automatic (use the device\'s)'**
   String get timezoneAutomaticLabel;
 
   /// No description provided for @timezoneAutomaticSubtitle.
@@ -989,7 +1103,7 @@ abstract class AppLocalizations {
   /// No description provided for @axiOrganComingSoon.
   ///
   /// In en, this message translates to:
-  /// **'Coming soon on your phone'**
+  /// **'Coming soon on this device'**
   String get axiOrganComingSoon;
 
   /// No description provided for @brain3dTitle.
@@ -1127,7 +1241,7 @@ abstract class AppLocalizations {
   /// No description provided for @chatOnboardingGreeting.
   ///
   /// In en, this message translates to:
-  /// **'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on your phone. To start: what should I call you?'**
+  /// **'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on this device. To start: what should I call you?'**
   String get chatOnboardingGreeting;
 
   /// No description provided for @chatOnboardingNameConfirm.

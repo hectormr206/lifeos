@@ -243,7 +243,7 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
     }
     if (state.entries.isEmpty) {
       return const _ScrollableCenter(
-        child: Text('Aún no hay registros en este teléfono.\nUsa el botón + para agregar el primero.',
+        child: Text('Aún no hay registros en este dispositivo.\nUsa el botón + para agregar el primero.',
             textAlign: TextAlign.center),
       );
     }

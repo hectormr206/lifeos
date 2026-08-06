@@ -12,6 +12,66 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appTitle => 'LifeOS';
 
   @override
+  String get homeDictate => 'Dictate';
+
+  @override
+  String get dictateTitle => 'Dictate';
+
+  @override
+  String get dictateTagline => 'Speak and Axi listens';
+
+  @override
+  String get dictateIdleHint => 'Tap the microphone and speak';
+
+  @override
+  String get dictateRecordingHint => 'Listening… tap to finish';
+
+  @override
+  String get dictateTranscribingHint => 'Transcribing on this device…';
+
+  @override
+  String get dictateReviewHint => 'Review the text before sending it';
+
+  @override
+  String get dictateSend => 'Send to Axi';
+
+  @override
+  String get dictateCopy => 'Copy';
+
+  @override
+  String get dictateCopied => 'Text copied';
+
+  @override
+  String get dictateDiscard => 'Discard';
+
+  @override
+  String get dictateRetry => 'Try again';
+
+  @override
+  String get dictateModelMissing =>
+      'The voice model isn\'t downloaded on this device.';
+
+  @override
+  String get dictateDownloadModel => 'Download voice model';
+
+  @override
+  String get dictateMicDenied =>
+      'Without microphone permission I can\'t listen.';
+
+  @override
+  String get dictateRecorderUnavailable => 'Could not open the microphone.';
+
+  @override
+  String get dictateRecorderDesktopHint =>
+      'On Linux, recording uses «parecord» and «ffmpeg». Install them with your package manager (on Arch: sudo pacman -S --needed libpulse ffmpeg).';
+
+  @override
+  String get domainTabLocal => 'On this device';
+
+  @override
+  String get domainTabEngine => 'From the Axi engine';
+
+  @override
   String get languageSystem => 'System';
 
   @override
@@ -149,7 +209,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get timezoneTitle => 'Time zone';
 
   @override
-  String get timezoneAutomaticLabel => 'Automatic (use the phone\'s)';
+  String get timezoneAutomaticLabel => 'Automatic (use the device\'s)';
 
   @override
   String get timezoneAutomaticSubtitle =>
@@ -487,7 +547,7 @@ class AppLocalizationsEn extends AppLocalizations {
       'Axi — living agent. Tap an organ to explore it.';
 
   @override
-  String get axiOrganComingSoon => 'Coming soon on your phone';
+  String get axiOrganComingSoon => 'Coming soon on this device';
 
   @override
   String get brain3dTitle => '3D Brain';
@@ -566,7 +626,7 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get chatOnboardingGreeting =>
-      'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on your phone. To start: what should I call you?';
+      'Hi, I\'m Axi 🐾 — your assistant, and everything you tell me lives only on this device. To start: what should I call you?';
 
   @override
   String chatOnboardingNameConfirm(String name) {

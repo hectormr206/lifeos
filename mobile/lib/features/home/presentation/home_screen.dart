@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../app_update/presentation/update_available_banner.dart';
 import '../../axi_body/presentation/axi_body_widget.dart';
@@ -159,12 +161,13 @@ class _ConnectedView extends ConsumerWidget {
 /// viewing records ("Tus registros") is obvious and prominent, and the
 /// system/plumbing entries sink to the bottom. Constrained to a 340-wide column
 /// for a tidy vertical rhythm consistent with the rest of the home.
-class _HomeSections extends StatelessWidget {
+class _HomeSections extends ConsumerWidget {
   const _HomeSections();
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
+    final operatingSystem = ref.watch(hostOperatingSystemProvider);
     return SizedBox(
       width: 340,
       child: Column(
@@ -192,6 +195,17 @@ class _HomeSections extends StatelessWidget {
 
           // 2) Axi — the living agent surfaces.
           _SectionHeader(label: l10n.homeSectionAxi),
+          // "Dictar" — the quick action the user already has on his laptop's
+          // Axi dashboard. Shown wherever the platform can actually record and
+          // transcribe (Android and the desktop shells alike), which is why it
+          // carries no platform conditional between those two.
+          if (supportsDictation(operatingSystem))
+            _NavButton(
+              icon: Icons.mic_none,
+              label: l10n.homeDictate,
+              onPressed: () => context.push('/dictate'),
+            ),
+          if (supportsDictation(operatingSystem)) const SizedBox(height: 12),
           _NavButton(
             icon: Icons.favorite_border,
             label: l10n.homeHowIsAxi,

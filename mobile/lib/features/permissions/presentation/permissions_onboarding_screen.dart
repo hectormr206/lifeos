@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../theme/lifeos_theme.dart';
+import '../../../core/platform/platform_providers.dart';
 import '../domain/app_permission.dart';
 import 'permissions_providers.dart';
 
@@ -26,6 +27,11 @@ class _PermissionsOnboardingScreenState
     extends ConsumerState<PermissionsOnboardingScreen> {
   bool _requesting = false;
 
+  /// The permissions this platform actually has — see [permissionsForPlatform].
+  /// Onboarding must never ask for a grant that cannot exist here.
+  List<AppPermission> get _permissions =>
+      permissionsForPlatform(ref.read(hostOperatingSystemProvider));
+
   Future<void> _grantAll() async {
     if (_requesting) return;
     setState(() => _requesting = true);
@@ -33,7 +39,7 @@ class _PermissionsOnboardingScreenState
     try {
       // Request each permission in sequence: the OS shows one dialog at a time,
       // which reads more clearly than a burst. A denial never blocks the flow.
-      for (final permission in AppPermission.values) {
+      for (final permission in _permissions) {
         await gateway.request(permission);
       }
     } catch (_) {
@@ -93,7 +99,7 @@ class _PermissionsOnboardingScreenState
                         ),
                   ),
                   const SizedBox(height: 24),
-                  for (final permission in AppPermission.values)
+                  for (final permission in _permissions)
                     _PermissionRow(permission: permission),
                 ],
               ),

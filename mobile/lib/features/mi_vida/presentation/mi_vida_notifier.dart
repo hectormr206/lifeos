@@ -107,7 +107,7 @@ class MiVidaNotifier extends Notifier<MiVidaState> {
       if (!ref.mounted) return;
       state = state.copyWith(
         loading: false,
-        error: 'No se pudo abrir la memoria local de este teléfono.',
+        error: 'No se pudo abrir la memoria local de este dispositivo.',
       );
     }
   }

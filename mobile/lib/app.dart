@@ -29,6 +29,9 @@ import 'features/connection/presentation/connection_screen.dart';
 import 'features/daily_digest/presentation/daily_digest_notifier.dart';
 import 'features/daily_digest/presentation/daily_digest_providers.dart';
 import 'features/daily_digest/presentation/daily_digest_screen.dart';
+import 'core/platform/app_platform.dart';
+import 'core/platform/platform_providers.dart';
+import 'features/dictation/presentation/dictate_screen.dart';
 import 'features/dictation/presentation/dictation_setup_screen.dart';
 import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
@@ -123,8 +126,16 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // resolves (`unknown`) we do NOT redirect, so an already-onboarded user
       // never flashes the onboarding screen; once `pending`, everything routes
       // to `/onboarding`; once `done`, `/onboarding` is bounced back to home.
+      // ...and only where the OS actually has runtime permissions to grant.
+      // On the desktop shells `permission_handler` has no implementation, so
+      // the screen would greet a new user with a list that all reads "No
+      // disponible" and a "grant them all" button that grants nothing.
+      // Android is unaffected: `supportsRuntimePermissionPrompts('android')`
+      // is true, so the Pixel first-launch flow is bit-identical.
       final gate = ref.read(onboardingGateProvider);
-      if (gate == OnboardingGate.pending && loc != '/onboarding') {
+      final asksForPermissions =
+          supportsRuntimePermissionPrompts(ref.read(hostOperatingSystemProvider));
+      if (asksForPermissions && gate == OnboardingGate.pending && loc != '/onboarding') {
         return '/onboarding';
       }
       if (gate == OnboardingGate.done && loc == '/onboarding') {
@@ -135,8 +146,8 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // rationale as `/settings/graph`. The engine-viewer tab inside the
       // screen degrades to its own connection error when unpaired.
       // Native domain CRUD: `/domains` (hub + per-domain screens) is ungated
-      // the same way — each domain's "En este teléfono" tab is full local
-      // CRUD over the on-device graph; the "Desde tu laptop" tab degrades to
+      // the same way — each domain's "En este dispositivo" tab is full local
+      // CRUD over the on-device graph; the "Desde el motor Axi" tab degrades to
       // its own connection error when unpaired.
       final needsPairing = loc == '/chat' ||
           loc == '/body' ||
@@ -165,6 +176,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/onboarding', builder: (context, state) => const PermissionsOnboardingScreen()),
       GoRoute(path: '/settings/connection', builder: (context, state) => const ConnectionScreen()),
       GoRoute(path: '/chat', builder: (context, state) => const ChatScreen()),
+      // "Dictar" — speak, transcribe on-device, review, send. Cross-platform
+      // (Android + the desktop shells); distinct from the Android-only Axi
+      // KEYBOARD at '/settings/dictation'.
+      GoRoute(path: '/dictate', builder: (context, state) => const DictateScreen()),
       GoRoute(path: '/domains', builder: (context, state) => const DomainsHubScreen()),
       GoRoute(
         path: '/domains/:key',

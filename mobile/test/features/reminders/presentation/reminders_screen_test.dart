@@ -17,6 +17,7 @@ import 'package:lifeos/features/reminders/data/reminders_repository.dart';
 import 'package:lifeos/features/reminders/domain/reminder.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_notifier.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_screen.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 class _FixedConnectivityNotifier extends ConnectivityNotifier {
   _FixedConnectivityNotifier(this._fixed);
@@ -67,16 +68,27 @@ class _FakeChatRepository implements ChatRepository {
   }
 }
 
-/// Switches to the "Desde tu laptop" tab (the engine viewer under test here)
+/// Switches to the "Desde el motor Axi" tab (the engine viewer under test here)
 /// and pumps past the tab animation so the LOCAL tab's page is disposed —
 /// finders then only see the engine tab's widgets.
 Future<void> openEngineTab(WidgetTester tester) async {
   await tester.pump();
-  await tester.tap(find.text('Desde tu laptop'));
+  await tester.tap(find.text('Desde el motor Axi'));
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 350));
   await tester.pump();
 }
+
+/// The screen's tab labels are localized now, so the test app must carry the
+/// delegates. Pinned to Spanish: an English CI host would otherwise render
+/// "From the Axi engine" and [openEngineTab] would be asserting the machine's
+/// locale rather than the screen.
+Widget _localizedApp() => MaterialApp(
+      locale: const Locale('es'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: const RemindersScreen(),
+    );
 
 void main() {
   testWidgets('renders pending reminders with their message', (tester) async {
@@ -86,8 +98,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [remindersRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: RemindersScreen()),
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);
@@ -100,8 +114,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [remindersRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: RemindersScreen()),
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);
@@ -114,8 +130,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [remindersRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: RemindersScreen()),
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);
@@ -134,7 +152,7 @@ void main() {
           remindersRepositoryProvider.overrideWithValue(repo),
           chatRepositoryProvider.overrideWithValue(chat),
         ],
-        child: const MaterialApp(home: RemindersScreen()),
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);
@@ -157,8 +175,10 @@ void main() {
 
     await tester.pumpWidget(
       ProviderScope(
-        overrides: [remindersRepositoryProvider.overrideWithValue(repo)],
-        child: const MaterialApp(home: RemindersScreen()),
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);
@@ -184,7 +204,7 @@ void main() {
           remindersRepositoryProvider.overrideWithValue(repo),
           connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
         ],
-        child: const MaterialApp(home: RemindersScreen()),
+        child: _localizedApp(),
       ),
     );
     await openEngineTab(tester);

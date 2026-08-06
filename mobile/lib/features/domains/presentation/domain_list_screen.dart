@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/offline_banner.dart';
+import '../../../l10n/app_localizations.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 import '../domain/domain_form_spec.dart';
@@ -11,11 +12,11 @@ import 'local_domain_tab.dart';
 
 /// A domain's screen — two coexisting surfaces (native domain CRUD, same
 /// tab pattern as `RemindersScreen`, roadmap slice C2):
-///   * "En este teléfono": LOCAL CRUD over the on-device encrypted graph
+///   * "En este dispositivo": LOCAL CRUD over the on-device encrypted graph
 ///     ([LocalDomainTab]) — create/edit/delete/filter structured entries
 ///     fully offline/unpaired. This is why `/domains` is no longer
 ///     pairing-gated.
-///   * "Desde tu laptop": the original pairing-gated engine VIEWER
+///   * "Desde el motor Axi": the original pairing-gated engine VIEWER
 ///     ([EngineDomainTab]). Unpaired it degrades to its own connection
 ///     error.
 /// Still ONE widget class instantiated per [DomainDescriptor] — all
@@ -27,15 +28,20 @@ class DomainListScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context);
     return DefaultTabController(
       length: 2,
       child: Scaffold(
         appBar: AppBar(
           title: Text(descriptor.title),
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(text: 'En este teléfono', icon: Icon(Icons.smartphone)),
-              Tab(text: 'Desde tu laptop', icon: Icon(Icons.laptop_mac)),
+              // Device-neutral by design: the app is installed on a Pixel AND
+              // as a Linux desktop app, and "en este dispositivo" is true on
+              // both. Tab 2 names the ENGINE rather than the machine it runs
+              // on — "Desde tu laptop" was absurd in the laptop build.
+              Tab(text: l10n.domainTabLocal, icon: const Icon(Icons.devices_outlined)),
+              Tab(text: l10n.domainTabEngine, icon: const Icon(Icons.dns_outlined)),
             ],
           ),
         ),

@@ -1,5 +1,5 @@
 // Roadmap "native domain CRUD" slice changed the contract: /domains is NO
-// LONGER pairing-gated — the local "En este teléfono" CRUD tab must work with
+// LONGER pairing-gated — the local "En este dispositivo" CRUD tab must work with
 // no engine, so both paired and unpaired navigation render the domains UI.
 // (Previously this file asserted redirect-to-connection when unpaired.)
 import 'package:flutter_riverpod/flutter_riverpod.dart';

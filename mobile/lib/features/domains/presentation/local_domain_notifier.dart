@@ -132,7 +132,7 @@ class LocalDomainNotifier extends Notifier<LocalDomainUiState> {
     } catch (_) {
       state = state.copyWith(
         loading: false,
-        error: 'No se pudo abrir la memoria local de este teléfono.',
+        error: 'No se pudo abrir la memoria local de este dispositivo.',
       );
     }
   }

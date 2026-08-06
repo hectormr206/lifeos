@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/language_preference.dart';
 import '../../../l10n/locale_providers.dart';
@@ -32,6 +34,7 @@ class SettingsHubScreen extends ConsumerWidget {
     final language = ref.watch(languageProvider);
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
+    final hostOs = ref.watch(hostOperatingSystemProvider);
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsTitle)),
@@ -94,20 +97,28 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/timezone'),
           ),
-          ListTile(
-            leading: const Icon(Icons.privacy_tip_outlined),
-            title: Text(l10n.permissionsNavTitle),
-            subtitle: Text(l10n.permissionsNavSubtitle),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/permissions'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.assistant_outlined),
-            title: const Text('Asistente digital'),
-            subtitle: const Text('Configurar Axi como asistente predeterminado del teléfono'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => ref.read(assistantChannelProvider).openAssistantSettings(),
-          ),
+          // PLATFORM-HONEST ROWS. Both of these open an OS screen that only
+          // exists on Android, so on desktop they are ABSENT rather than
+          // greyed out — a control that is shown is a control that works.
+          // (Failure of a control that IS shown still reports loudly; hiding
+          // is only ever for capabilities the platform does not have.)
+          if (supportsRuntimePermissionPrompts(hostOs))
+            ListTile(
+              leading: const Icon(Icons.privacy_tip_outlined),
+              title: Text(l10n.permissionsNavTitle),
+              subtitle: Text(l10n.permissionsNavSubtitle),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => context.push('/settings/permissions'),
+            ),
+          if (supportsDefaultAssistantRole(hostOs))
+            ListTile(
+              leading: const Icon(Icons.assistant_outlined),
+              title: const Text('Asistente digital'),
+              subtitle:
+                  const Text('Configurar Axi como asistente predeterminado del teléfono'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => ref.read(assistantChannelProvider).openAssistantSettings(),
+            ),
           const Divider(),
           // Optional biometric app lock. Offline-reachable, opt-in, default OFF.
           _SectionHeader(l10n.sectionSecurity),

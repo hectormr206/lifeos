@@ -12,6 +12,66 @@ class AppLocalizationsEs extends AppLocalizations {
   String get appTitle => 'LifeOS';
 
   @override
+  String get homeDictate => 'Dictar';
+
+  @override
+  String get dictateTitle => 'Dictar';
+
+  @override
+  String get dictateTagline => 'Hablá y Axi te escucha';
+
+  @override
+  String get dictateIdleHint => 'Tocá el micrófono y hablá';
+
+  @override
+  String get dictateRecordingHint => 'Te escucho… tocá para terminar';
+
+  @override
+  String get dictateTranscribingHint => 'Transcribiendo en este dispositivo…';
+
+  @override
+  String get dictateReviewHint => 'Revisá el texto antes de enviarlo';
+
+  @override
+  String get dictateSend => 'Enviar a Axi';
+
+  @override
+  String get dictateCopy => 'Copiar';
+
+  @override
+  String get dictateCopied => 'Texto copiado';
+
+  @override
+  String get dictateDiscard => 'Descartar';
+
+  @override
+  String get dictateRetry => 'Probar de nuevo';
+
+  @override
+  String get dictateModelMissing =>
+      'El modelo de voz no está descargado en este dispositivo.';
+
+  @override
+  String get dictateDownloadModel => 'Descargar modelo de voz';
+
+  @override
+  String get dictateMicDenied =>
+      'Sin permiso de micrófono, no puedo escucharte.';
+
+  @override
+  String get dictateRecorderUnavailable => 'No se pudo abrir el micrófono.';
+
+  @override
+  String get dictateRecorderDesktopHint =>
+      'En Linux la grabación usa «parecord» y «ffmpeg». Instalalos con tu gestor de paquetes (en Arch: sudo pacman -S --needed libpulse ffmpeg).';
+
+  @override
+  String get domainTabLocal => 'En este dispositivo';
+
+  @override
+  String get domainTabEngine => 'Desde el motor Axi';
+
+  @override
   String get languageSystem => 'Sistema';
 
   @override
@@ -151,7 +211,7 @@ class AppLocalizationsEs extends AppLocalizations {
   String get timezoneTitle => 'Zona horaria';
 
   @override
-  String get timezoneAutomaticLabel => 'Automática (usar la del teléfono)';
+  String get timezoneAutomaticLabel => 'Automática (usar la del dispositivo)';
 
   @override
   String get timezoneAutomaticSubtitle =>
@@ -490,7 +550,7 @@ class AppLocalizationsEs extends AppLocalizations {
       'Axi — agente vivo. Toca un órgano para explorarlo.';
 
   @override
-  String get axiOrganComingSoon => 'Próximamente en tu teléfono';
+  String get axiOrganComingSoon => 'Próximamente en este dispositivo';
 
   @override
   String get brain3dTitle => 'Cerebro 3D';
@@ -571,7 +631,7 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get chatOnboardingGreeting =>
-      'Hola, soy Axi 🐾 — tu asistente, y todo lo que me cuentes vive solo en tu teléfono. Para empezar: ¿cómo te gusta que te llame?';
+      'Hola, soy Axi 🐾 — tu asistente, y todo lo que me cuentes vive solo en este dispositivo. Para empezar: ¿cómo te gusta que te llame?';
 
   @override
   String chatOnboardingNameConfirm(String name) {

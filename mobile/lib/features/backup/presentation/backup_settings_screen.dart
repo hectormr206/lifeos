@@ -296,7 +296,7 @@ class _PassphraseWarning extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Tus respaldos se cifran en el teléfono con una frase que solo '
+              'Tus respaldos se cifran en este dispositivo con una frase que solo '
               'vos conocés. Ni el servidor ni nosotros podemos abrirlos.\n\n'
               'Si olvidás esa frase, los respaldos se pierden para siempre. '
               'No hay forma de recuperarlos. Anotala en un lugar seguro.',

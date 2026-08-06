@@ -39,14 +39,24 @@ class TrayManagerIconHost with TrayListener implements TrayIconHost {
   @override
   Future<void> install(TrayMenuLabels labels, {required String iconPath}) async {
     trayManager.addListener(this);
-    await trayManager.setIcon(iconPath);
-    // Linux answers `not_implemented` to setToolTip (see
-    // [trayTooltipIsSupportedOn]); calling it there would report a working
-    // tray as broken.
-    if (trayTooltipIsSupportedOn(_operatingSystem)) {
-      await trayManager.setToolTip(labels.tooltip);
+    try {
+      await trayManager.setIcon(iconPath);
+      // Linux answers `not_implemented` to setToolTip (see
+      // [trayTooltipIsSupportedOn]); calling it there would report a working
+      // tray as broken.
+      if (trayTooltipIsSupportedOn(_operatingSystem)) {
+        await trayManager.setToolTip(labels.tooltip);
+      }
+      await setMenu(labels);
+    } catch (error) {
+      // Translate, do not swallow. A raw PlatformException tells the user
+      // nothing he can act on; [TrayUnavailableException.noHost] carries the
+      // original error AND names the two things he can actually check — a
+      // session with no StatusNotifier host, and a missing
+      // libayatana-appindicator3. That message is what the in-app notice
+      // shows, so it has to be worth reading.
+      throw TrayUnavailableException.noHost(error);
     }
-    await setMenu(labels);
   }
 
   @override

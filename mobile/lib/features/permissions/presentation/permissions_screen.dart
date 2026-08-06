@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/platform/platform_providers.dart';
 import '../domain/app_permission.dart';
 import 'permission_request_helper.dart';
 import 'permissions_onboarding_screen.dart';
@@ -41,8 +42,12 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
     if (state == AppLifecycleState.resumed) _refreshAll();
   }
 
+  /// The permissions this platform actually has — see [permissionsForPlatform].
+  List<AppPermission> get _permissions =>
+      permissionsForPlatform(ref.read(hostOperatingSystemProvider));
+
   void _refreshAll() {
-    for (final permission in AppPermission.values) {
+    for (final permission in _permissions) {
       ref.invalidate(permissionStatusProvider(permission));
     }
   }
@@ -76,7 +81,7 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
                   ),
             ),
           ),
-          for (final permission in AppPermission.values)
+          for (final permission in _permissions)
             _PermissionTile(
               permission: permission,
               onTap: () => _onTap(permission),

@@ -2,6 +2,8 @@
 // (local on-device reminders must work with no engine), so both paired and
 // unpaired navigation render the Recordatorios screen with its two tabs.
 // (Previously this file asserted the old redirect-to-connection behavior.)
+import 'package:flutter/material.dart';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
@@ -10,6 +12,8 @@ import 'package:lifeos/core/auth/token_store.dart';
 import 'package:lifeos/features/reminders/data/reminders_repository.dart';
 import 'package:lifeos/features/reminders/domain/reminder.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_notifier.dart';
+
+import 'package:lifeos/l10n/locale_providers.dart';
 
 import 'support/fake_token_store.dart';
 
@@ -33,14 +37,26 @@ Future<void> _pumpAppAndGo(WidgetTester tester, ProviderContainer container) asy
 
 void main() {
   testWidgets('unpaired: /reminders renders the reminders screen (local tab, ungated)', (tester) async {
-    final container = ProviderContainer(overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())]);
+    final container = ProviderContainer(overrides: [
+      // Pin Spanish: the two tab labels are localized now, so an English test
+      // host would otherwise render "On this device" and this assertion would
+      // be a statement about the CI machine's locale, not about the screen.
+      localeProvider.overrideWithValue(const Locale('es')),
+      tokenStoreProvider.overrideWithValue(FakeTokenStore()),
+    ]);
     addTearDown(container.dispose);
 
     await _pumpAppAndGo(tester, container);
 
-    expect(find.text('Recordatorios'), findsOneWidget);
-    expect(find.text('En este teléfono'), findsOneWidget);
-    expect(find.text('Desde tu laptop'), findsOneWidget);
+    // Scoped to the AppBar: the home route's "Recordatorios" nav button is
+    // still mounted during the bounded pumps, and now that the app renders in
+    // Spanish here it matches a bare find.text too.
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('Recordatorios')),
+      findsOneWidget,
+    );
+    expect(find.text('En este dispositivo'), findsOneWidget);
+    expect(find.text('Desde el motor Axi'), findsOneWidget);
   });
 
   testWidgets('paired: /reminders renders the reminders screen', (tester) async {
@@ -48,6 +64,7 @@ void main() {
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
     final container = ProviderContainer(overrides: [
+      localeProvider.overrideWithValue(const Locale('es')),
       tokenStoreProvider.overrideWithValue(store),
       remindersRepositoryProvider.overrideWithValue(_FakeRemindersRepository()),
     ]);
@@ -55,7 +72,13 @@ void main() {
 
     await _pumpAppAndGo(tester, container);
 
-    expect(find.text('Recordatorios'), findsOneWidget);
-    expect(find.text('En este teléfono'), findsOneWidget);
+    // Scoped to the AppBar: the home route's "Recordatorios" nav button is
+    // still mounted during the bounded pumps, and now that the app renders in
+    // Spanish here it matches a bare find.text too.
+    expect(
+      find.descendant(of: find.byType(AppBar), matching: find.text('Recordatorios')),
+      findsOneWidget,
+    );
+    expect(find.text('En este dispositivo'), findsOneWidget);
   });
 }

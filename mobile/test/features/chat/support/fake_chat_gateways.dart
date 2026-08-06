@@ -29,12 +29,20 @@ class FakeAudioRecorderGateway implements AudioRecorderGateway {
     this.permission = true,
     this.path = '/tmp/fake-voice.m4a',
     this.stopReturnsNull = false,
+    this.startError,
   });
 
   bool permission;
   String path;
   // Simulates a very short/empty take: recorder.stop() yields no file (null).
   bool stopReturnsNull;
+
+  /// When non-null, [start] throws this instead of recording.
+  ///
+  /// The real Linux case: `record_linux` captures by launching the external
+  /// `parecord` binary, so on a box where it is not installed `start()` throws
+  /// rather than returning a path. Dictation must report that loudly.
+  Object? startError;
 
   int startCount = 0;
   int stopCount = 0;
@@ -47,6 +55,8 @@ class FakeAudioRecorderGateway implements AudioRecorderGateway {
   @override
   Future<String> start() async {
     startCount++;
+    final err = startError;
+    if (err != null) throw err;
     _recording = true;
     return path;
   }

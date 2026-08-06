@@ -62,7 +62,7 @@ class BackupHostClient {
     } on DioException {
       return const BackupHostDiagnosis(
         state: BackupHostState.unreachable,
-        message: 'No se pudo contactar el servidor. Revisá que el teléfono '
+        message: 'No se pudo contactar el servidor. Revisá que este dispositivo '
             'esté conectado a la VPN y que la dirección sea correcta.',
       );
     }

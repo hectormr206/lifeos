@@ -108,6 +108,24 @@ void main() {
     });
   });
 
+  group('TrayUnavailableException.noHost', () {
+    test('names the two things the user can actually check', () {
+      // This is the message that reaches the in-app notice when the plugin
+      // itself rejects the icon. A bare PlatformException would tell the user
+      // nothing; these are the only two causes he can do anything about.
+      final message = TrayUnavailableException.noHost(
+        'PlatformException(setIcon)',
+      ).message;
+
+      expect(message, contains('PlatformException(setIcon)'));
+      expect(message, contains('Wayland'));
+      expect(message, contains('libayatana-appindicator3'));
+      // And it must say the app is still fine, for the same reason the
+      // Spanish notice does.
+      expect(message, contains('keeps running'));
+    });
+  });
+
   group('trayTooltipIsSupportedOn', () {
     test('is false on Linux — the plugin answers not-implemented there', () {
       // Verified against tray_manager 0.5.3's linux/tray_manager_plugin.cc:

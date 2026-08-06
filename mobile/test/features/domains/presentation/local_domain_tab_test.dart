@@ -1,4 +1,4 @@
-// Proves the LOCAL domain tab (native on-device CRUD, "En este teléfono"):
+// Proves the LOCAL domain tab (native on-device CRUD, "En este dispositivo"):
 // lists local graph entries grouped with type chips + period selector +
 // search, creates via the FAB → generated form, edits/deletes per row,
 // shows the finance gastos/ingresos/balance tiles, and surfaces facts

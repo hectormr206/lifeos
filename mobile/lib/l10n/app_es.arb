@@ -3,6 +3,39 @@
 
   "appTitle": "LifeOS",
 
+  "homeDictate": "Dictar",
+  "dictateTitle": "Dictar",
+  "dictateTagline": "Hablá y Axi te escucha",
+  "@dictateTagline": {
+    "description": "Subtitle of the Dictar screen, matching the wording of the same quick action on the laptop's Axi dashboard."
+  },
+  "dictateIdleHint": "Tocá el micrófono y hablá",
+  "dictateRecordingHint": "Te escucho… tocá para terminar",
+  "dictateTranscribingHint": "Transcribiendo en este dispositivo…",
+  "dictateReviewHint": "Revisá el texto antes de enviarlo",
+  "dictateSend": "Enviar a Axi",
+  "dictateCopy": "Copiar",
+  "dictateCopied": "Texto copiado",
+  "dictateDiscard": "Descartar",
+  "dictateRetry": "Probar de nuevo",
+  "dictateModelMissing": "El modelo de voz no está descargado en este dispositivo.",
+  "dictateDownloadModel": "Descargar modelo de voz",
+  "dictateMicDenied": "Sin permiso de micrófono, no puedo escucharte.",
+  "dictateRecorderUnavailable": "No se pudo abrir el micrófono.",
+  "dictateRecorderDesktopHint": "En Linux la grabación usa «parecord» y «ffmpeg». Instalalos con tu gestor de paquetes (en Arch: sudo pacman -S --needed libpulse ffmpeg).",
+  "@dictateRecorderDesktopHint": {
+    "description": "Shown only on desktop when the recorder fails to open. record_linux shells out to these two binaries; tools/install-linux.sh probes for them but only warns, so the app must be able to explain the gap."
+  },
+
+  "domainTabLocal": "En este dispositivo",
+  "@domainTabLocal": {
+    "description": "First tab of every domain screen and of Reminders: local CRUD over the on-device encrypted graph. Device-neutral on purpose — the app is installed on a Pixel AND as a Linux desktop app, and this sentence is true on both."
+  },
+  "domainTabEngine": "Desde el motor Axi",
+  "@domainTabEngine": {
+    "description": "Second tab: the pairing-gated view of the Axi ENGINE. Names the engine, not the machine it runs on — the old 'Desde tu laptop' was absurd in the laptop build. 'Motor' matches Settings' 'Configuración del motor'."
+  },
+
   "languageSystem": "Sistema",
   "languageSpanish": "Español",
   "languageEnglish": "English",
@@ -48,7 +81,7 @@
   "timezoneNavTitle": "Zona horaria",
   "timezoneNavSubtitle": "Automática o elige una zona manualmente",
   "timezoneTitle": "Zona horaria",
-  "timezoneAutomaticLabel": "Automática (usar la del teléfono)",
+  "timezoneAutomaticLabel": "Automática (usar la del dispositivo)",
   "timezoneAutomaticSubtitle": "Detecta la zona de tu dispositivo, con horario de verano.",
   "timezoneDetectedLabel": "Detectada: {zone}",
   "@timezoneDetectedLabel": {
@@ -183,7 +216,7 @@
   "homeUpdates": "Actualizaciones",
 
   "axiAvatarLabel": "Axi — agente vivo. Toca un órgano para explorarlo.",
-  "axiOrganComingSoon": "Próximamente en tu teléfono",
+  "axiOrganComingSoon": "Próximamente en este dispositivo",
   "brain3dTitle": "Cerebro 3D",
   "brain3dEmpty": "Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.",
   "brain3dSummary": "{nodes} nodos · {edges} enlaces en el grafo local",
@@ -207,7 +240,7 @@
   "chatModelLoading": "Cargando el modelo…",
   "chatModelLoadError": "No se pudo cargar el modelo. Revísalo e intenta de nuevo.",
   "chatTyping": "Axi está escribiendo…",
-  "chatOnboardingGreeting": "Hola, soy Axi 🐾 — tu asistente, y todo lo que me cuentes vive solo en tu teléfono. Para empezar: ¿cómo te gusta que te llame?",
+  "chatOnboardingGreeting": "Hola, soy Axi 🐾 — tu asistente, y todo lo que me cuentes vive solo en este dispositivo. Para empezar: ¿cómo te gusta que te llame?",
   "chatOnboardingNameConfirm": "¡Mucho gusto, {name}! ¿En qué te ayudo?",
   "@chatOnboardingNameConfirm": {
     "placeholders": {

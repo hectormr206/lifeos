@@ -1,5 +1,5 @@
 // Proves EngineDomainTab (design D2's generic "data-table widget", the
-// "Desde tu laptop" tab since the native-domain-CRUD slice) renders entries,
+// "Desde el motor Axi" tab since the native-domain-CRUD slice) renders entries,
 // the subject badge when present (family attribution), the empty/error
 // states, and that the NL quick-capture bar reuses the chat endpoint and
 // triggers a refresh. No live engine — both repositories faked. The LOCAL
