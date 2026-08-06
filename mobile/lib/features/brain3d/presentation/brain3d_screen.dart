@@ -1,12 +1,12 @@
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:webview_flutter/webview_flutter.dart';
 
 import '../../../core/graph/graph_providers.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/brain3d_payload.dart';
+import '../domain/brain3d_palette.dart';
+import 'brain3d_view.dart';
 
 /// The Cerebro 3D payload built from the ON-DEVICE graph (read side only).
 /// A plain FutureProvider — recomputed on each screen entry via `ref.refresh`
@@ -35,62 +35,31 @@ class Brain3dScreen extends ConsumerStatefulWidget {
 }
 
 class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
-  WebViewController? _controller;
-  bool _pageReady = false;
-  bool _graphSent = false;
-
-  @override
-  void initState() {
-    super.initState();
-    if (WebViewPlatform.instance != null) {
-      _controller = WebViewController()
-        ..setJavaScriptMode(JavaScriptMode.unrestricted)
-        ..setBackgroundColor(const Color(0xFF0B0E13))
-        ..addJavaScriptChannel('Brain3d', onMessageReceived: (_) {
-          // Node-tap events; the info panel itself is in-page. Reserved for
-          // future navigation into the node detail screen.
-        })
-        ..setNavigationDelegate(
-          NavigationDelegate(onPageFinished: (_) {
-            _pageReady = true;
-            _maybeSendGraph();
-          }),
-        )
-        ..loadFlutterAsset('assets/brain3d/brain3d.html');
-    }
-  }
-
-  /// Injects the payload once BOTH the page and the data are ready, in
-  /// whichever order they arrive. Double-encoding keeps the JSON safe as a
-  /// JS string literal (quotes, U+2028/9) and re-parses it in-page.
-  void _maybeSendGraph() {
-    if (!mounted) return;
-    final controller = _controller;
-    if (controller == null || !_pageReady || _graphSent) return;
-    final payload = ref.read(brain3dPayloadProvider).value;
-    if (payload == null) return;
-    _graphSent = true;
-    final json = jsonEncode(jsonEncode(payload.toJson()));
-    final lang = jsonEncode(Localizations.localeOf(context).languageCode);
-    controller.runJavaScript('axiLoadGraph(JSON.parse($json), $lang)');
-  }
-
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     final payload = ref.watch(brain3dPayloadProvider);
 
-    // Data may resolve after onPageFinished — try again on every rebuild.
-    if (payload.hasValue) _maybeSendGraph();
-
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E13),
       appBar: AppBar(title: Text(l10n.brain3dTitle)),
-      body: switch ((payload, _controller)) {
-        (AsyncData(), final WebViewController controller?) =>
-          WebViewWidget(controller: controller),
-        (AsyncData(:final value), null) => _SummaryFallback(payload: value),
-        (AsyncError(:final error), _) =>
+      body: switch (payload) {
+        AsyncData(:final value) when value.nodes.isEmpty =>
+          _SummaryFallback(payload: value),
+        AsyncData(:final value) => Brain3dView(
+            nodes: [
+              for (final n in value.nodes)
+                Brain3dVisualNode(
+                  id: n.uuid,
+                  label: n.label,
+                  color: brain3dColorFor(domain: n.domain, kind: n.kind),
+                ),
+            ],
+            edges: [
+              for (final e in value.edges) (e.srcUuid, e.dstUuid),
+            ],
+          ),
+        AsyncError(:final error) =>
           Center(child: Text('$error', style: const TextStyle(color: Colors.white70))),
         _ => const Center(child: CircularProgressIndicator()),
       },
@@ -98,8 +67,8 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
   }
 }
 
-/// Textual stand-in when no WebView platform exists (host tests / desktop):
-/// proves the payload pipeline works and keeps the route usable everywhere.
+/// Shown when the graph is EMPTY: a blank canvas would read as a bug rather
+/// than as "you have not told Axi anything yet".
 class _SummaryFallback extends StatelessWidget {
   const _SummaryFallback({required this.payload});
 

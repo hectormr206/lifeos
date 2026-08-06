@@ -213,11 +213,6 @@ dependencies:
   # slice can swap system TTS for a higher-quality on-device engine (Piper)
   # without touching the UI. Configured for Spanish (es-MX → es-ES → es).
   flutter_tts: ^4.2.5
-  # Axi's animated body + Cerebro 3D (WebGL) render the laptop's own
-  # SVG/CSS/JS assets from LOCAL bundled files (offline, no CDN) inside a
-  # WebView. `WebViewPlatform.instance` (re-exported here) gates usage so
-  # host tests / desktop fall back cleanly to non-WebView content.
-  webview_flutter: ^4.14.1
 
   # Optional biometric app lock (fingerprint / face). All of the user's
   # health/life data lives on-device, so app entry (cold start + resume from
@@ -331,10 +326,6 @@ flutter:
   # App-shell slice: the Axi mark, shown in Settings > Acerca de.
   assets:
     - assets/branding/
-    # Cerebro 3D — the laptop's vendored 3d-force-graph bundle (three.js
-    # included, NO CDN at runtime) + the local HTML shell that renders the
-    # on-device graph. See lib/features/brain3d/.
-    - assets/brain3d/
 
   # To add assets to your application, add an assets section, like this:
   # assets:

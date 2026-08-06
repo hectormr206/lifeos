@@ -1,8 +1,10 @@
 // Proves the Cerebro 3D screen builds its graph from the LOCAL store via the
 // payload provider. On the test host there is no WebView platform
 // (WebViewPlatform.instance == null), so the screen renders its textual
-// summary fallback — which is exactly the smoke-fake seam: the same payload
-// that the fallback prints is what gets injected into the WebView on-device.
+// the graph itself, natively. There is no longer a WebView to be absent from:
+// the renderer is a CustomPainter, so the same widget runs on the Pixel, on
+// Linux and in this test — which is the point of the rewrite. The old summary
+// is now reserved for an EMPTY graph, where a blank canvas would read as a bug.
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -13,6 +15,7 @@ import 'package:lifeos/core/graph/graph_records.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
 import 'package:lifeos/features/brain3d/presentation/brain3d_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/features/brain3d/presentation/brain3d_view.dart';
 
 class _FakeLocalGraphStore implements LocalGraphStore {
   _FakeLocalGraphStore({this.nodes = const [], this.edges = const []});
@@ -72,8 +75,7 @@ Widget _app(LocalGraphStore store) => ProviderScope(
     );
 
 void main() {
-  testWidgets('renders the title and the local graph summary (fallback path)',
-      (tester) async {
+  testWidgets('renders the graph itself, on every platform', (tester) async {
     final t = DateTime.utc(2026, 1, 1);
     final store = _FakeLocalGraphStore(
       nodes: [_node('f1', 'fact'), _node('p1', 'person')],
@@ -90,10 +92,15 @@ void main() {
     );
 
     await tester.pumpWidget(_app(store));
-    await tester.pumpAndSettle();
+    // NOT pumpAndSettle: the layout animates until it converges. Two pumps let
+    // the payload future resolve, which is what this test is about.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.text('Cerebro 3D'), findsOneWidget);
-    expect(find.text('2 nodos · 1 enlaces en el grafo local'), findsOneWidget);
+    expect(find.byType(Brain3dView), findsOneWidget,
+        reason: 'a non-empty graph draws the graph, not a text summary');
+    expect(find.text('2 nodos · 1 enlaces en el grafo local'), findsNothing);
   });
 
   testWidgets('empty local graph shows the friendly empty state', (tester) async {

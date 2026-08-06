@@ -74,8 +74,7 @@ GraphEdgeRecord _edge(String uuid, String src, String dst, String rel) {
 }
 
 void main() {
-  testWidgets('golden: Cerebro 3D — local graph summary (WebView SKIPPED)',
-      (tester) async {
+  testWidgets('golden: Cerebro 3D — the graph, drawn natively', (tester) async {
     useGoldenSurface(tester);
 
     final store = _FakeLocalGraphStore(
@@ -106,15 +105,25 @@ void main() {
           locale: const Locale('es'),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
           supportedLocales: AppLocalizations.supportedLocales,
+          // disableAnimations settles the force layout instead of animating
+          // to it, which is what makes this golden deterministic. The layout
+          // itself is seeded, so the settled shape is identical every run —
+          // that determinism is why a golden of a physics simulation is a
+          // meaningful test rather than a flake generator.
+          builder: (context, child) => MediaQuery(
+            data: MediaQuery.of(context).copyWith(disableAnimations: true),
+            child: child ?? const SizedBox.shrink(),
+          ),
           home: const Brain3dScreen(),
         ),
       ),
     );
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
 
     await expectLater(
       find.byType(Brain3dScreen),
-      matchesGoldenFile('images/brain3d_summary.png'),
+      matchesGoldenFile('images/brain3d_graph.png'),
     );
   });
 }

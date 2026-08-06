@@ -1,0 +1,332 @@
+/// The memory graph, drawn natively.
+///
+/// It used to be `3d-force-graph.min.js` — 1.3 MB of Three.js — inside a
+/// WebView. `webview_flutter` has no Linux implementation, so on the desktop
+/// build the platform view never mounted and the user saw NOTHING where the
+/// phone showed their whole graph. Exactly the failure the avatar had.
+///
+/// WHAT "3D" MEANS HERE. The layout is genuinely three-dimensional (see
+/// [ForceLayout]); this projects it with perspective, so nodes further away are
+/// smaller and dimmer, and dragging rotates the cloud. It is not a WebGL scene
+/// and does not pretend to be — but the spatial reading, which is the whole
+/// point of laying memories out in space, survives, and it survives on every
+/// platform instead of one.
+library;
+
+import 'dart:math' as math;
+
+import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
+
+import '../domain/force_layout.dart';
+
+/// One node as the view needs it: where it goes, what colour, what it says.
+class Brain3dVisualNode {
+  const Brain3dVisualNode({
+    required this.id,
+    required this.label,
+    required this.color,
+    this.radius = 4,
+  });
+
+  final String id;
+  final String label;
+  final Color color;
+  final double radius;
+}
+
+class Brain3dView extends StatefulWidget {
+  const Brain3dView({
+    super.key,
+    required this.nodes,
+    required this.edges,
+    this.onNodeTap,
+    this.seed = 7,
+  });
+
+  final List<Brain3dVisualNode> nodes;
+  final List<(String, String)> edges;
+  final void Function(Brain3dVisualNode node)? onNodeTap;
+
+  /// Fixed by default so the same graph looks the same on every open —
+  /// a memory map that rearranged itself each visit would be unreadable.
+  final int seed;
+
+  @override
+  State<Brain3dView> createState() => _Brain3dViewState();
+}
+
+class _Brain3dViewState extends State<Brain3dView>
+    with SingleTickerProviderStateMixin {
+  late ForceLayout _layout;
+  late Ticker _ticker;
+
+  double _yaw = 0.6;
+  double _pitch = 0.3;
+  double _zoom = 1;
+
+  @override
+  void initState() {
+    super.initState();
+    _build();
+  }
+
+  @override
+  void didUpdateWidget(covariant Brain3dView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.nodes.length != widget.nodes.length ||
+        oldWidget.edges.length != widget.edges.length) {
+      _ticker.dispose();
+      _build();
+    }
+  }
+
+  void _build() {
+    _layout = ForceLayout(
+      nodeIds: [for (final n in widget.nodes) n.id],
+      edges: widget.edges,
+      seed: widget.seed,
+    );
+    // Stepped on a ticker rather than settled up front so the graph is SEEN to
+    // unfold. It also stops on its own: the ticker halts the moment the layout
+    // converges, so an idle screen costs nothing.
+    _ticker = createTicker((_) {
+      if (_layout.done) {
+        _ticker.stop();
+        return;
+      }
+      setState(_layout.step);
+    })
+      ..start();
+  }
+
+  @override
+  void dispose() {
+    _ticker.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final reduceMotion = MediaQuery.maybeDisableAnimationsOf(context) ?? false;
+    if (reduceMotion && !_layout.done) {
+      // Respect reduced motion by jumping to the settled shape rather than
+      // animating there. Also what keeps widget tests able to settle.
+      _layout.settle();
+      _ticker.stop();
+    }
+
+    return GestureDetector(
+      onScaleStart: (_) {},
+      onScaleUpdate: (details) => setState(() {
+        _yaw += details.focalPointDelta.dx * 0.01;
+        _pitch = (_pitch + details.focalPointDelta.dy * 0.01)
+            .clamp(-math.pi / 2, math.pi / 2);
+        if (details.scale != 1.0) {
+          _zoom = (_zoom * details.scale).clamp(0.4, 4.0);
+        }
+      }),
+      onTapUp: widget.onNodeTap == null ? null : _handleTap,
+      child: CustomPaint(
+        painter: Brain3dPainter(
+          nodes: widget.nodes,
+          edges: widget.edges,
+          positions: _layout.positions,
+          yaw: _yaw,
+          pitch: _pitch,
+          zoom: _zoom,
+          background: Theme.of(context).colorScheme.surface,
+        ),
+        size: Size.infinite,
+      ),
+    );
+  }
+
+  void _handleTap(TapUpDetails details) {
+    final box = context.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final projected = Brain3dPainter.project(
+      nodes: widget.nodes,
+      positions: _layout.positions,
+      size: box.size,
+      yaw: _yaw,
+      pitch: _pitch,
+      zoom: _zoom,
+    );
+    // Nearest node within a finger-sized radius. Front-most wins, because that
+    // is the one the user can see.
+    Brain3dVisualNode? hit;
+    var bestDepth = -double.infinity;
+    for (final p in projected) {
+      if ((p.offset - details.localPosition).distance <= 24 &&
+          p.depth > bestDepth) {
+        hit = p.node;
+        bestDepth = p.depth;
+      }
+    }
+    if (hit != null) widget.onNodeTap!(hit);
+  }
+}
+
+/// A node after projection: where it lands and how near the camera it is.
+class ProjectedNode {
+  const ProjectedNode(this.node, this.offset, this.depth, this.scale);
+
+  final Brain3dVisualNode node;
+  final Offset offset;
+
+  /// Higher is nearer the camera. Drives paint order and dimming.
+  final double depth;
+  final double scale;
+}
+
+class Brain3dPainter extends CustomPainter {
+  const Brain3dPainter({
+    required this.nodes,
+    required this.edges,
+    required this.positions,
+    required this.yaw,
+    required this.pitch,
+    required this.zoom,
+    required this.background,
+  });
+
+  final List<Brain3dVisualNode> nodes;
+  final List<(String, String)> edges;
+  final Map<String, Vec3> positions;
+  final double yaw;
+  final double pitch;
+  final double zoom;
+  final Color background;
+
+  /// Distance from the camera to the origin. Large enough that perspective
+  /// reads as depth rather than as a fisheye.
+  static const double _cameraDistance = 60;
+
+  static List<ProjectedNode> project({
+    required List<Brain3dVisualNode> nodes,
+    required Map<String, Vec3> positions,
+    required Size size,
+    required double yaw,
+    required double pitch,
+    required double zoom,
+  }) {
+    final centre = Offset(size.width / 2, size.height / 2);
+    if (positions.isEmpty) return const [];
+
+    // Centre on the CLOUD, not on the origin. A settled layout drifts — its
+    // centre of mass is wherever the forces left it — so projecting about the
+    // origin renders the graph small and pushed into a corner, which is
+    // exactly what the first golden showed.
+    var cx = 0.0, cy = 0.0, cz = 0.0;
+    for (final p in positions.values) {
+      cx += p.x;
+      cy += p.y;
+      cz += p.z;
+    }
+    final n = positions.length;
+    cx /= n;
+    cy /= n;
+    cz /= n;
+
+    // Fit the cloud to the viewport instead of assuming a scale: a graph of 3
+    // nodes and one of 300 occupy wildly different volumes.
+    var extent = 1.0;
+    for (final p in positions.values) {
+      extent = math.max(
+          extent,
+          math.max((p.x - cx).abs(),
+              math.max((p.y - cy).abs(), (p.z - cz).abs())));
+    }
+    final fit = (math.min(size.width, size.height) * 0.34) / extent * zoom;
+
+    final cosY = math.cos(yaw), sinY = math.sin(yaw);
+    final cosP = math.cos(pitch), sinP = math.sin(pitch);
+
+    final out = <ProjectedNode>[];
+    for (final node in nodes) {
+      final p = positions[node.id];
+      if (p == null) continue;
+      // Recentred, then yaw about Y, then pitch about X.
+      final px = p.x - cx, py = p.y - cy, pz = p.z - cz;
+      final x1 = px * cosY + pz * sinY;
+      final z1 = -px * sinY + pz * cosY;
+      final y2 = py * cosP - z1 * sinP;
+      final z2 = py * sinP + z1 * cosP;
+
+      // Perspective divide. Clamped so a node that drifts behind the camera
+      // does not invert and fly off to infinity.
+      final perspective =
+          _cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0);
+      out.add(ProjectedNode(
+        node,
+        centre + Offset(x1 * fit * perspective, y2 * fit * perspective),
+        -z2,
+        perspective,
+      ));
+    }
+    // Painter's algorithm: far first, so near nodes overlap them.
+    out.sort((a, b) => a.depth.compareTo(b.depth));
+    return out;
+  }
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (nodes.isEmpty) return;
+    final projected =
+        project(nodes: nodes, positions: positions, size: size, yaw: yaw, pitch: pitch, zoom: zoom);
+    final byId = {for (final p in projected) p.node.id: p};
+
+    // Edges under the nodes, and faint: they are context, not content. A graph
+    // where the links shout is unreadable past about thirty nodes.
+    final edgePaint = Paint()
+      ..strokeWidth = 1
+      ..style = PaintingStyle.stroke;
+    for (final (from, to) in edges) {
+      final a = byId[from], b = byId[to];
+      if (a == null || b == null) continue;
+      edgePaint.color = Color.lerp(a.node.color, b.node.color, 0.5)!
+          .withValues(alpha: 0.22);
+      canvas.drawLine(a.offset, b.offset, edgePaint);
+    }
+
+    for (final p in projected) {
+      // Depth cues do the work WebGL lighting would: nearer is bigger and more
+      // opaque. Without them the projection reads as a flat scatter.
+      final paint = Paint()..color = p.node.color.withValues(alpha: 0.45 + 0.55 * p.scale);
+      final radius = p.node.radius * p.scale * 1.4;
+      canvas.drawCircle(p.offset, radius, paint);
+
+      // Labels are what make this a map of memories rather than a scatter
+      // plot. Only the front half is labelled: labelling everything turns the
+      // far side into an unreadable pile of overlapping text.
+      if (p.scale < 0.95 || p.node.label.isEmpty) continue;
+      final painter = TextPainter(
+        text: TextSpan(
+          text: p.node.label.length > 28
+              ? '${p.node.label.substring(0, 27)}…'
+              : p.node.label,
+          style: TextStyle(
+            color: Colors.white.withValues(alpha: 0.55 + 0.45 * p.scale),
+            fontSize: 11 * p.scale,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout(maxWidth: 160);
+      // Flip the label to the left when it would run off the right edge.
+      // A truncated label on a memory map is worse than a shifted one: the
+      // user cannot tell which memory the node IS.
+      final wouldOverflow = p.offset.dx + radius + 4 + painter.width > size.width;
+      final dx = wouldOverflow ? -(radius + 4 + painter.width) : radius + 4;
+      painter.paint(canvas, p.offset + Offset(dx, -painter.height / 2));
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant Brain3dPainter old) =>
+      old.yaw != yaw ||
+      old.pitch != pitch ||
+      old.zoom != zoom ||
+      !identical(old.positions, positions) ||
+      old.nodes.length != nodes.length;
+}
