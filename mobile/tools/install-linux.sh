@@ -408,14 +408,44 @@ print("" if v is None else v)' "$1" "$2" || return 1
   fi
 }
 
+# Records the HTTP status of the last fetch so a caller can tell WHICH failure
+# it hit. "Could not fetch" covers a dead host, a typo'd URL and a rejected key
+# equally, and only one of those is fixed by editing /etc/lifeos/update.env.
+LAST_HTTP_CODE=""
+
 fetch() { # $1 = url, $2 = destination
   if [ -n "$ACCESS_KEY" ]; then
-    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 \
-      -H "$KEY_HEADER: $ACCESS_KEY" -o "$2" "$1"
+    LAST_HTTP_CODE="$(curl -sSL --retry 3 --retry-delay 2 --connect-timeout 20 \
+      --max-time 1800 -w '%{http_code}' \
+      -H "$KEY_HEADER: $ACCESS_KEY" -o "$2" "$1" 2>/dev/null)" || LAST_HTTP_CODE="000"
   else
-    curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 \
-      -o "$2" "$1"
+    LAST_HTTP_CODE="$(curl -sSL --retry 3 --retry-delay 2 --connect-timeout 20 \
+      --max-time 1800 -w '%{http_code}' -o "$2" "$1" 2>/dev/null)" || LAST_HTTP_CODE="000"
   fi
+  case "$LAST_HTTP_CODE" in
+    2*) return 0 ;;
+    *)  rm -f "$2"; return 1 ;;
+  esac
+}
+
+# Turns the recorded status into the one sentence that names the actual fix.
+fetch_failure_hint() {
+  case "$LAST_HTTP_CODE" in
+    401|403)
+      if [ -z "$ACCESS_KEY" ]; then
+        echo "The update endpoint rejected the request (HTTP $LAST_HTTP_CODE) and this"
+        echo "machine has NO access key saved. Re-run the installer once with:"
+        echo "    sudo sh install-linux.sh --base-url $BASE_URL --key <UPDATE_ACCESS_KEY>"
+        echo "It is stored in $CONF_FILE and reused by every later update."
+      else
+        echo "The update endpoint rejected the saved access key (HTTP $LAST_HTTP_CODE)."
+        echo "Check UPDATE_ACCESS_KEY in $CONF_FILE against the server's."
+      fi
+      ;;
+    404) echo "The server has nothing published at that path (HTTP 404)." ;;
+    000) echo "No HTTP response at all — DNS, connectivity or TLS." ;;
+    *)   echo "The server answered HTTP $LAST_HTTP_CODE." ;;
+  esac
 }
 
 installed_version_code() {
@@ -499,7 +529,7 @@ do_install() {
   [ "$MODE" = "update" ] || step "Fetching manifest: $MANIFEST_URL"
   fetch "$MANIFEST_URL" "$WORKDIR/manifest.json" || \
     die "Could not fetch the manifest from $MANIFEST_URL" \
-        "Check the URL, the access key, and that the machine is online." \
+        "$(fetch_failure_hint)" \
         "A failed check is reported as a failure on purpose — it is never" \
         "treated as 'you are up to date'."
 

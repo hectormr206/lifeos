@@ -89,3 +89,64 @@ ota_ls() {
   docker run --rm -v "$OTA_VOLUME:/srv:ro" "$OTA_WRITER_IMAGE" \
     sh -c "ls -l '/srv/${1:-}'"
 }
+
+# ota_prune <dir-relativo> <sufijo> <cuántos-conservar> [--dry-run]
+#
+# Old releases accumulate forever otherwise: 65 APKs at ~318 MB had reached
+# 16.4 GB — most of the update store, and none of it reachable by any client,
+# because the app only ever downloads what the manifest advertises.
+#
+# NEVER DELETED, regardless of the count:
+#   * the file the manifest currently advertises
+#   * the target of any symlink in the directory (current.apk)
+# A retention policy that can delete the live release is not a retention
+# policy, it is an outage on a timer.
+#
+# Ordering is by the versionCode parsed from the filename, NOT by mtime: a
+# re-published build gets a fresh mtime and would otherwise look newer than the
+# releases that actually supersede it.
+#
+# The body is piped into the container as a script rather than embedded in a
+# quoted `sh -c` string. Nesting shell quoting three levels deep is how you get
+# a deletion loop that silently matches the wrong files.
+ota_prune() {
+  local dir="$1" suffix="$2" keep="$3" dry="${4:-}"
+  docker run --rm -i -v "$OTA_VOLUME:/srv" "$OTA_WRITER_IMAGE" \
+    sh -s -- "$dir" "$suffix" "$keep" "$dry" <<'PRUNE'
+set -eu
+dir=$1; suffix=$2; keep=$3; dry=${4:-}
+
+cd "/srv/$dir" 2>/dev/null || exit 0
+
+# Everything that must survive, one name per line.
+{
+  for m in manifest.json */manifest.json; do
+    [ -f "$m" ] || continue
+    sed -n 's/.*"filename"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$m"
+  done
+  for l in * ; do
+    [ -L "$l" ] || continue
+    readlink "$l"
+  done
+} 2>/dev/null | sort -u > /tmp/protected
+
+for f in *"$suffix"; do
+  [ -f "$f" ] || continue
+  # versionCode = trailing digits before the suffix
+  code=$(printf '%s' "$f" | sed -n "s/.*-\([0-9][0-9]*\)$(printf '%s' "$suffix" | sed 's/\./\\./g')\$/\1/p")
+  [ -n "$code" ] || continue
+  printf '%s %s\n' "$code" "$f"
+done | sort -rn -k1,1 | tail -n +$((keep + 1)) | cut -d' ' -f2- | while read -r f; do
+  if grep -qxF "$f" /tmp/protected; then
+    echo "  conservado (en uso): $f"
+    continue
+  fi
+  size=$(du -h "$f" | cut -f1)
+  if [ -n "$dry" ]; then
+    echo "  se borraría: $f ($size)"
+  else
+    rm -f "$f" && echo "  borrado: $f ($size)"
+  fi
+done
+PRUNE
+}
