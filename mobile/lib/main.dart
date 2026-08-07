@@ -4,6 +4,8 @@ import 'package:workmanager/workmanager.dart';
 
 import 'app.dart';
 import 'core/background/background_tasks.dart';
+import 'core/launch/launch_options.dart';
+import 'core/launch/launch_providers.dart';
 import 'features/security/domain/app_lock_preferences.dart';
 import 'features/security/presentation/app_lock_providers.dart';
 
@@ -23,7 +25,12 @@ Future<bool> resolveInitialAppLockEnabled(AppLockPreferences prefs) async {
   }
 }
 
-Future<void> main() async {
+/// [arguments] are the desktop runner's entrypoint arguments (GTK passes them
+/// through `fl_dart_project_set_dart_entrypoint_arguments`; Android and web
+/// simply hand an empty list). They carry `--hidden` when the login autostart
+/// entry started us — see `core/launch/launch_options.dart`.
+Future<void> main(List<String> arguments) async {
+  final launchOptions = LaunchOptions.parse(arguments);
   // Resolve the optional biometric app-lock flag BEFORE the first frame so the
   // gate knows synchronously whether to lock — no splash, and a lock-enabled
   // user never flashes their on-device data on cold start. Defaults to OFF on
@@ -45,6 +52,10 @@ Future<void> main() async {
     ProviderScope(
       overrides: [
         appLockInitialEnabledProvider.overrideWithValue(appLockEnabled),
+        // Parsed once, here, and injected — so nothing below reaches for the
+        // process's real argv, and a widget test can say "we were launched
+        // hidden" without one.
+        launchOptionsProvider.overrideWithValue(launchOptions),
       ],
       child: const LifeOSApp(),
     ),

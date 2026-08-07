@@ -968,6 +968,13 @@ class AppLocalizationsEs extends AppLocalizations {
       'Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.';
 
   @override
+  String get autostartNavTitle => 'Iniciar LifeOS al entrar a la sesión';
+
+  @override
+  String get autostartNavSubtitle =>
+      'Se abre en segundo plano, en la barra del sistema, sin ventana';
+
+  @override
   String get trayTooltip => 'LifeOS está funcionando';
 
   @override

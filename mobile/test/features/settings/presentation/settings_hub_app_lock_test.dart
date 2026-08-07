@@ -47,6 +47,13 @@ Widget _app({
       ),
     );
 
+/// The app-lock switch specifically. The hub carries more than one
+/// `SwitchListTile` — the desktop "start LifeOS when I log in" toggle is
+/// another — so a bare `find.byType` here would be ambiguous and would break
+/// again the next time an inline switch is added.
+final Finder _appLockSwitch =
+    find.widgetWithText(SwitchListTile, 'Bloqueo con huella o rostro');
+
 void main() {
   // The hub is a long scrolling list; give tests a tall viewport so the
   // Security section is laid out (a ListView only builds visible children).
@@ -82,7 +89,7 @@ void main() {
     final container = ProviderScope.containerOf(tester.element(find.text('Seguridad')));
     expect(container.read(appLockControllerProvider), AppLockStatus.disabled);
 
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(_appLockSwitch);
     await tester.pumpAndSettle();
 
     expect(auth.calls, 1);
@@ -99,7 +106,7 @@ void main() {
 
     final container = ProviderScope.containerOf(tester.element(find.text('Seguridad')));
 
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(_appLockSwitch);
     await tester.pumpAndSettle();
 
     expect(auth.calls, 1);
@@ -118,7 +125,7 @@ void main() {
     final container = ProviderScope.containerOf(tester.element(find.text('Seguridad')));
     expect(container.read(appLockEnabledProvider), isTrue);
 
-    await tester.tap(find.byType(SwitchListTile));
+    await tester.tap(_appLockSwitch);
     await tester.pumpAndSettle();
 
     // Disabling never prompts.

@@ -961,6 +961,13 @@ class AppLocalizationsEn extends AppLocalizations {
       'Set up a fingerprint, face or PIN on your device to turn the lock on.';
 
   @override
+  String get autostartNavTitle => 'Start LifeOS when I log in';
+
+  @override
+  String get autostartNavSubtitle =>
+      'Opens in the background, in the system tray, without a window';
+
+  @override
   String get trayTooltip => 'LifeOS is running';
 
   @override

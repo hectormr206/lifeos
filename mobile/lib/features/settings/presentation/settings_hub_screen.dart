@@ -13,6 +13,7 @@ import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
 import '../../app_update/presentation/app_update_providers.dart';
 import '../../assistant/presentation/assistant_providers.dart';
+import '../../autostart/presentation/login_autostart_tile.dart';
 import '../../security/domain/biometric_authenticator.dart';
 import '../../security/presentation/app_lock_providers.dart';
 import '../../game_mode/presentation/game_mode_tile.dart';
@@ -98,6 +99,12 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/timezone'),
           ),
+          // DESKTOP: start LifeOS at login, hidden, in the tray. Renders
+          // nothing on the phones and in the browser — and nothing on macOS /
+          // Windows until this repo has runners for them. It is an inline
+          // switch rather than a row that pushes a screen because there is
+          // exactly one thing to decide.
+          const LoginAutostartTile(),
           // PLATFORM-HONEST ROWS. Both of these open an OS screen that only
           // exists on Android, so on desktop they are ABSENT rather than
           // greyed out — a control that is shown is a control that works.

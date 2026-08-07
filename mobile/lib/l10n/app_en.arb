@@ -407,6 +407,8 @@
   "appLockDisableButton": "Turn off lock",
   "appLockEnableFailed": "Could not verify. The lock stays off.",
   "appLockUnavailableToast": "Set up a fingerprint, face or PIN on your device to turn the lock on.",
+  "autostartNavTitle": "Start LifeOS when I log in",
+  "autostartNavSubtitle": "Opens in the background, in the system tray, without a window",
   "trayTooltip": "LifeOS is running",
   "trayMenuShowWindow": "Open LifeOS",
   "trayMenuQuit": "Quit LifeOS",

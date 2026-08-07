@@ -5,11 +5,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import 'core/outbox/sync_service.dart';
+import 'core/launch/launch_providers.dart';
 import 'core/tray/tray_localization.dart';
 import 'core/tray/tray_notice.dart';
 import 'core/tray/tray_platform.dart';
 import 'core/tray/tray_providers.dart';
 import 'core/tray/tray_service.dart';
+import 'core/window/launch_visibility.dart';
 import 'l10n/app_localizations.dart';
 import 'l10n/locale_providers.dart';
 import 'features/app_update/presentation/app_update_notifier.dart';
@@ -469,6 +471,23 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     await ref
         .read(trayStatusProvider.notifier)
         .start(trayMenuLabelsFrom(AppLocalizations.of(context)));
+    await _applyLaunchVisibility();
+  }
+
+  /// A `--hidden` launch (the login autostart entry) drops the window once the
+  /// tray icon is genuinely up — and, if the tray FAILED, shows the window
+  /// instead. Hidden window plus no tray icon would be an app the user cannot
+  /// reach at all, so the uncertain direction is always "visible". The whole
+  /// decision lives in `windowShouldBeVisibleAtLaunch` and is asserted there.
+  Future<void> _applyLaunchVisibility() async {
+    if (!mounted) return;
+    final options = ref.read(launchOptionsProvider);
+    if (!options.startHidden) return;
+    await applyLaunchVisibility(
+      window: ref.read(appWindowHostProvider),
+      options: options,
+      trayStatus: ref.read(trayStatusProvider),
+    );
   }
 
   void _openRemindersScreen() {

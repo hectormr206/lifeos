@@ -1832,6 +1832,18 @@ abstract class AppLocalizations {
   /// **'Set up a fingerprint, face or PIN on your device to turn the lock on.'**
   String get appLockUnavailableToast;
 
+  /// No description provided for @autostartNavTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Start LifeOS when I log in'**
+  String get autostartNavTitle;
+
+  /// No description provided for @autostartNavSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Opens in the background, in the system tray, without a window'**
+  String get autostartNavSubtitle;
+
   /// No description provided for @trayTooltip.
   ///
   /// In en, this message translates to:

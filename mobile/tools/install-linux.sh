@@ -481,6 +481,11 @@ do_uninstall() {
   say "   Your data was NOT deleted. It lives in each user's home directory:"
   say "     ~/.local/share/com.lifeos.lifeos/   ~/.config/com.lifeos.lifeos/"
   say "   Delete those by hand if you want a clean slate."
+  say ""
+  say "   If you turned on \"start LifeOS when I log in\", that entry lives in"
+  say "     ~/.config/autostart/lifeos.desktop"
+  say "   and is per-user, so this uninstall cannot remove other users' copies."
+  say "   Delete it, or your session will try to launch LifeOS at every login."
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

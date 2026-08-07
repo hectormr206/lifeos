@@ -10,12 +10,34 @@
 struct _MyApplication {
   GtkApplication parent_instance;
   char** dart_entrypoint_arguments;
+  // TRUE when the login autostart entry started us (see
+  // lib/core/launch/launch_options.dart). LifeOS then comes up in the system
+  // tray with no window at all.
+  gboolean start_hidden;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 
+// Keep in sync with `hiddenLaunchFlag` and its aliases in
+// lib/core/launch/launch_options.dart. The Dart side parses the same arguments
+// independently — this is only the optimisation that avoids a visible flash of
+// the window before Dart can hide it. If the two ever disagree, the Dart side
+// still corrects the visibility (core/window/launch_visibility.dart), so the
+// worst case is a flash, never an unreachable app.
+static gboolean is_hidden_launch_flag(const gchar* argument) {
+  return g_strcmp0(argument, "--hidden") == 0 ||
+         g_strcmp0(argument, "--start-hidden") == 0 ||
+         g_strcmp0(argument, "--start-minimized") == 0;
+}
+
 // Called when first Flutter frame received.
 static void first_frame_cb(MyApplication* self, FlView* view) {
+  // Started hidden: leave the toplevel unmapped. Dart calls window_manager's
+  // show() if — and only if — the tray icon did NOT come up, so the user can
+  // never end up with neither a window nor an icon.
+  if (self->start_hidden) {
+    return;
+  }
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
 }
 
@@ -85,6 +107,15 @@ static gboolean my_application_local_command_line(GApplication* application,
   MyApplication* self = MY_APPLICATION(application);
   // Strip out the first argument as it is the binary name.
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
+
+  self->start_hidden = FALSE;
+  for (gchar** argument = self->dart_entrypoint_arguments;
+       argument != nullptr && *argument != nullptr; argument++) {
+    if (is_hidden_launch_flag(*argument)) {
+      self->start_hidden = TRUE;
+      break;
+    }
+  }
 
   g_autoptr(GError) error = nullptr;
   if (!g_application_register(application, nullptr, &error)) {

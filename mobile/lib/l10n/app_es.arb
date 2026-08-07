@@ -368,6 +368,8 @@
   "appLockDisableButton": "Desactivar bloqueo",
   "appLockEnableFailed": "No se pudo verificar. El bloqueo sigue desactivado.",
   "appLockUnavailableToast": "Configura una huella, rostro o PIN en tu dispositivo para activar el bloqueo.",
+  "autostartNavTitle": "Iniciar LifeOS al entrar a la sesión",
+  "autostartNavSubtitle": "Se abre en segundo plano, en la barra del sistema, sin ventana",
   "trayTooltip": "LifeOS está funcionando",
   "trayMenuShowWindow": "Abrir LifeOS",
   "trayMenuQuit": "Salir de LifeOS",
