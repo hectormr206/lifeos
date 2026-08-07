@@ -728,3 +728,87 @@ def test_graph_relation_lines_still_uses_an_edge_index(pr6a_graph):
     )
     assert "SCAN e" not in plan, plan
     assert "idx_edges_src" in plan and "idx_edges_dst" in plan, plan
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — tombstone filters on the recall read path (task 7.9/7.10).
+#
+# These lines are quoted back to the user as things their graph asserts. A
+# tombstoned row surfacing here is the assistant repeating a memory the user
+# deleted, in its own voice.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _tombstone(table: str, row_id: int) -> None:
+    from axi import store
+
+    extra = ", updated_at=?" if table == "edges" else ""
+    params = (time.time(), time.time(), row_id) if extra else (time.time(), row_id)
+    store._connect().execute(  # noqa: SLF001
+        f"UPDATE {table} SET deleted_at=?{extra} WHERE id=?", params
+    )
+
+
+def _relation_fixture():
+    from axi import store
+
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    doc = store.add_node("person", "Dra. López")
+    eid_ana = store.add_edge(hub, ana, "esposa")
+    store.add_edge(hub, doc, "doctora")
+    return {"hub": hub, "ana": ana, "doc": doc, "eid_ana": eid_ana}
+
+
+def test_graph_relation_lines_skip_a_tombstoned_edge():
+    from axi import recall, store
+
+    f = _relation_fixture()
+    c = store._connect()  # noqa: SLF001
+    lines = recall._graph_relation_lines({f["hub"]}, c)
+    assert any("Ana Ríos" in ln for ln in lines)
+
+    _tombstone("edges", f["eid_ana"])
+    lines = recall._graph_relation_lines({f["hub"]}, c)
+    assert not any("Ana Ríos" in ln for ln in lines), (
+        "recall quoted a relation the user deleted"
+    )
+    assert any("Dra. López" in ln for ln in lines), "live relations must survive"
+
+
+def test_graph_relation_lines_skip_a_tombstoned_endpoint_node():
+    from axi import recall, store
+
+    f = _relation_fixture()
+    c = store._connect()  # noqa: SLF001
+    _tombstone("nodes", f["ana"])
+
+    lines = recall._graph_relation_lines({f["hub"]}, c)
+    assert not any("Ana Ríos" in ln for ln in lines)
+    assert any("Dra. López" in ln for ln in lines)
+
+
+def test_recall_block_drops_hub_relations_once_the_hub_is_tombstoned(monkeypatch):
+    """The hub anchors most relations, so recall injects it into every query.
+
+    A tombstoned hub must stop anchoring them. Asserted through the real
+    `build_recall_block` entry point: the embed service is down in tests, so
+    the semantic lane is empty and the hub-injection lane is the only thing
+    that can put these relations into the block.
+    """
+    from axi import recall, store
+
+    f = _relation_fixture()
+    c = store._connect()  # noqa: SLF001
+    seed = store.add_node("fact", "hipertensión diagnosticada")
+    hit = _node_dict(seed, "hipertensión diagnosticada", distance=0.1)
+    monkeypatch.setattr(store, "semantic_search_nodes", lambda *a, **kw: [hit])
+
+    block = recall.build_recall_block("¿quién es mi esposa?", conn=c)
+    assert "Ana Ríos" in block
+
+    _tombstone("nodes", f["hub"])
+    block = recall.build_recall_block("¿quién es mi esposa?", conn=c)
+    assert "Ana Ríos" not in block, (
+        "recall still anchors relations on a tombstoned hub"
+    )

@@ -215,6 +215,11 @@ def _find(target: str, limit: int, conn) -> list[dict]:
                 "JOIN nodes nf ON nf.uuid = e.src_uuid "
                 "JOIN nodes nt ON nt.uuid = e.dst_uuid "
                 f"WHERE ({' OR '.join(where)}) "
+                # PR7: this lane offers rows to the user for DELETION. Offering
+                # an already-deleted one lets them delete it twice and be told
+                # it worked — a lie about their own memory.
+                "AND e.deleted_at IS NULL "
+                "AND nf.deleted_at IS NULL AND nt.deleted_at IS NULL "
                 "LIMIT ?"
             )
             params.append(limit * 4)

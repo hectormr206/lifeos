@@ -281,8 +281,13 @@ def _graph_relation_lines(matched_ids: set, conn, *, max_rel: int = 8) -> list[s
             "SELECT nf.label AS f, e.relation AS k, nt.label AS t "
             "FROM edges e JOIN nodes nf ON nf.uuid = e.src_uuid "
             "JOIN nodes nt ON nt.uuid = e.dst_uuid "
-            f"WHERE e.src_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph})) "
-            f"OR e.dst_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph}))"
+            f"WHERE (e.src_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph})) "
+            f"OR e.dst_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph}))) "
+            # PR7: these lines are quoted back to the user as things their
+            # graph asserts. A tombstoned row surfacing here is the assistant
+            # repeating, in its own voice, a memory the user deleted.
+            "AND e.deleted_at IS NULL "
+            "AND nf.deleted_at IS NULL AND nt.deleted_at IS NULL"
             # ORDER BY is new. This list is truncated at max_rel, so its order
             # decides WHICH relations the user is shown — and neither this
             # query nor the pre-rewrite one ever stated one, leaving it to the
@@ -600,7 +605,7 @@ def _build_recall_block(
         # the configured user_name can drift (e.g. reset to a placeholder), but
         # the hub node is always tagged role=user.
         _hub = (conn or store._connect()).execute(
-            "SELECT id FROM nodes WHERE kind='person' "
+            "SELECT id FROM nodes WHERE kind='person' AND deleted_at IS NULL "
             "AND data LIKE '%\"role\": \"user\"%' LIMIT 1"
         ).fetchone()
         if _hub:

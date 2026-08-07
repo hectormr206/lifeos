@@ -221,6 +221,21 @@ CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
 -- fresh DB (built via this CREATE TABLE) and a migrated pre-existing one
 -- (migrate_nodes_edges_sync_columns creates the same index after backfill).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
+-- PR7 (tombstones). Mobile's name, verbatim (local_graph_schema.dart), but
+-- PARTIAL — and that is not a detail, it is the whole point. Measured with
+-- EXPLAIN QUERY PLAN on the queries this PR touches: a FULL index on
+-- `deleted_at` gets picked for the `deleted_at IS NULL` filter that every read
+-- now carries, and since almost every row IS NULL that "SEARCH" walks the
+-- entire table. It cost the graph-browser and recall queries their MULTI-INDEX
+-- OR over idx_edges_src/idx_edges_dst — a full scan wearing an index's name,
+-- with no test failing and no error. Restricted to `deleted_at IS NOT NULL`,
+-- SQLite cannot use it for the live-row filter at all, so the endpoint indexes
+-- keep winning, and it stays small and genuinely selective for the query that
+-- actually wants it: "which rows are tombstoned" (the sync push).
+-- Also created by the migration, so a pre-existing database — which never runs
+-- this CREATE TABLE body — gets it too.
+CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deleted_at)
+  WHERE deleted_at IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS edges (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -260,6 +275,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid);
 CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid);
 CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
+CREATE INDEX IF NOT EXISTS idx_edges_deleted  ON edges(deleted_at)
+  WHERE deleted_at IS NOT NULL;  -- partial: see idx_nodes_deleted above
 
 -- ─────────────────────── conversation history ───────────────────────
 
@@ -1340,11 +1357,21 @@ def add_edge(
 
 
 def delete_node(node_id: int) -> bool:
-    """Delete a node and everything attached to it.
+    """Tombstone a node and everything attached to it.
 
-    Removes the node plus ALL its edges (from_id or to_id), and its
-    nodes_fts / vec_nodes rows if present. Returns True if a node row was
-    deleted, False otherwise.
+    PR7 (design-schema.md Decision 3). The node and its edges are MARKED
+    deleted (`deleted_at`), not removed: sync cannot replicate an absence — a
+    peer that never sees a row cannot tell "deleted" from "not yet received",
+    so it hands the memory straight back on the next exchange.
+
+    The `nodes_fts` and `vec_nodes` rows are still HARD-deleted, deliberately.
+    Both are local derived state that is never synced, and leaving the FTS row
+    behind is the named worst case: the graph would say the memory is gone
+    while the search box handed it back. That removal happens in the SAME
+    transaction as the tombstone.
+
+    Returns True if a live node row was tombstoned, False otherwise (including
+    a second call for an already-tombstoned node).
 
     SAFETY: refuses to delete the user-hub node (data role=user) — you cannot
     delete "yourself". Returns False in that case without touching anything.
@@ -1360,7 +1387,9 @@ def delete_node(node_id: int) -> bool:
     except (TypeError, ValueError):
         return False
     c = _connect()
-    row = c.execute("SELECT data FROM nodes WHERE id = ?", (nid,)).fetchone()
+    row = c.execute(
+        "SELECT data FROM nodes WHERE id = ? AND deleted_at IS NULL", (nid,)
+    ).fetchone()
     if row is None:
         return False
     # Hub guard: never delete the user's own anchor node.
@@ -1370,16 +1399,43 @@ def delete_node(node_id: int) -> bool:
             return False
     except (ValueError, TypeError):
         pass
+    now = time.time()
     try:
         with _tx() as tx:
-            tx.execute("DELETE FROM edges WHERE from_id = ? OR to_id = ?", (nid, nid))
+            # Edges are matched on the sync-stable endpoint uuids, not the
+            # rowid pair PR8 drops. Everything below runs in ONE transaction:
+            # split in two, a crash in between would leave a live node whose
+            # relations had all been tombstoned, or the reverse.
+            uuid_row = tx.execute("SELECT uuid FROM nodes WHERE id = ?", (nid,)).fetchone()
+            node_uuid = uuid_row[0] if uuid_row else None
+            tx.execute(
+                "UPDATE edges SET deleted_at = ?, updated_at = ? "
+                "WHERE (src_uuid = ? OR dst_uuid = ?) AND deleted_at IS NULL",
+                (now, now, node_uuid, node_uuid),
+            )
+            # nodes_fts stays a HARD delete: local derived state, never synced,
+            # and the one row that must not outlive the tombstone (7.11).
             tx.execute("DELETE FROM nodes_fts WHERE rowid = ?", (nid,))
-            # vec_nodes may not exist / sqlite-vec may be unloaded — best-effort.
+            # vec_nodes likewise — hard, best-effort (sqlite-vec may be
+            # unloaded). Note this statement is now the ONLY thing cleaning it:
+            # trg_nodes_delete_vec is an AFTER DELETE trigger and stops firing
+            # the moment the node delete becomes an UPDATE.
             try:
                 tx.execute("DELETE FROM vec_nodes WHERE node_id = ?", (nid,))
             except Exception:  # noqa: BLE001
                 pass
-            cur = tx.execute("DELETE FROM nodes WHERE id = ?", (nid,))
+            cur = tx.execute(
+                # updated_at is bumped with deleted_at, matching the edge
+                # tombstone above. A tombstone IS a write, and last-writer-wins
+                # orders by updated_at: leave it stale and a peer that merely
+                # EDITED this node later than its last write beats the delete,
+                # handing the user back a memory they deleted. No observable
+                # change today — the row is invisible to every read from here
+                # on — which is precisely why it is cheap to get right now.
+                "UPDATE nodes SET deleted_at = ?, updated_at = ? "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (now, now, nid),
+            )
         return cur.rowcount > 0
     except Exception:  # noqa: BLE001
         log.warning("delete_node failed for %d", nid, exc_info=True)
@@ -1387,7 +1443,11 @@ def delete_node(node_id: int) -> bool:
 
 
 def delete_edge(edge_id: int) -> bool:
-    """Delete one edge by id. Returns True if a row was removed.
+    """Tombstone one edge by id. Returns True if a LIVE row was tombstoned.
+
+    PR7: marked, not removed, for the same reason as `delete_node`. The
+    `AND deleted_at IS NULL` guard is what makes a second call report False
+    instead of rewriting the timestamp and claiming success.
 
     Defensive: never raises; returns False on bad input or any error.
     """
@@ -1401,7 +1461,12 @@ def delete_edge(edge_id: int) -> bool:
         return False
     try:
         with _tx() as tx:
-            cur = tx.execute("DELETE FROM edges WHERE id = ?", (eid,))
+            now = time.time()
+            cur = tx.execute(
+                "UPDATE edges SET deleted_at = ?, updated_at = ? "
+                "WHERE id = ? AND deleted_at IS NULL",
+                (now, now, eid),
+            )
         return cur.rowcount > 0
     except Exception:  # noqa: BLE001
         log.warning("delete_edge failed for %d", eid, exc_info=True)
@@ -1409,14 +1474,21 @@ def delete_edge(edge_id: int) -> bool:
 
 
 def search_nodes_fts(query: str, limit: int = 10) -> list[sqlite3.Row]:
-    """FTS5 lexical search over node labels + data text."""
+    """FTS5 lexical search over node labels + data text.
+
+    PR7: `deleted_at IS NULL` here is belt AND braces. `delete_node` already
+    removes the `nodes_fts` row in the same transaction as the tombstone
+    (7.11), so a locally deleted memory cannot reach this join at all. A
+    tombstone that arrives from a peer does NOT go through `delete_node`, and
+    then this filter is the only thing between it and the search box.
+    """
     if not query.strip():
         return []
     c = _connect()
     return list(c.execute(
         "SELECT n.* FROM nodes_fts f "
         "JOIN nodes n ON n.id = f.rowid "
-        "WHERE nodes_fts MATCH ? "
+        "WHERE nodes_fts MATCH ? AND n.deleted_at IS NULL "
         "ORDER BY rank LIMIT ?",
         (query, limit),
     ))
@@ -1424,7 +1496,9 @@ def search_nodes_fts(query: str, limit: int = 10) -> list[sqlite3.Row]:
 
 def get_node(node_id: int) -> sqlite3.Row | None:
     c = _connect()
-    row = c.execute("SELECT * FROM nodes WHERE id = ?", (node_id,)).fetchone()
+    row = c.execute(
+        "SELECT * FROM nodes WHERE id = ? AND deleted_at IS NULL", (node_id,)
+    ).fetchone()
     return row
 
 
@@ -1445,13 +1519,15 @@ def neighbors(node_id: int, edge_kind: str | None = None, depth: int = 1) -> lis
         rows = c.execute(
             "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
             "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-            "AND e.relation = ?",
+            "AND e.relation = ? "
+            "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
             (node_id, edge_kind),
         )
     else:
         rows = c.execute(
             "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
-            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?)",
+            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
             (node_id,),
         )
     return list(rows)
@@ -1480,13 +1556,13 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
             FROM nodes n
             JOIN edges e ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?)
                         AND e.dst_uuid = n.uuid AND e.relation = 'same-day'
-            WHERE n.id != ?
+            WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
             UNION
             SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
             FROM nodes n
             JOIN edges e ON e.dst_uuid = (SELECT uuid FROM nodes WHERE id = ?)
                         AND e.src_uuid = n.uuid AND e.relation = 'same-day'
-            WHERE n.id != ?
+            WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
             """,
             (node_id, node_id, node_id, node_id),
         ).fetchall()
@@ -1509,7 +1585,8 @@ def find_fact_by_label(label: str, conn=None) -> int | None:
     c = conn or _connect()
     try:
         row = c.execute(
-            "SELECT id FROM nodes WHERE kind='fact' AND label=? LIMIT 1", (label,)
+            "SELECT id FROM nodes WHERE kind='fact' AND label=? "
+            "AND deleted_at IS NULL LIMIT 1", (label,)
         ).fetchone()
     except Exception:  # noqa: BLE001
         return None
@@ -1530,7 +1607,8 @@ def recent_facts(days: int = 2, limit: int = 8, conn=None) -> list[dict[str, Any
     try:
         rows = c.execute(
             "SELECT id, kind, label, domain, data, created_at, occurred_at FROM nodes "
-            "WHERE kind = 'fact' AND COALESCE(occurred_at, created_at) >= ? "
+            "WHERE kind = 'fact' AND deleted_at IS NULL "
+            "AND COALESCE(occurred_at, created_at) >= ? "
             "ORDER BY COALESCE(occurred_at, created_at) DESC LIMIT ?",
             (cutoff, int(limit)),
         ).fetchall()
@@ -2247,6 +2325,7 @@ def embed_pending_nodes(*, limit: int = 100) -> int:
     c = _connect()
     rows = c.execute(
         "SELECT id, label, data FROM nodes WHERE embedding IS NULL "
+        "AND deleted_at IS NULL "
         "ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -2595,7 +2674,8 @@ def semantic_search_nodes(
     # Fetch node metadata in one query, preserving KNN order.
     placeholders = ",".join("?" * len(node_ids))
     rows = c.execute(
-        f"SELECT id, kind, label, domain, data, created_at, occurred_at FROM nodes WHERE id IN ({placeholders})",
+        f"SELECT id, kind, label, domain, data, created_at, occurred_at FROM nodes "
+        f"WHERE id IN ({placeholders}) AND deleted_at IS NULL",
         node_ids,
     ).fetchall()
 
@@ -2858,6 +2938,17 @@ def migrate_edge_endpoint_uuids() -> None:
     c.execute("CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation)")
+    # PR7 (tombstones), same reasoning one level further on: every node and edge
+    # read now filters `deleted_at IS NULL`, and the owner's real database is a
+    # pre-existing one that never runs _SCHEMA's CREATE TABLE body.
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deleted_at) "
+        "WHERE deleted_at IS NOT NULL"
+    )
+    c.execute(
+        "CREATE INDEX IF NOT EXISTS idx_edges_deleted ON edges(deleted_at) "
+        "WHERE deleted_at IS NOT NULL"
+    )
 
     # Backfill every edge still missing EITHER endpoint uuid — resumable and
     # idempotent. `src_uuid IS NULL` alone was not enough: before task 5.14 an
@@ -2957,6 +3048,67 @@ def verify_edge_endpoint_convergence() -> None:
             f"carry a NULL endpoint uuid and are therefore invisible to every "
             f"read that resolves edges through src_uuid/dst_uuid: {detail}"
         )
+
+
+def report_dangling_edges(conn=None) -> list[str]:
+    """Report live edges whose endpoint uuid resolves to no LIVE node.
+
+    REPORT-ONLY on purpose (task 7.14). A dangling endpoint is LEGAL in
+    mobile's model — referential integrity moves to the application after PR8
+    and an edge may legitimately sync before its node arrives — so raising
+    would turn a normal sync ordering into a crash. It still has to be
+    visible: an endpoint that never arrives is a permanently broken link, and
+    silently ignoring it is how that stops being anyone's problem.
+
+    A tombstoned edge is never reported. Every ordinary node delete tombstones
+    the node AND its edges, so reporting those would bury the real findings
+    under one entry per deletion the user has ever made.
+
+    RAISES if the check itself cannot execute — report-only applies to the
+    FINDINGS, not to the check. Per the LifeOS silent-failure rule, returning
+    "nothing wrong" because the query failed is the failure mode this codebase
+    has already had to fix once.
+
+    Returns one human-readable line per offending edge, each naming the edge
+    id and both endpoint uuids — formatted by hand, never by interpolating a
+    sqlite Row, whose repr says nothing.
+    """
+    c = conn or _connect()
+    try:
+        rows = c.execute(
+            "SELECT e.id, e.src_uuid, e.dst_uuid, "
+            "  (SELECT 1 FROM nodes n WHERE n.uuid = e.src_uuid "
+            "     AND n.deleted_at IS NULL) AS src_live, "
+            "  (SELECT 1 FROM nodes n WHERE n.uuid = e.dst_uuid "
+            "     AND n.deleted_at IS NULL) AS dst_live "
+            "FROM edges e "
+            "WHERE e.deleted_at IS NULL "
+            "  AND (src_live IS NULL OR dst_live IS NULL)"
+        ).fetchall()
+    except Exception as exc:  # noqa: BLE001 — deliberately broad: ANY failure
+        # to execute the check must raise, not be swallowed.
+        raise RuntimeError(
+            f"report_dangling_edges: the dangling-edge check could not run "
+            f"(table/column missing mid-migration?): {exc}"
+        ) from exc
+
+    out: list[str] = []
+    for r in rows:
+        missing = []
+        if r[3] is None:
+            missing.append(f"src_uuid={r[1]!r}")
+        if r[4] is None:
+            missing.append(f"dst_uuid={r[2]!r}")
+        out.append(
+            f"id={r[0]} points at no live node: " + ", ".join(missing)
+        )
+    if out:
+        log.warning(
+            "report_dangling_edges: %d live edge(s) point at a missing or "
+            "deleted node (legal per the sync design, reported not enforced): %s",
+            len(out), "; ".join(out[:5]),
+        )
+    return out
 
 
 def hash_device_token(token: str) -> str:
@@ -3186,7 +3338,8 @@ def check_and_create_similar_to_edges(
     """
     # Get this node's embedding vector from nodes table.
     row = conn.execute(
-        "SELECT embedding, embedding_dim FROM nodes WHERE id = ? AND embedding IS NOT NULL",
+        "SELECT embedding, embedding_dim FROM nodes "
+        "WHERE id = ? AND embedding IS NOT NULL AND deleted_at IS NULL",
         (node_id,),
     ).fetchone()
     if row is None:
@@ -3216,7 +3369,7 @@ def check_and_create_similar_to_edges(
                     "SELECT 1 FROM edges WHERE "
                     "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
                     "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-                    "relation = 'similar-to' LIMIT 1",
+                    "relation = 'similar-to' AND deleted_at IS NULL LIMIT 1",
                     (node_id, neighbor_id),
                 ).fetchone()
                 if exists is None:

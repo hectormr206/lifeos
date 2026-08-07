@@ -138,11 +138,17 @@ def test_delete_normal_node_removes_edges(client):
     assert r.status_code == 200
     assert r.json() == {"deleted": True}
     conn = store._connect()  # noqa: SLF001
+    # PR7: deleted means tombstoned, not removed — sync cannot replicate an
+    # absence, so a removed row comes back from the next peer that still has
+    # it. The user-visible claim of this test (the node and its relations are
+    # gone from the graph) is unchanged and is what is asserted here.
     assert conn.execute(
-        "SELECT COUNT(*) FROM nodes WHERE id = ?", (ids["person"],)
+        "SELECT COUNT(*) FROM nodes WHERE id = ? AND deleted_at IS NULL",
+        (ids["person"],),
     ).fetchone()[0] == 0
     assert conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id = ? OR to_id = ?",
+        "SELECT COUNT(*) FROM edges WHERE (from_id = ? OR to_id = ?) "
+        "AND deleted_at IS NULL",
         (ids["person"], ids["person"]),
     ).fetchone()[0] == 0
 
@@ -265,10 +271,16 @@ def test_merge_folds_duplicate_into_canonical(client):
     }
 
     conn = store._connect()  # noqa: SLF001
-    # Duplicate gone, survivor kept.
+    # Duplicate no longer live, survivor kept. PR7: a merge is a delete, and
+    # every node delete is now a tombstone — the row stays on disk carrying
+    # `deleted_at` so the merge can be replicated instead of the duplicate
+    # being pushed back by the next peer that still has it.
     assert conn.execute(
-        "SELECT COUNT(*) FROM nodes WHERE id = ?", (dup,)
+        "SELECT COUNT(*) FROM nodes WHERE id = ? AND deleted_at IS NULL", (dup,)
     ).fetchone()[0] == 0
+    assert conn.execute(
+        "SELECT deleted_at FROM nodes WHERE id = ?", (dup,)
+    ).fetchone()["deleted_at"] is not None
     assert conn.execute(
         "SELECT COUNT(*) FROM nodes WHERE id = ?", (canonical,)
     ).fetchone()[0] == 1
@@ -378,7 +390,11 @@ def test_delete_edge_removes_only_edge(client):
     assert r.json() == {"deleted": True}
 
     conn = store._connect()  # noqa: SLF001
-    assert conn.execute("SELECT COUNT(*) FROM edges WHERE id = ?", (edge_id,)).fetchone()[0] == 0
+    # PR7: tombstoned, not removed. The claim under test — the relation is gone
+    # and both people are not — is unchanged.
+    assert conn.execute(
+        "SELECT COUNT(*) FROM edges WHERE id = ? AND deleted_at IS NULL", (edge_id,)
+    ).fetchone()[0] == 0
     # Both endpoint nodes survive.
     assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (a,)).fetchone()[0] == 1
     assert conn.execute("SELECT COUNT(*) FROM nodes WHERE id = ?", (b,)).fetchone()[0] == 1

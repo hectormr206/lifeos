@@ -12,6 +12,7 @@ import difflib
 import json
 import logging
 import re
+import time
 import unicodedata
 
 from axi import config, store
@@ -39,7 +40,11 @@ def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
         "SELECT 1 FROM edges WHERE "
         "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
         "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-        "relation = ? LIMIT 1",
+        # PR7: a tombstoned relation must not block re-creating it. This is
+        # the duplicate guard in front of every add_*/link_* helper, so a
+        # tombstone matching here would make a deleted relation permanently
+        # unrecoverable, silently.
+        "relation = ? AND deleted_at IS NULL LIMIT 1",
         (from_id, to_id, kind),
     ).fetchone() is not None
 
@@ -52,7 +57,10 @@ def user_name() -> str:
 def _find_hub_row(c):
     """Return the (id, label) of the user-hub person node, or None."""
     try:
-        rows = c.execute("SELECT id, label, data FROM nodes WHERE kind='person'").fetchall()
+        rows = c.execute(
+            "SELECT id, label, data FROM nodes WHERE kind='person' "
+            "AND deleted_at IS NULL"
+        ).fetchall()
     except Exception:  # noqa: BLE001
         return None
     for r in rows:
@@ -300,7 +308,10 @@ def ensure_entity(name: str, kind: str = "person", conn=None) -> int | None:
         c = conn or store._connect()  # noqa: SLF001
         nlow = name.lower()
         candidates = []
-        for r in c.execute("SELECT id, label, data FROM nodes WHERE kind=?", (kind,)).fetchall():
+        for r in c.execute(
+            "SELECT id, label, data FROM nodes WHERE kind=? AND deleted_at IS NULL",
+            (kind,),
+        ).fetchall():
             role, aliases = _entity_names(r["data"])
             if role == "user":
                 continue  # never reuse the user hub as an 'other' entity
@@ -353,7 +364,9 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
             return
         c = conn or store._connect()  # noqa: SLF001
         # 1) add the alias to the canonical entity's data.aliases
-        row = c.execute("SELECT data FROM nodes WHERE id=?", (cid,)).fetchone()
+        row = c.execute(
+            "SELECT data FROM nodes WHERE id=? AND deleted_at IS NULL", (cid,)
+        ).fetchone()
         try:
             d = json.loads(row["data"] or "{}") if row else {}
         except (ValueError, TypeError):
@@ -368,7 +381,9 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
                            (json.dumps(d, ensure_ascii=False), cid))
         # 2) merge any SEPARATE node labelled with the alias into the canonical
         alow = alias.lower()
-        for r in c.execute("SELECT id, label FROM nodes WHERE kind=?", (kind,)).fetchall():
+        for r in c.execute(
+            "SELECT id, label FROM nodes WHERE kind=? AND deleted_at IS NULL", (kind,)
+        ).fetchall():
             if r["id"] == cid or (r["label"] or "").strip().lower() != alow:
                 continue
             did = r["id"]
@@ -391,7 +406,16 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
                     "UPDATE edges SET to_id=?, dst_uuid=? WHERE to_id=?",
                     (cid, canonical_uuid, did),
                 )
-                tx.execute("DELETE FROM nodes WHERE id=?", (did,))
+                # PR7 (task 7.7): the merged-away node becomes a TOMBSTONE.
+                # Its edges were re-pointed at the canonical node above, in
+                # this same transaction, so nothing is left referencing it.
+                tx.execute(
+                    "UPDATE nodes SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                    (time.time(), did),
+                )
+                # nodes_fts and vec_nodes stay HARD deletes: local derived
+                # state, never synced. Leaving the FTS row would keep offering
+                # a node the graph has merged away (the 7.11 invariant).
                 tx.execute("DELETE FROM nodes_fts WHERE rowid=?", (did,))
                 try:
                     tx.execute("DELETE FROM vec_nodes WHERE node_id=?", (did,))
@@ -514,7 +538,8 @@ def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
         # to those entities, not only people/places/orgs.
         placeholders = ",".join("?" * len(_ENTITY_KINDS))
         for r in c.execute(
-            f"SELECT id, label, data FROM nodes WHERE kind IN ({placeholders})",
+            f"SELECT id, label, data FROM nodes WHERE kind IN ({placeholders}) "
+            f"AND deleted_at IS NULL",
             tuple(_ENTITY_KINDS),
         ).fetchall():
             if r["id"] == fact_id:
@@ -585,7 +610,8 @@ def _resolve_relation_person(relation: str, hub: int, conn) -> int | None:
         "SELECT e.relation AS rel, n.id AS to_id FROM edges e "
         "JOIN nodes n ON n.uuid = e.dst_uuid "
         "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-        "AND n.kind = 'person'",
+        "AND n.kind = 'person' "
+        "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
         (hub,),
     ).fetchall():
         if _norm(r["rel"] or "").replace(" ", "_") in terms:
@@ -688,7 +714,8 @@ def backfill_subject_person_links(*, limit: int | None = None, dry_run: bool = F
             log.warning("backfill_subject_person_links: no user hub — nothing to link")
             return 0
         rows = c.execute(
-            "SELECT id, data FROM nodes WHERE kind='fact' AND data LIKE '%\"subject\"%'"
+            "SELECT id, data FROM nodes WHERE kind='fact' AND deleted_at IS NULL "
+            "AND data LIKE '%\"subject\"%'"
         ).fetchall()
     except Exception as e:  # noqa: BLE001
         log.warning("backfill_subject_person_links: scan failed: %s", e)

@@ -53,7 +53,8 @@ def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
         "SELECT 1 FROM edges WHERE "
         "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
         "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-        "relation = ? LIMIT 1",
+        # PR7: a tombstoned edge must not stop the linker re-creating it.
+        "relation = ? AND deleted_at IS NULL LIMIT 1",
         (from_id, to_id, kind),
     ).fetchone()
     return row is not None
@@ -139,7 +140,8 @@ def run_happened_at_linker(
     fact_cutoff = oldest_meeting_start - window_s
     fact_nodes = conn.execute(
         "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ?",
+        "WHERE kind='fact' AND deleted_at IS NULL "
+        "AND COALESCE(occurred_at, created_at) > ?",
         (fact_cutoff,),
     ).fetchall()
 
@@ -195,7 +197,8 @@ def run_involves_person_linker(
     # Only relationships domain nodes are candidates for person links.
     fact_rows = conn.execute(
         "SELECT id, data FROM nodes "
-        "WHERE domain='relationships' AND kind='fact' AND created_at > ?",
+        "WHERE domain='relationships' AND kind='fact' AND deleted_at IS NULL "
+        "AND created_at > ?",
         (cutoff,),
     ).fetchall()
 
@@ -288,7 +291,10 @@ def run_same_day_linker(
     # included based on their real event date, not their insertion date.
     rows = conn.execute(
         "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ? "
+        # PR7: the linkers run unattended on every daemon pass. Without this
+        # they would quietly rebuild the graph around deleted memories.
+        "WHERE kind='fact' AND deleted_at IS NULL "
+        "AND COALESCE(occurred_at, created_at) > ? "
         "ORDER BY COALESCE(occurred_at, created_at) ASC",
         (cutoff,),
     ).fetchall()
@@ -370,7 +376,8 @@ def run_mood_at_linker(
     # Fetch mood fact-nodes: kind='fact' with a non-null data.mood, within window.
     mood_rows = conn.execute(
         "SELECT id, data, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE kind='fact' AND COALESCE(occurred_at, created_at) > ?",
+        "WHERE kind='fact' AND deleted_at IS NULL "
+        "AND COALESCE(occurred_at, created_at) > ?",
         (cutoff,),
     ).fetchall()
 
@@ -402,7 +409,7 @@ def run_mood_at_linker(
 
     event_nodes = conn.execute(
         "SELECT id, COALESCE(occurred_at, created_at) AS event_ts FROM nodes "
-        "WHERE domain IN ('lifeos-events', 'relationships') "
+        "WHERE domain IN ('lifeos-events', 'relationships') AND deleted_at IS NULL "
         "AND COALESCE(occurred_at, created_at) > ?",
         (cutoff,),
     ).fetchall()

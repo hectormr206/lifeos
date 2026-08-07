@@ -563,3 +563,209 @@ def test_same_day_neighbors_uses_an_index_not_a_full_scan():
     # back to scanning the whole edges table.
     assert "SEARCH e USING INDEX idx_edges_" in plan, plan
     assert "SCAN e" not in plan, plan
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — task 7.10: the tombstone indexes, in `_SCHEMA` AND in the migration.
+#
+# Index parity is this chain's most valuable recurring find: PR6a's rewrite
+# silently turned every graph read into a full table scan and no test failed.
+# PR7 adds `deleted_at IS NULL` to many WHERE clauses, which is another chance
+# to change a plan without changing an answer, so both halves are measured.
+#
+# All plans below are measured WITHOUT running `ANALYZE`, because `store.py`
+# never runs it. With statistics on a tiny table the planner abandons the
+# MULTI-INDEX OR for old and new alike, which would make the comparison read
+# clean while proving nothing.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _plan(c, sql, params=()):
+    return "\n".join(str(tuple(r)) for r in c.execute("EXPLAIN QUERY PLAN " + sql, params))
+
+
+def test_deleted_at_indexes_exist_on_a_fresh_db():
+    """Mobile parity: `idx_nodes_deleted` / `idx_edges_deleted`, verbatim."""
+    c = store._connect()
+    node_idx = {r[1] for r in c.execute("PRAGMA index_list(nodes)").fetchall()}
+    edge_idx = {r[1] for r in c.execute("PRAGMA index_list(edges)").fetchall()}
+    assert "idx_nodes_deleted" in node_idx, node_idx
+    assert "idx_edges_deleted" in edge_idx, edge_idx
+
+
+def test_deleted_at_indexes_are_partial_on_purpose():
+    """They index the TOMBSTONES, not the live rows — measured, not stylistic.
+
+    A full index on `deleted_at` gets chosen for the `deleted_at IS NULL`
+    filter that every read now carries, and since nearly every row IS NULL that
+    "SEARCH" walks the whole table. Measured with EXPLAIN QUERY PLAN it cost
+    the graph-browser and recall queries their MULTI-INDEX OR over
+    idx_edges_src/idx_edges_dst: a full scan wearing an index's name, with no
+    test failing and no error — the exact defect shape PR6a found once already.
+
+    Restricted to `deleted_at IS NOT NULL` the planner cannot use it for the
+    live-row filter at all, and it stays small and genuinely selective for the
+    query that does want it: "which rows are tombstoned" (the sync push).
+
+    Asserted on the stored DDL because dropping the `WHERE` clause is a
+    one-word edit that nothing else in the suite would notice.
+    """
+    c = store._connect()
+    for name in ("idx_nodes_deleted", "idx_edges_deleted"):
+        sql = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+        ).fetchone()[0]
+        assert "WHERE deleted_at IS NOT NULL" in sql, f"{name} is not partial: {sql}"
+
+
+def test_the_deleted_indexes_are_never_chosen_for_the_live_row_filter():
+    """The measurement behind the test above, on the queries PR7 touches.
+
+    This is the one that would catch a well-meaning future edit that made the
+    indexes full again "for symmetry with mobile".
+    """
+    c = store._connect()
+    a = store.add_node("fact", "nota A")
+    b = store.add_node("fact", "nota B")
+    store.add_edge(a, b, "same-day")
+    a_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (a,)).fetchone()[0]
+
+    for label, sql, params in (
+        ("dashboard node detail / neighborhood",
+         "SELECT e.id FROM edges e WHERE (e.src_uuid = ? OR e.dst_uuid = ?) "
+         "AND e.deleted_at IS NULL", (a_uuid, a_uuid)),
+        ("recall graph relation lines",
+         "SELECT e.id FROM edges e "
+         "WHERE (e.src_uuid IN (SELECT uuid FROM nodes WHERE id IN (?)) "
+         "OR e.dst_uuid IN (SELECT uuid FROM nodes WHERE id IN (?))) "
+         "AND e.deleted_at IS NULL", (a, a)),
+    ):
+        plan = _plan(c, sql, params)
+        assert "idx_edges_deleted" not in plan, f"{label}: {plan}"
+        assert "MULTI-INDEX OR" in plan, f"{label} lost its OR-index plan: {plan}"
+        assert "idx_edges_src" in plan and "idx_edges_dst" in plan, f"{label}: {plan}"
+
+
+def test_deleted_at_indexes_are_created_by_the_migration_too():
+    """A pre-existing database never runs `_SCHEMA`'s CREATE TABLE body.
+
+    PR6a shipped its three indexes in BOTH places for exactly this reason; the
+    same rule applies here, and skipping it would leave every already-migrated
+    database — i.e. the owner's real one — without them.
+    """
+    c = store._connect()
+    c.execute("DROP INDEX IF EXISTS idx_nodes_deleted")
+    c.execute("DROP INDEX IF EXISTS idx_edges_deleted")
+    assert "idx_nodes_deleted" not in {
+        r[1] for r in c.execute("PRAGMA index_list(nodes)").fetchall()
+    }
+
+    store.migrate_edge_endpoint_uuids()
+
+    assert "idx_nodes_deleted" in {
+        r[1] for r in c.execute("PRAGMA index_list(nodes)").fetchall()
+    }
+    assert "idx_edges_deleted" in {
+        r[1] for r in c.execute("PRAGMA index_list(edges)").fetchall()
+    }
+
+
+def test_adding_the_deleted_filter_does_not_turn_a_search_into_a_scan():
+    """The four shapes PR7 touches, each measured before and after the filter.
+
+    A SEARCH that became a SCAN is invisible to every correctness test in this
+    PR: the answers stay identical and the graph just gets slower forever.
+    """
+    c = store._connect()
+    a = store.add_node("fact", "nota A")
+    b = store.add_node("fact", "nota B")
+    store.add_edge(a, b, "same-day")
+    a_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (a,)).fetchone()[0]
+
+    shapes = {
+        # same_day_neighbors, src arm
+        "same_day_src": (
+            "SELECT n.id FROM nodes n JOIN edges e "
+            "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' WHERE n.id != ?",
+            "SELECT n.id FROM nodes n JOIN edges e "
+            "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' "
+            "WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
+            (a, a),
+        ),
+        # neighbors()
+        "neighbors": (
+            "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
+            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?)",
+            "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
+            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
+            (a,),
+        ),
+        # _edge_exists (store/linkers/identity share this shape)
+        "edge_exists": (
+            "SELECT 1 FROM edges WHERE "
+            "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation = ? LIMIT 1",
+            "SELECT 1 FROM edges WHERE "
+            "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation = ? "
+            "AND deleted_at IS NULL LIMIT 1",
+            (a, b, "same-day"),
+        ),
+        # dashboard node detail / neighborhood: the MULTI-INDEX OR shape
+        "or_endpoints": (
+            "SELECT e.id FROM edges e WHERE e.src_uuid = ? OR e.dst_uuid = ?",
+            "SELECT e.id FROM edges e WHERE (e.src_uuid = ? OR e.dst_uuid = ?) "
+            "AND e.deleted_at IS NULL",
+            (a_uuid, a_uuid),
+        ),
+    }
+
+    for name, (before_sql, after_sql, params) in shapes.items():
+        before = _plan(c, before_sql, params)
+        after = _plan(c, after_sql, params)
+        assert "SEARCH e" in before, f"{name}: baseline was not a SEARCH — {before}"
+        assert "SEARCH e" in after, (
+            f"{name}: adding `deleted_at IS NULL` turned a SEARCH into a SCAN\n"
+            f"before:\n{before}\nafter:\n{after}"
+        )
+        assert "SCAN e" not in after, f"{name}: {after}"
+        # A SEARCH is not automatically a win. `idx_edges_deleted` on a column
+        # that is NULL for nearly every row makes a full table walk LOOK like
+        # an indexed seek, which is why "SEARCH, not SCAN" alone is too weak an
+        # assertion for this particular change.
+        assert "idx_edges_deleted" not in after, (
+            f"{name}: the planner fell back to the tombstone index, which "
+            f"visits nearly every row\nafter:\n{after}"
+        )
+
+
+def test_pr7_reverts_as_code_but_resurrects_soft_deleted_rows():
+    """7.15: the semantic one-wayness of this PR, stated where it is testable.
+
+    The diff reverts cleanly — `deleted_at` is a PR4 column, the delete paths
+    go back to `DELETE`, the filters come off. What does NOT revert is the
+    data: every row tombstoned while PR7 was live is still sitting in `nodes`
+    and `edges`, and the moment the filters are gone it is visible again. The
+    user sees memories they deleted come back.
+
+    Asserted rather than written in a comment: the tombstoned row is readable
+    by a query with no filter, which is exactly what a reverted reader is.
+    """
+    nid = store.add_node("fact", "algo que el usuario borró")
+    store.delete_node(nid)
+
+    c = store._connect()
+    assert c.execute(
+        "SELECT deleted_at FROM nodes WHERE id=?", (nid,)
+    ).fetchone()["deleted_at"] is not None
+    unfiltered = c.execute(
+        "SELECT id, label FROM nodes WHERE kind='fact'"
+    ).fetchall()
+    assert nid in {r["id"] for r in unfiltered}, (
+        "a reader without the tombstone filter — i.e. a reverted PR7 — would "
+        "not see this row, which would make the revert safe; it is not"
+    )
+    assert store.get_node(nid) is None, "the filtered reader must still hide it"

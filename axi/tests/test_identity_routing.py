@@ -94,8 +94,13 @@ class TestIdentityRoutingEndToEnd:
         identity.register_alias("Ana Ríos", "Ani", "person")
 
         c = store._connect()
-        # Duplicate node is gone.
-        assert c.execute("SELECT id FROM nodes WHERE id=?", (dup,)).fetchone() is None
+        # Duplicate node is no longer live. PR7 made the merge's delete a
+        # tombstone, so the row survives carrying `deleted_at`; this test is
+        # about ROUTING (the compound merge ran on the daemon), so it asserts
+        # the merge took effect rather than re-asserting the old hard delete.
+        assert c.execute(
+            "SELECT id FROM nodes WHERE id=? AND deleted_at IS NULL", (dup,)
+        ).fetchone() is None
         # Its edge now points at the canonical node.
         assert c.execute(
             "SELECT to_id FROM edges WHERE from_id=? AND kind='mentions'", (fact,)

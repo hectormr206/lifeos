@@ -699,3 +699,63 @@ def test_edge_exists_identical_to_pre_rewrite_query(pr6a_graph):
                     f"_edge_exists({a}, {b}, {kind!r}) diverged from the "
                     f"pre-rewrite guard"
                 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — tombstone filters in the auto-linkers (task 7.9/7.10).
+#
+# The linkers run unattended on every daemon pass. If they keep seeing
+# tombstoned nodes they will quietly rebuild the graph around memories the
+# user deleted, and nothing surfaces that.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _tombstone_node_row(nid: int) -> None:
+    from axi import store
+
+    store._connect().execute(  # noqa: SLF001
+        "UPDATE nodes SET deleted_at=?, updated_at=? WHERE id=?",
+        (time.time(), time.time(), nid),
+    )
+
+
+def test_linkers_edge_exists_ignores_a_tombstoned_edge():
+    """The duplicate guard must not let a deleted edge block re-linking."""
+    from axi import linkers, store
+
+    a = store.add_node("fact", "desayuno")
+    b = store.add_node("fact", "junta")
+    eid = store.add_edge(a, b, "same-day")
+    c = store._connect()  # noqa: SLF001
+    assert linkers._edge_exists(c, a, b, "same-day") is True
+
+    c.execute(
+        "UPDATE edges SET deleted_at=?, updated_at=? WHERE id=?",
+        (time.time(), time.time(), eid),
+    )
+    assert linkers._edge_exists(c, a, b, "same-day") is False
+
+
+def test_same_day_linker_skips_tombstoned_fact_nodes():
+    """A deleted fact must not be re-attached to the day it belonged to."""
+    from axi import linkers, store
+
+    now = time.time()
+    a = store.add_node("fact", "desayuno", occurred_at=now)
+    b = store.add_node("fact", "junta", occurred_at=now + 60)
+    doomed = store.add_node("fact", "cosa borrada", occurred_at=now + 120)
+    _tombstone_node_row(doomed)
+
+    c = store._connect()  # noqa: SLF001
+    linkers.run_same_day_linker(conn=c)
+
+    doomed_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (doomed,)).fetchone()[0]
+    touching = c.execute(
+        "SELECT id FROM edges WHERE src_uuid=? OR dst_uuid=?",
+        (doomed_uuid, doomed_uuid),
+    ).fetchall()
+    assert touching == [], (
+        f"the same-day linker rebuilt edges around a deleted memory: {touching}"
+    )
+    # …while the live pair still gets linked.
+    assert linkers._edge_exists(c, a, b, "same-day") or linkers._edge_exists(c, b, a, "same-day")

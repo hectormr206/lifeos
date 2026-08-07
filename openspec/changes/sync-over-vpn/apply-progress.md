@@ -1498,3 +1498,413 @@ perf item for the 3D browser, not this chain). Third batch of fixtures
 raw-INSERTing rows without `uuid` found and routed through the production
 writers — expect a fourth in PR7, and note that only `uuid NOT NULL` (PR8)
 makes that route impossible rather than merely wrong.
+
+---
+
+## Phase 7 (PR7) — tombstones, read filters and the FTS invariant
+
+**Mode**: Strict TDD. **Scope**: tasks 7.1–7.15 plus 7.9b. Nothing from Phase 8:
+no table rebuild, no `NOT NULL` constraints, no dropping `from_id`/`to_id`.
+
+### Completed tasks
+
+- [x] 7.1 `store.delete_node` tombstones the node's edges on `src_uuid`/`dst_uuid`
+- [x] 7.2 `nodes_fts` row stays a HARD delete — pinned as deliberate
+- [x] 7.3 `vec_nodes` row stays a HARD delete — pinned as deliberate
+- [x] 7.4 `store.delete_node` tombstones the node row
+- [x] 7.5 `store.delete_edge` tombstones the edge row
+- [x] 7.6 `meeting.py` race-loser orphan tombstoned; FTS row still hard-deleted
+- [x] 7.7 `identity.py` alias-merge loser tombstoned; FTS + vec still hard-deleted
+- [x] 7.8 GREEN implementation of 7.1–7.7
+- [x] 7.9 `deleted_at IS NULL` on every read path in `store.py`
+- [x] 7.9b the same invisibility asserted at the HTTP boundary, all four endpoints
+- [x] 7.10 `idx_nodes_deleted`/`idx_edges_deleted` + filters on the Phase-6 read sites
+- [x] 7.11 FTS invariant, RED first, asserted directly on `nodes_fts`
+- [x] 7.12 GATE satisfied — suite green, FTS invariant proven (see below)
+- [x] 7.13 alias-merge endpoint convergence, both halves
+- [x] 7.14 dangling-edge check: loud, report-only, never raises on findings
+- [x] 7.15 full suite green + the resurrection caveat asserted, not just written down
+
+### The atomicity constraint, honoured
+
+The write half (7.1–7.8) and the read half (7.9/7.9b/7.10/7.11) are one unit.
+Between them lies a state where deletes have become tombstones but reads do not
+yet filter — i.e. every memory the user has ever deleted is back in their graph,
+their search and their 3D brain. That state never existed in this tree: the read
+filters were written and proven RED before the delete paths changed.
+
+The 7.9 tests make that structural rather than procedural. They tombstone rows
+by **direct `UPDATE`**, not through `delete_node`. Going through `delete_node`
+would have let them pass against the pre-PR7 hard delete for the wrong reason
+(the row is invisible because it is gone, not because the read filters), and
+they would have flipped RED only in the half-applied state — proving nothing
+about the filter and going red at the worst possible moment. Tombstoning
+directly is also the shape sync produces: a remote tombstone the local delete
+path never touched.
+
+### THE DEFECT: the tombstone index made every graph read a full table walk
+
+The chain's recurring index-parity finding, third occurrence, and this time it
+came from the fix itself rather than from the rewrite.
+
+`idx_edges_deleted ON edges(deleted_at)` — mobile's name, exactly as task 7.10
+asks — is chosen by the planner for the `deleted_at IS NULL` filter that PR7
+adds to every read. Nearly every row IS NULL, so that "SEARCH" walks the whole
+table. Measured with `EXPLAIN QUERY PLAN`, no `ANALYZE` (per PR6b):
+
+| Query | Before PR7 | With a FULL index | With a PARTIAL index |
+|---|---|---|---|
+| dashboard node detail / neighborhood | `MULTI-INDEX OR` over `idx_edges_src`/`idx_edges_dst` | `SEARCH e USING INDEX idx_edges_deleted` | `MULTI-INDEX OR` (restored) |
+| `recall._graph_relation_lines` | `MULTI-INDEX OR` over src/dst | `SEARCH e USING INDEX idx_edges_deleted` | `MULTI-INDEX OR` (restored) |
+| `/api/graph/full` edges | `SCAN e` | `SEARCH e USING INDEX idx_edges_deleted` | `SCAN e` (unchanged) |
+| `neighbors`, `same_day_neighbors`, `_edge_exists` | endpoint/relation index | unchanged | unchanged |
+
+Two of those are the graph browser and the recall hot path, and the third turns
+a sequential table scan into random row lookups through an index. None of it
+fails a correctness test — the answers are identical — which is exactly the
+shape PR6a warned about: the graph just gets slower, forever, with nothing
+reported.
+
+**Fix**: both indexes are PARTIAL — `WHERE deleted_at IS NOT NULL`. SQLite
+cannot use a partial index for a query whose WHERE clause does not imply the
+index's, so it can never be chosen for the live-row filter. It stays small and
+genuinely selective for the query that does want it: *which rows are
+tombstoned* — the sync push, and the reason mobile has the index at all.
+
+This is a **deliberate, measured deviation from mobile's DDL** and is flagged
+as such. The column and the index name match mobile verbatim; only the
+predicate differs, and an index predicate is a local query-planning concern,
+not part of the sync wire contract. It is called out here because PR8 copies
+mobile's exact table DDL and someone will be tempted to "restore symmetry".
+Three tests stand in the way: one asserts the stored DDL still contains
+`WHERE deleted_at IS NOT NULL`, one asserts the planner never picks
+`idx_edges_deleted` for the two OR-endpoint queries, and the before/after plan
+test now rejects `idx_edges_deleted` as well as `SCAN` — because a SEARCH on a
+near-constant column is a full scan wearing an index's name, and
+"SEARCH, not SCAN" alone was too weak an assertion for this change.
+
+### A production bug PR7 introduced and this phase fixed
+
+`POST /api/graph/merge` verifies its own outcome by re-reading the duplicate and
+requiring the row to be **absent**. Once a merge tombstones instead of deleting,
+that check reads the surviving tombstone as "the duplicate is still here" and
+answers `{"merged": false, "reason": "merge_failed"}` with a **400** — for a
+merge that fully succeeded. The user is told their two people were not merged
+while the graph says they were. Both halves of the verification and the
+pre-check `_load` now filter `deleted_at IS NULL`.
+
+Caught by `test_graph_browser.py::test_merge_folds_duplicate_into_canonical`,
+which is a pre-existing test — worth noting, because the PR7-specific tests all
+passed while this was broken. Every place in the codebase that expressed
+"deleted" as "the row is not there" had to be re-examined, and this was the one
+that was production code rather than a test.
+
+### The FTS invariant (7.11) — evidence
+
+RED first, then GREEN, asserted directly on `nodes_fts` rather than through
+`search_nodes_fts`, so a read-side `deleted_at IS NULL` filter cannot make it
+pass while the stale index row is still sitting there:
+
+- `test_tombstoning_a_node_removes_its_fts_row_in_the_same_transaction` —
+  tombstone a node, `SELECT count(*) FROM nodes_fts WHERE rowid = ?` is 0.
+- `test_fts_invariant_holds_across_every_tombstoning_path` — the whole-database
+  form: no `nodes_fts.rowid` may join a node with `deleted_at NOT NULL`. Stated
+  as an invariant, not per call site, so a future tombstone path that forgets
+  the FTS row is caught here rather than by the user searching for something
+  they deleted.
+- The same invariant asserted on the `meeting.py` orphan path and on the
+  `identity.py` alias-merge path.
+- `test_search_nodes_fts_cannot_return_a_tombstoned_node` — the user-facing
+  half, through the real entry point.
+
+`search_nodes_fts` also filters `n.deleted_at IS NULL`. That is belt AND
+braces, and the second one is load-bearing: a tombstone arriving from a peer
+does not go through `delete_node`, so the FTS row survives and the read filter
+is the only thing left.
+
+### 7.2 / 7.3 are pins, and they fail if inverted
+
+The FTS and vec rows stay hard deletes deliberately. The tests assert
+`count(*) == 0` after a delete, so turning either into a tombstone fails —
+in `store.delete_node`, in `identity.register_alias` and in
+`meeting.bridge_meeting_node`.
+
+**Consequence nothing else would have noticed**: `trg_nodes_delete_vec` is an
+`AFTER DELETE ON nodes` trigger. It stops firing the moment the node delete
+becomes an `UPDATE`, so the explicit `DELETE FROM vec_nodes` inside
+`delete_node` is now the ONLY thing cleaning that table. Covered by
+`test_delete_node_hard_deletes_the_vec_row_and_must_not_tombstone_it`, which
+seeds a real vec row first. `identity.py` also deletes it explicitly;
+`meeting.py` does not, and does not need to — the race-loser orphan is
+tombstoned before `trigger_embed_for_node` is ever called, so it has no vec row
+to leak. Stated here because it is the kind of thing that is obvious once and
+invisible afterwards.
+
+### 7.14 — dangling edges: report-only findings, loud failure to run
+
+`store.report_dangling_edges()` returns one line per live edge whose endpoint
+uuid resolves to no live node, naming the edge id and which side is missing. It
+does NOT raise on findings: an edge may legitimately sync before its node, and
+after PR8 there is no FK at all, so raising would turn normal sync ordering into
+a crash.
+
+It DOES raise when it cannot execute. Report-only applies to the findings, not
+to the check — a check that quietly returns "nothing wrong" because its query
+failed is the exact defect this codebase has already had to fix once.
+
+A tombstoned edge is never reported. Every ordinary node delete tombstones the
+node and its edges together, so reporting those would bury the real findings
+under one entry per deletion the user has ever made.
+
+### 7.13 — both halves, and written so it cannot be NULL-blind
+
+After an alias merge: every edge's `src_uuid`/`dst_uuid` equals the SURVIVING
+canonical node's uuid, AND no edge anywhere still references the tombstoned
+loser's uuid. The convergence assertion compares each side explicitly and
+asserts `IS NOT NULL` separately, rather than relying on a single `IS NOT`
+predicate — that form reads NULL-vs-NULL as agreement, which is the blind spot
+this chain has been bitten by from both directions (task 5.14 and task 6a.8).
+`verify_edge_endpoint_convergence()` is then run on the same database.
+
+### Existing tests whose expectation changed, and why
+
+Every one of these asserted a HARD DELETE. None was edited merely to go green;
+each is stated here with the reason the old expectation stopped being right.
+
+| Test | Old expectation | Why it is now wrong |
+|---|---|---|
+| `test_store.py` PR6a oracles (3) | pre-rewrite SQL with no tombstone filter | The oracles prove the ENDPOINT COLUMNS are equivalent. That claim is unchanged. Without the filter they would instead assert that the rewrite preserved PR6a's tombstone behaviour — the one thing PR7 deliberately changes. |
+| `test_dashboard.py` PR6b oracles (5) | same | same |
+| `test_dashboard.py` `_live_node_ids` | "the row exists" | "Live" needed a second half once a row could exist and still be deleted. |
+| `test_dashboard.py` neighbour-order test | cap hardcoded at 2 | The hub has one fewer live neighbour now. Cap derived from the fixture; the property under test ("the lowest ids survive truncation") is unchanged and no longer hostage to fixture size. |
+| `test_forget.py` `test_delete_node_removes_node_edges_and_fts` | node row and edge rows absent | Renamed to `..._tombstones_node_and_edges_and_removes_fts`. Now asserts unreachability plus the tombstone, and that the edges were NOT hard-deleted. The old name promised something the file no longer checks. |
+| `test_forget.py` `test_delete_edge_removes_one_edge` | edge row absent | Same, renamed to `..._tombstones_exactly_one_edge`. |
+| `test_forget_chat.py` `_alive()` | `COUNT(*) == 1` | A bare row count would have made every forget test in the file report that nothing was ever deleted. |
+| `test_write_router.py` delete_node/delete_edge forwarded | row absent | These test ROUTING, not storage shape. Re-expressed as "no longer live" so they keep checking routing instead of silently re-asserting the hard delete. |
+| `test_graph_browser.py` delete/merge (3) | rows absent | User-visible claim unchanged; assertion moved to `deleted_at IS NULL` plus, for the merge, an explicit assertion that the loser IS tombstoned. |
+| `test_identity_routing.py` alias merge forwarded | duplicate row absent | Routing test, same reasoning as write_router. |
+| `test_identity.py` PR5 dual-write merge test | "the alias node itself is gone" | A merge is a delete. Also removed a stale comment claiming `add_node` does not assign a uuid — untrue since task 5.14. |
+| `test_domain_bridge_slice3.py` race-loser | orphan row absent | Now asserts the orphan is not live AND is tombstoned. Its FTS half is untouched — FTS rows are still hard-deleted. |
+| `test_meeting_bridge.py` PR7 tests | n/a (new) | Two sequential `bridge_meeting_node` calls do NOT reach the orphan branch: the second takes the fast path. The branch needs a concurrent caller to win the test-and-set, simulated by `_lose_the_bridge_race` claiming `meetings.node_id` from inside `add_node`. A test that "covers" the cleanup by calling twice is covering the early return. |
+
+### EXPLAIN QUERY PLAN — before / after, no `ANALYZE`
+
+Measured on a temp DB built by `init_db()` (never the real `DB_PATH`), with the
+partial indexes in place. `store.py` never runs `ANALYZE`, so these are the
+plans that ship.
+
+| Site | Before PR7 | After PR7 |
+|---|---|---|
+| `neighbors` | `SEARCH e USING INDEX idx_edges_src` | same |
+| `same_day_neighbors` (both arms) | `SEARCH e USING INDEX idx_edges_relation` | same |
+| `_edge_exists` (store/linkers/identity) | `SEARCH edges USING INDEX idx_edges_relation` | same |
+| dashboard node detail / neighborhood | `MULTI-INDEX OR` over `idx_edges_src`/`idx_edges_dst` | same |
+| `recall._graph_relation_lines` | `MULTI-INDEX OR` over src/dst | same |
+| `/api/graph/full` edges | `SCAN e` (no WHERE by design) | `SCAN e` |
+
+No site turned a `SEARCH` into a `SCAN`, and no site fell back to
+`idx_edges_deleted`. A few `COVERING INDEX` reads became plain `INDEX` reads —
+`deleted_at` is now also read, so the row must be fetched. That is one extra
+lookup on a seek the query was already doing, not a plan change.
+
+### Zero-regression proof (dual tree state)
+
+All 59 test files referencing `add_node|axi.store|from axi import store`,
+`-p no:randomly`, failure sets diffed with `comm`. Baseline is a `git worktree`
+at HEAD `242af093` under `lifeos-app-worktrees/`, removed afterwards.
+
+| Tree state | Passed | Failed | Total |
+|---|---|---|---|
+| HEAD `242af093` (pre-PR7, git worktree) | 887 | 23 | 910 |
+| PR7 | 949 | 24 | 973 |
+
++63 tests, +62 passing. `comm` is empty in the masked direction: **zero
+pre-existing failures hidden**. The single entry new to PR7 is
+`test_memory.py::test_clear_wipes_history_returns_count` — the documented
+daemon-thread / `DB_PATH` TOCTOU flake (`conftest.py:21`), failing with its
+signature `assert 1 == 2` and the run's stderr carrying
+`sqlcipher_page_cipher: hmac check failed for pgno=1`. Re-run in isolation 6×
+on the PR7 tree and 6× on the baseline worktree: 12/12 passes. It flickered in
+the full run only, on both trees across this phase's measurements, which is the
+flake behaving like a flake. The 23 shared failures are the known
+`test_domain_bridge*` (19) and `test_mcp_tools` (4) sets.
+
+### Metrics
+
+| | Added | Deleted | Total |
+|---|---|---|---|
+| Production (`axi/src`) | 278 | 54 | **332** |
+| Tests (`axi/tests`) | 1,618 | 59 | 1,677 |
+
+Production is under the 400-line budget and above the forecast's 150–200
+estimate, because the forecast counted the delete paths and the two indexes but
+not the read-filter surface: `deleted_at IS NULL` had to reach 7 modules, and
+several queries needed re-parenthesising (`A OR B` → `(A OR B) AND deleted_at
+IS NULL`) rather than a clause appended. Tests are far over the 200–260
+estimate for the reason the last three phases have all hit: proving invisibility
+needs the assertion at every layer the user can see it from, and 7.9b explicitly
+requires the HTTP boundary as well as the store.
+
+**Recommend `size:exception` on the combined 2,009-line diff.** The 332
+production lines are where the risk lives, and 332 of them are one mechanical
+predicate plus three rewritten delete statements.
+
+### Rollback boundary
+
+Revert the seven `axi/src` files. **This revert is semantically one-way and the
+tests say so, not just the comments.**
+`test_pr7_reverts_as_code_but_resurrects_soft_deleted_rows` deletes a node and
+then asserts that a query WITHOUT the tombstone filter — which is exactly what a
+reverted reader is — still returns it. Every row tombstoned while PR7 is live is
+still on disk; the moment the filters come off, the user sees memories they
+deleted come back. Safe only if no real delete has happened since the merge.
+
+### What the design got wrong / did not say
+
+1. **The design named the two indexes and not their shape.** Task 7.10 says
+   "implement `idx_nodes_deleted`/`idx_edges_deleted` (mobile parity)". Taken
+   literally that is a full index, and a full index on `deleted_at` costs the
+   graph browser and the recall hot path their OR-index plans. The design's
+   framing of PR7 as "delete-path rewrites, filter additions, 2 new indexes"
+   treats the indexes as free additive safety; they are the one part of this PR
+   that can make things worse while every test stays green.
+2. **`nodes.updated_at` is NOT bumped on a tombstone, and `edges.updated_at`
+   is.** Task 7.1 spells out `SET deleted_at=?, updated_at=?` for edges and
+   task 7.4 spells out `SET deleted_at=?` alone for nodes. Both implemented
+   exactly as written. The asymmetry is almost certainly wrong for the sync
+   engine: with last-writer-wins on `updated_at`, a peer holding a later
+   `updated_at` for that node wins against a tombstone that never advanced it,
+   and the deleted memory comes back. No sync engine exists yet, so nothing is
+   broken today — but this is a decision for whoever writes the merge rule, not
+   something to change silently inside an apply phase. **Named as an open
+   question for PR8 / the sync follow-up.**
+3. **The design's delete-site table missed `POST /api/graph/merge`'s outcome
+   verification.** It enumerates the sites that DELETE; it does not enumerate
+   the sites that assert a delete happened by checking for absence. That is a
+   different grep and it found real production breakage (above). Phase 8 should
+   run the same sweep before it drops `from_id`/`to_id`.
+4. Task 7.6 names `test_meeting.py`, which does not exist (same slip PR6b
+   recorded for 6b.4). The tests live in `test_meeting_bridge.py`, next to the
+   function under test.
+
+### Found but not fixed (outside PR7's boundary)
+
+- **`verify_edge_endpoint_convergence()` does not filter tombstones**, and
+  should not: PR8 rebuilds every row, tombstoned included, so their endpoints
+  must stay converged. Correct as-is, recorded so PR8 does not "fix" it.
+- **Tombstone purge/GC is still unowned.** Every delete now grows the database
+  forever. Already an Open Question in `design-schema.md`; PR7 is the commit
+  that makes it real rather than hypothetical.
+- **`/api/graph/full` still reads the entire edge table** and filters in Python
+  against a 500-node window. Pre-existing, carried forward from PR6b.
+- **The `test_memory` TOCTOU flake still deserves its own slice.** Fourth phase
+  in a row it has been observed and deferred.
+- **Fourth batch of fixtures asserting hard deletes found and corrected** —
+  PR6b predicted a fourth batch and it arrived, though in a different shape:
+  not raw-`INSERT`ed rows this time but assertions of row ABSENCE, in 8 files.
+  Predicting a fifth for PR8, again in a new shape, since PR8 changes what the
+  columns themselves are.
+
+### Status
+
+16/16 tasks complete (7.1–7.15 plus 7.9b). Task 7.12's gate conditions are met
+in this tree: the FTS invariant is proven RED-first and the full store-dependent
+suite is green with zero new failures. The gate also requires PR7 to be MERGED
+before PR8 opens — that half is the maintainer's, not this phase's. PR8 (the
+point of no return) NOT started.
+
+### Coordinator verification of Phase 7 (independent, post-apply)
+
+**Partial index verified by direct measurement.** This was the apply agent's
+best find and it is the third occurrence of the index-parity defect shape in
+this chain — the first one CAUSED BY the fix rather than by a rewrite.
+`EXPLAIN QUERY PLAN` on a fresh DB, no `ANALYZE`:
+
+| Query | Tombstone index used? | Plan |
+|---|---|---|
+| live read, `src_uuid=? AND deleted_at IS NULL` | no | `SEARCH edges USING INDEX idx_edges_src` |
+| live read, `(src OR dst) AND deleted_at IS NULL` | no | `MULTI-INDEX OR` over src/dst |
+| sync push, `deleted_at IS NOT NULL` | yes | `SEARCH edges USING INDEX idx_edges_deleted` |
+
+Stored DDL confirmed to carry `WHERE deleted_at IS NOT NULL`. A full index on
+`deleted_at` would have been chosen for the live-row filter that PR7 adds to
+EVERY read — and since nearly every row is NULL, that "SEARCH" walks the whole
+table. The graph browser and the recall hot path both. Every answer stays
+identical, so nothing fails; it just gets slower forever.
+
+The corollary the agent drew is the durable lesson and is now enforced in the
+plan tests: **"SEARCH, not SCAN" is too weak an assertion.** A SEARCH on a
+near-constant column is a full scan wearing an index's name.
+
+The partial predicate is a deliberate, documented deviation from mobile's DDL
+(name and column match; only the predicate differs, and an index predicate is
+a local planner concern, not a wire contract). PR8 copies mobile's exact DDL
+and will be tempted to "restore symmetry" — three tests block that.
+
+**FTS invariant verified end to end**, not only through the unit tests: node
+tombstoned via the real `delete_node`, then `nodes_fts` rows for that rowid =
+0, `search_nodes_fts` hits = 0, node row still present with `deleted_at` set,
+`vec_nodes` hard-deleted as designed. All four properties hold together.
+
+**Defect found and fixed here (task 7.16): the node tombstone did not bump
+`updated_at`.** The agent flagged the asymmetry and correctly declined to
+change it unilaterally, calling it the merge-rule author's decision. Checked
+against design-schema.md, and it is not a decision at all — the edge row of
+the delete-site table carries the full SQL including `updated_at=?`, while
+the node row is `| store.py:1328 node | tombstone | |`, a one-word
+placeholder with an empty cell. `nodes.updated_at` already exists and already
+agrees between axi and mobile.
+
+The consequence is the worst kind for this project: delete a node at T=100
+while its `updated_at` sits at T=10; a peer that merely EDITED the same node
+at T=50 carries a later `updated_at`, so under last-writer-wins the edit
+beats the delete and **a memory the user deleted comes back on the next
+sync** — silently, looking as though it was never deleted.
+
+Nothing observable changes today: the row is invisible to every read after
+PR7 and no sync engine exists. That is the argument FOR fixing it now rather
+than against — it is free today and a data-loss-shaped bug once the engine
+lands. Fixed before PR8 specifically because PR8 is the point of no return
+and this is data semantics, not schema.
+
+**Zero-regression, re-measured including 7.16.** 57 store-dependent files,
+`-p no:randomly`, failure sets diffed with `comm` against the PR6b tip
+(`242af093`).
+
+| Tree state | Passed | Failed |
+|---|---|---|
+| PR6b tip `242af093` | 887 | 23 |
+| PR7 + 7.16 | 950 | 23 |
+
+`comm` empty in BOTH directions — zero new failures, zero masked. PR7's own
+six core files: 256 passed.
+
+**Endorsed without change:** the read-filter tests tombstoning rows with a
+direct `UPDATE` rather than through `delete_node`. Through the delete path
+they would have passed against the pre-PR7 hard delete for the wrong reason —
+invisible because the row is gone, not because the read filters — and would
+have flipped RED only in the half-applied state. It is also the real
+production shape: a remote tombstone the local delete path never touched.
+
+**The production bug PR7 introduced and a pre-existing test caught:**
+`POST /api/graph/merge` verified its own success by requiring the duplicate
+row to be ABSENT. Once merges tombstone, that reads the survivor as "still
+here" and returns `400 merge_failed` for a merge that fully succeeded — the
+user told their two people were not merged while the graph says they were.
+Every PR7-specific test passed while this was broken;
+`test_graph_browser.py::test_merge_folds_duplicate_into_canonical` caught it.
+The general lesson, recorded for PR8: **turning deletes into tombstones
+breaks every path that expressed "deleted" as row absence, including
+production outcome-verification code — not just tests.** The delete-site
+table enumerates sites that DELETE, not sites that ASSERT a delete by
+checking absence. Different grep. PR8 must run it before dropping
+`from_id`/`to_id`.
+
+**Carried into PR8, unresolved:** tombstone purge/GC is unowned — every
+delete now grows the database forever, and PR7 is the commit that makes that
+real. `verify_edge_endpoint_convergence()` deliberately does NOT filter
+tombstones, because PR8 rebuilds every row and their endpoints must stay
+converged; recorded so PR8 does not "fix" it.
+
+**Gate 7.12: satisfied in this tree.** FTS invariant proven RED-first, suite
+green, zero new failures, tombstones on every delete path. PR8 may open.

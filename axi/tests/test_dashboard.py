@@ -779,26 +779,63 @@ def test_activate_non4b_set_active_fails_error_includes_vt_state(client_activate
 # across the rewrite, which is exactly the claim being made.
 # ─────────────────────────────────────────────────────────────────────────────
 
+# PR7 note: `deleted_at IS NULL` was added to all five oracles.
+#
+# They are the PRE-REWRITE queries, kept to prove that resolving an edge
+# through `src_uuid`/`dst_uuid` returns exactly what resolving it through
+# `from_id`/`to_id` returned. That claim is about the ENDPOINT COLUMNS and it
+# still holds. PR7 changes something else — a tombstoned row is invisible —
+# and that change applies to the old columns just as much as to the new ones.
+# Leaving the filter off would turn these into assertions that the rewrite
+# preserved PR6b's tombstone behaviour, which is precisely the expectation PR7
+# exists to break. Tombstone invisibility has its own tests (7.9b) below.
 _ORACLE_CONV_FACT_IDS = (
     "SELECT e.to_id FROM edges e "
     "JOIN nodes n ON n.id = e.to_id "
-    "WHERE e.from_id = ? AND n.kind = 'fact'"
+    "WHERE e.from_id = ? AND n.kind = 'fact' "
+    "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
-_ORACLE_ALL_EDGES = "SELECT id, from_id, to_id, kind FROM edges"
+_ORACLE_ALL_EDGES = (
+    "SELECT e.id, e.from_id, e.to_id, e.kind FROM edges e "
+    "JOIN nodes s ON s.id = e.from_id JOIN nodes d ON d.id = e.to_id "
+    "WHERE e.deleted_at IS NULL "
+    "AND s.deleted_at IS NULL AND d.deleted_at IS NULL"
+)
 _ORACLE_EDGES_TOUCHING_NODE = (
     "SELECT e.id AS eid, e.kind AS ekind, e.from_id, e.to_id, "
     "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
     "FROM edges e "
     "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
-    "WHERE e.from_id = ? OR e.to_id = ?"
+    "WHERE (e.from_id = ? OR e.to_id = ?) "
+    "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
+# Deliberately NOT joined back to `nodes`: this oracle must still return the
+# phantom id of a dangling endpoint, which is the whole subject of
+# `test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot`. Node-level
+# liveness is applied by each test through `_live_node_ids`.
 _ORACLE_NEIGHBOR_IDS = (
     "SELECT DISTINCT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS nid "
-    "FROM edges WHERE from_id = ? OR to_id = ?"
+    "FROM edges WHERE (from_id = ? OR to_id = ?) AND deleted_at IS NULL"
 )
 _ORACLE_NEIGHBORHOOD_EDGES = (
-    "SELECT id, from_id, to_id, kind FROM edges WHERE from_id = ? OR to_id = ?"
+    "SELECT e.id, e.from_id, e.to_id, e.kind FROM edges e "
+    "JOIN nodes s ON s.id = e.from_id JOIN nodes d ON d.id = e.to_id "
+    "WHERE (e.from_id = ? OR e.to_id = ?) "
+    "AND e.deleted_at IS NULL AND s.deleted_at IS NULL AND d.deleted_at IS NULL"
 )
+
+
+
+def _live_node_ids(c) -> set[int]:
+    """Node ids a user can still reach: the row exists AND is not tombstoned.
+
+    PR7 added the second half. Before it, "live" only had to mean "the row is
+    still there", because the only way to stop being live was to be deleted.
+    """
+    return {
+        r["id"]
+        for r in c.execute("SELECT id FROM nodes WHERE deleted_at IS NULL").fetchall()
+    }
 
 
 @pytest.fixture
@@ -911,7 +948,7 @@ def test_pr6b_graph_full_edges_identical_to_pre_rewrite_oracle(client, pr6b_grap
     from axi import store
 
     c = store._connect()  # noqa: SLF001
-    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    live_ids = _live_node_ids(c)
     expected = {
         (r["id"], r["from_id"], r["to_id"], r["kind"])
         for r in c.execute(_ORACLE_ALL_EDGES).fetchall()
@@ -983,10 +1020,10 @@ def test_pr6b_neighborhood_identical_to_pre_rewrite_oracle(client, pr6b_graph):
 
     node_id = pr6b_graph["hub"]
     c = store._connect()  # noqa: SLF001
-    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    live_ids = _live_node_ids(c)
     oracle_neigh = [
         r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
         if r["nid"] != node_id and r["nid"] in live_ids
     ]
     got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
@@ -1022,27 +1059,34 @@ def test_pr6b_neighbor_order_is_pinned_because_the_list_is_truncated(
     would have silently started keeping different nodes. The order is pinned to
     ascending node id — which is what the DISTINCT temp b-tree happened to
     produce before, so the pin preserves today's behaviour instead of changing
-    it."""
+    it.
+
+    PR7 changed the arithmetic, not the claim: the hub's tombstoned neighbour
+    is no longer a neighbour, so the fixture has one fewer live neighbour than
+    it did. The cap is therefore derived from the fixture rather than hardcoded
+    at 2 — the property under test is "the LOWEST ids survive truncation", and
+    hardcoding a count made that property hostage to the fixture's size."""
     from axi import dashboard
 
     from axi import store
 
-    monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", 2)
     node_id = pr6b_graph["hub"]
     c = store._connect()  # noqa: SLF001
-    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    live_ids = _live_node_ids(c)
     live_neighbors = sorted(
         r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
         if r["nid"] != node_id and r["nid"] in live_ids
     )
-    assert len(live_neighbors) > 2, "fixture must exceed the patched cap"
+    assert len(live_neighbors) >= 2, "fixture must have something to truncate"
+    cap = len(live_neighbors) - 1
+    monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", cap)
 
     got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
     assert got["truncated"] is True
     kept = sorted(n["id"] for n in got["nodes"] if n["id"] != node_id)
-    # the two LOWEST live neighbour ids — pinned, not whatever the plan emits
-    assert kept == live_neighbors[:2]
+    # the LOWEST live neighbour ids — pinned, not whatever the plan emits
+    assert kept == live_neighbors[:cap]
     again = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
     assert [n["id"] for n in again["nodes"]] == [n["id"] for n in got["nodes"]]
 
@@ -1070,10 +1114,10 @@ def test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot(
     c = store._connect()  # noqa: SLF001
     oracle_ids = {
         r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
         if r["nid"] != node_id
     }
-    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    live_ids = _live_node_ids(c)
     phantoms = oracle_ids - live_ids
     assert phantoms, "fixture must carry at least one dangling endpoint"
 
@@ -1123,3 +1167,199 @@ def test_pr6b_node_without_uuid_is_refused_loudly_and_names_the_node(client, pr6
         detail = r.json()["detail"]
         assert f"id={node_id}" in detail, detail
         assert "uuid" in detail, detail
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — task 7.9b: tombstone invisibility asserted at the HTTP BOUNDARY.
+#
+# 7.9 proves it in `test_store.py`, one layer down. That is not enough: PR7
+# could go green with the store fully tombstone-aware while a deleted memory
+# still renders in the graph browser and in the 3D brain, because these four
+# endpoints build their own SQL. The endpoints are what the user looks at.
+#
+# Every case tombstones the row DIRECTLY rather than through `delete_node`, so
+# the assertion is about the READ FILTER and not about the row having been
+# removed — see the same note in test_store.py.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def pr7_graph(pr6b_graph):
+    """`pr6b_graph` with nothing tombstoned yet — each test picks its victim."""
+    return pr6b_graph
+
+
+def _tombstone_node(nid):
+    import time as _t
+
+    from axi import store
+
+    store._connect().execute(  # noqa: SLF001
+        "UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), nid)
+    )
+
+
+def _tombstone_edges_between(src_id, dst_id):
+    """Tombstone every live edge between two nodes; returns how many."""
+    import time as _t
+
+    from axi import store
+
+    c = store._connect()  # noqa: SLF001
+    cur = c.execute(
+        "UPDATE edges SET deleted_at=?, updated_at=? WHERE "
+        "src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND "
+        "dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND deleted_at IS NULL",
+        (_t.time(), _t.time(), src_id, dst_id),
+    )
+    return cur.rowcount
+
+
+# ── site 1: /api/conversations fact ids ──────────────────────────────────────
+
+def test_pr7_conversation_fact_ids_hide_a_tombstoned_fact(client, pr7_graph):
+    body = client.get("/api/conversations").json()
+    ids = {i for row in body for i in row["fact_ids"]}
+    assert pr7_graph["fact_os"] in ids
+
+    _tombstone_node(pr7_graph["fact_os"])
+
+    body = client.get("/api/conversations").json()
+    ids = {i for row in body for i in row["fact_ids"]}
+    assert pr7_graph["fact_os"] not in ids, (
+        "a deleted memory is still listed as a fact of this conversation"
+    )
+    assert pr7_graph["fact_bp"] in ids, "live facts must be unaffected"
+
+
+def test_pr7_conversation_fact_ids_hide_a_tombstoned_edge(client, pr7_graph):
+    assert _tombstone_edges_between(pr7_graph["conv"], pr7_graph["fact_os"]) == 1
+
+    body = client.get("/api/conversations").json()
+    ids = {i for row in body for i in row["fact_ids"]}
+    assert pr7_graph["fact_os"] not in ids
+    assert pr7_graph["fact_bp"] in ids
+
+
+# ── site 2: /api/graph/full ──────────────────────────────────────────────────
+
+def test_pr7_graph_full_hides_a_tombstoned_node_and_its_edges(client, pr7_graph):
+    body = client.get("/api/graph/full").json()
+    assert pr7_graph["ana"] in {n["id"] for n in body["nodes"]}
+
+    _tombstone_node(pr7_graph["ana"])
+    body = client.get("/api/graph/full").json()
+
+    assert pr7_graph["ana"] not in {n["id"] for n in body["nodes"]}, (
+        "the 3D brain still renders a deleted memory"
+    )
+    touching = [
+        e for e in body["edges"]
+        if pr7_graph["ana"] in (e["source"], e["target"])
+    ]
+    assert touching == [], f"edges to a deleted node survived: {touching}"
+
+
+def test_pr7_graph_full_hides_a_tombstoned_edge_between_live_nodes(client, pr7_graph):
+    hub, ana = pr7_graph["hub"], pr7_graph["ana"]
+    assert _tombstone_edges_between(hub, ana) == 1
+
+    body = client.get("/api/graph/full").json()
+    assert hub in {n["id"] for n in body["nodes"]}
+    assert ana in {n["id"] for n in body["nodes"]}
+    assert [
+        e for e in body["edges"] if (e["source"], e["target"]) == (hub, ana)
+    ] == [], "a deleted relation is still drawn between two live nodes"
+
+
+def test_pr7_graph_full_already_hid_the_fixtures_tombstoned_node(client, pr7_graph):
+    """`pr6a_graph` ships a node tombstoned at build time.
+
+    PR6a deliberately left it visible ("PR7 does the filtering"). This is the
+    assertion that flips, stated on its own so the change of expectation is
+    visible rather than buried inside another test's set comparison.
+    """
+    body = client.get("/api/graph/full").json()
+    assert pr7_graph["tombstoned"] not in {n["id"] for n in body["nodes"]}
+
+
+# ── site 3: /api/graph/node/{id} ─────────────────────────────────────────────
+
+def test_pr7_node_detail_404s_for_a_tombstoned_node(client, pr7_graph):
+    assert client.get(f"/api/graph/node/{pr7_graph['ana']}").status_code == 200
+    _tombstone_node(pr7_graph["ana"])
+    r = client.get(f"/api/graph/node/{pr7_graph['ana']}")
+    assert r.status_code == 404, (
+        "the node browser still opens a deleted memory"
+    )
+
+
+def test_pr7_node_detail_hides_a_tombstoned_neighbour(client, pr7_graph):
+    hub = pr7_graph["hub"]
+    body = client.get(f"/api/graph/node/{hub}").json()
+    assert pr7_graph["ana"] in {r["other_id"] for r in body["relations"]}
+
+    _tombstone_node(pr7_graph["ana"])
+    body = client.get(f"/api/graph/node/{hub}").json()
+    assert pr7_graph["ana"] not in {r["other_id"] for r in body["relations"]}
+
+
+def test_pr7_node_detail_hides_a_tombstoned_fact_edge(client, pr7_graph):
+    """The `facts` lane is built from the same rows and must filter too."""
+    fact_bp = pr7_graph["fact_bp"]
+    body = client.get(f"/api/graph/node/{fact_bp}").json()
+    assert body["node"]["id"] == fact_bp
+
+    hub = pr7_graph["hub"]
+    body = client.get(f"/api/graph/node/{hub}").json()
+    assert fact_bp in {f["id"] for f in body["facts"]}
+
+    assert _tombstone_edges_between(hub, fact_bp) == 1
+    body = client.get(f"/api/graph/node/{hub}").json()
+    assert fact_bp not in {f["id"] for f in body["facts"]}
+
+
+# ── site 4: /api/graph/node/{id}/neighborhood ────────────────────────────────
+
+def test_pr7_neighborhood_404s_for_a_tombstoned_centre(client, pr7_graph):
+    _tombstone_node(pr7_graph["ana"])
+    r = client.get(f"/api/graph/node/{pr7_graph['ana']}/neighborhood")
+    assert r.status_code == 404
+
+
+def test_pr7_neighborhood_hides_a_tombstoned_neighbour(client, pr7_graph):
+    hub = pr7_graph["hub"]
+    body = client.get(f"/api/graph/node/{hub}/neighborhood").json()
+    assert pr7_graph["ana"] in {n["id"] for n in body["nodes"]}
+
+    _tombstone_node(pr7_graph["ana"])
+    body = client.get(f"/api/graph/node/{hub}/neighborhood").json()
+    assert pr7_graph["ana"] not in {n["id"] for n in body["nodes"]}, (
+        "the 3D brain still shows a deleted memory as a neighbour"
+    )
+    assert [
+        e for e in body["edges"] if pr7_graph["ana"] in (e["source"], e["target"])
+    ] == []
+
+
+def test_pr7_neighborhood_hides_a_tombstoned_edge(client, pr7_graph):
+    hub, ana = pr7_graph["hub"], pr7_graph["ana"]
+    assert _tombstone_edges_between(hub, ana) == 1
+
+    body = client.get(f"/api/graph/node/{hub}/neighborhood").json()
+    assert [
+        e for e in body["edges"] if (e["source"], e["target"]) == (hub, ana)
+    ] == [], "a deleted relation is still drawn in the neighbourhood view"
+
+
+def test_pr7_delete_node_endpoint_is_idempotent_and_404s_on_the_second_call(client, pr7_graph):
+    """The user-facing delete path, end to end.
+
+    The first DELETE tombstones; the second must report 404 rather than
+    claiming to have deleted the memory again. This is also the only test that
+    exercises the whole tombstone write path through HTTP.
+    """
+    ana = pr7_graph["ana"]
+    assert client.delete(f"/api/graph/node/{ana}").status_code == 200
+    assert client.get(f"/api/graph/node/{ana}").status_code == 404
+    assert client.delete(f"/api/graph/node/{ana}").status_code == 404

@@ -2261,7 +2261,10 @@ def api_conversations(
                 "SELECT n.id AS fact_id FROM edges e "
                 "JOIN nodes n ON n.uuid = e.dst_uuid "
                 "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-                "AND n.kind = 'fact'",
+                "AND n.kind = 'fact' "
+                # PR7: a deleted memory must not still be listed as a fact of
+                # this conversation.
+                "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
                 (r["node_id"],),
             ).fetchall()
             fact_ids = [int(e["fact_id"]) for e in edges]
@@ -2527,6 +2530,9 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
     # search can match a person by "Ani" etc. Everything else in data stays server-side.
     node_rows = c.execute(
         "SELECT id, kind, label, domain, embedding, created_at, occurred_at, data FROM nodes "
+        # PR7: this list IS the 3D brain. A tombstoned node rendering here is
+        # a memory the user deleted still orbiting in front of them.
+        "WHERE deleted_at IS NULL "
         "ORDER BY created_at DESC LIMIT ?",
         (limit,),
     ).fetchall()
@@ -2561,7 +2567,9 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
         "SELECT e.id AS id, s.id AS src_id, d.id AS dst_id, e.relation AS relation "
         "FROM edges e "
         "JOIN nodes s ON s.uuid = e.src_uuid "
-        "JOIN nodes d ON d.uuid = e.dst_uuid"
+        "JOIN nodes d ON d.uuid = e.dst_uuid "
+        "WHERE e.deleted_at IS NULL "
+        "AND s.deleted_at IS NULL AND d.deleted_at IS NULL"
     ).fetchall()
 
     a_edges = [
@@ -2732,7 +2740,9 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
     c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
     row = c.execute(
         "SELECT id, uuid, kind, label, domain, data, created_at, occurred_at "
-        "FROM nodes WHERE id = ?",
+        # PR7: a tombstoned node is a 404, not a page. Answering 200 would
+        # reopen a memory the user deleted.
+        "FROM nodes WHERE id = ? AND deleted_at IS NULL",
         (node_id,),
     ).fetchone()
     if row is None:
@@ -2763,7 +2773,8 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
         "FROM edges e "
         "JOIN nodes n ON n.uuid = "
         "     CASE WHEN e.src_uuid = ? THEN e.dst_uuid ELSE e.src_uuid END "
-        "WHERE e.src_uuid = ? OR e.dst_uuid = ?",
+        "WHERE (e.src_uuid = ? OR e.dst_uuid = ?) "
+        "AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
         (node_uuid, node_uuid, node_uuid),
     ).fetchall()
 
@@ -2833,7 +2844,7 @@ def graph_node_delete(node_id: int):
     """
     c = store._connect()  # noqa: SLF001  (pre-checks are read-only)
     row = c.execute(
-        "SELECT kind, data FROM nodes WHERE id = ?", (node_id,)
+        "SELECT kind, data FROM nodes WHERE id = ? AND deleted_at IS NULL", (node_id,)
     ).fetchone()
     if row is None:
         raise HTTPException(404, detail="node not found")
@@ -2897,7 +2908,9 @@ async def graph_merge(request: Request):
 
     def _load(nid: int):
         return c.execute(
-            "SELECT id, kind, label, data FROM nodes WHERE id = ?", (nid,)
+            "SELECT id, kind, label, data FROM nodes WHERE id = ? "
+            "AND deleted_at IS NULL",
+            (nid,),
         ).fetchone()
 
     crow = _load(canonical_id)
@@ -2930,12 +2943,18 @@ async def graph_merge(request: Request):
     # Verify the outcome from a fresh read: the survivor must remain and the
     # duplicate must be gone. If not (e.g. identical labels made register_alias
     # a no-op), surface it rather than reporting a merge that did not happen.
+    #
+    # PR7: "gone" now means TOMBSTONED, not absent. Without the
+    # `deleted_at IS NULL` filter this check reads the surviving tombstone row
+    # as "the duplicate is still here" and answers `merge_failed` with a 400
+    # for a merge that fully succeeded — the user is told their two people were
+    # not merged while the graph says they were.
     c2 = store._connect()  # noqa: SLF001
     survivor = c2.execute(
-        "SELECT 1 FROM nodes WHERE id = ?", (canonical_id,)
+        "SELECT 1 FROM nodes WHERE id = ? AND deleted_at IS NULL", (canonical_id,)
     ).fetchone()
     absorbed_gone = c2.execute(
-        "SELECT 1 FROM nodes WHERE id = ?", (duplicate_id,)
+        "SELECT 1 FROM nodes WHERE id = ? AND deleted_at IS NULL", (duplicate_id,)
     ).fetchone() is None
     if survivor is not None and absorbed_gone:
         return {
@@ -2972,7 +2991,7 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
     c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
     center = c.execute(
         "SELECT id, uuid, kind, label, domain, embedding, created_at, occurred_at "
-        "FROM nodes WHERE id = ?",
+        "FROM nodes WHERE id = ? AND deleted_at IS NULL",
         (node_id,),
     ).fetchone()
     if center is None:
@@ -3004,7 +3023,11 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
         "SELECT DISTINCT n.id AS nid FROM edges e "
         "JOIN nodes n ON n.uuid = "
         "     CASE WHEN e.src_uuid = ? THEN e.dst_uuid ELSE e.src_uuid END "
-        "WHERE e.src_uuid = ? OR e.dst_uuid = ? "
+        "WHERE (e.src_uuid = ? OR e.dst_uuid = ?) "
+        # PR7: filtered BEFORE the _NEIGHBORHOOD_CAP truncation below, so a
+        # deleted memory cannot burn a neighbour slot the way a dangling
+        # endpoint used to.
+        "AND e.deleted_at IS NULL AND n.deleted_at IS NULL "
         "ORDER BY nid",
         (center_uuid, center_uuid, center_uuid),
     ).fetchall()
@@ -3018,7 +3041,7 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
         ph = ",".join("?" for _ in kept_ids)
         rows = c.execute(
             f"SELECT id, kind, label, domain, embedding, created_at, occurred_at "
-            f"FROM nodes WHERE id IN ({ph})",
+            f"FROM nodes WHERE id IN ({ph}) AND deleted_at IS NULL",
             kept_ids,
         ).fetchall()
         nodes.extend(_node_dict(r) for r in rows)
@@ -3031,7 +3054,9 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
         "FROM edges e "
         "JOIN nodes s ON s.uuid = e.src_uuid "
         "JOIN nodes d ON d.uuid = e.dst_uuid "
-        "WHERE e.src_uuid = ? OR e.dst_uuid = ?",
+        "WHERE (e.src_uuid = ? OR e.dst_uuid = ?) "
+        "AND e.deleted_at IS NULL "
+        "AND s.deleted_at IS NULL AND d.deleted_at IS NULL",
         (center_uuid, center_uuid),
     ).fetchall()
     edges = [
@@ -3052,7 +3077,9 @@ def graph_edge_delete(edge_id: int):
     Unknown edge id → 404.
     """
     c = store._connect()  # noqa: SLF001  (existence pre-check is read-only)
-    row = c.execute("SELECT id FROM edges WHERE id = ?", (edge_id,)).fetchone()
+    row = c.execute(
+        "SELECT id FROM edges WHERE id = ? AND deleted_at IS NULL", (edge_id,)
+    ).fetchone()
     if row is None:
         raise HTTPException(404, detail="edge not found")
     deleted = store.delete_edge(edge_id)

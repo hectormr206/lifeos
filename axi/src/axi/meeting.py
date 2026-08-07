@@ -878,7 +878,15 @@ def bridge_meeting_node(meeting_id: int, summary: str) -> None:
         # Another concurrent call won the race — remove the orphan node we created.
         # Also clean the FTS shadow row so no stale entry is left in nodes_fts.
         with _store._tx() as txc:  # noqa: SLF001
-            txc.execute("DELETE FROM nodes WHERE id=?", (nid,))
+            # PR7 (task 7.6): the race-loser orphan becomes a TOMBSTONE, like
+            # every other node delete. Orphan tombstones are accepted noise per
+            # design-schema.md Decision 3 — they carry no edges and no FTS row.
+            # The FTS row stays a HARD delete: local derived state, never
+            # synced, and the row that must not outlive the tombstone (7.11).
+            txc.execute(
+                "UPDATE nodes SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
+                (time.time(), nid),
+            )
             txc.execute("DELETE FROM nodes_fts WHERE rowid=?", (nid,))
         return
 

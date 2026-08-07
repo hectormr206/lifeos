@@ -119,12 +119,22 @@ def test_meeting_bridge_race_loser_no_orphan_fts_row():
     )
     orphan_nid = created_node_ids[0]
 
-    # The orphan node must be GONE from `nodes`.
+    # The orphan node must be GONE from the graph. PR7 (tombstones) changed
+    # what "gone" means for a node: the row survives carrying `deleted_at`, so
+    # the delete can be replicated instead of a peer pushing the orphan back.
+    # The claim of this test — the race loser leaves nothing readable behind —
+    # is unchanged, and the FTS half below is unchanged too, because FTS rows
+    # are still hard-deleted.
     node_row = conn.execute(
-        "SELECT id FROM nodes WHERE id=?", (orphan_nid,)
+        "SELECT id FROM nodes WHERE id=? AND deleted_at IS NULL", (orphan_nid,)
     ).fetchone()
     assert node_row is None, (
-        f"Orphan node {orphan_nid} still exists in `nodes` after race-loser cleanup"
+        f"Orphan node {orphan_nid} is still live in `nodes` after race-loser cleanup"
+    )
+    assert conn.execute(
+        "SELECT deleted_at FROM nodes WHERE id=?", (orphan_nid,)
+    ).fetchone()["deleted_at"] is not None, (
+        f"Orphan node {orphan_nid} was hard-deleted instead of tombstoned"
     )
 
     # CRITICAL (the actual fix): orphan node must also be GONE from `nodes_fts`.

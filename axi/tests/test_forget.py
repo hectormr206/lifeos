@@ -131,18 +131,39 @@ def test_find_candidates_never_raises(monkeypatch):
 
 # ───────────────────────── store deletion helpers ───────────────────────
 
-def test_delete_node_removes_node_edges_and_fts(seeded_graph):
+def test_delete_node_tombstones_node_and_edges_and_removes_fts(seeded_graph):
+    """PR7 changed this expectation deliberately.
+
+    It used to assert the node row and its edge rows were ABSENT. They are now
+    tombstoned instead: sync cannot replicate an absence, so a removed row
+    comes back from the next peer that still has it. The user-visible contract
+    is unchanged and is what this test now asserts — the node is unreachable
+    and no live edge touches it — plus the one thing that is still a hard
+    delete, the `nodes_fts` row.
+
+    The old assertion was not merely stricter, it asserted the hard delete,
+    which is exactly the behaviour PR7 exists to remove. Renamed so the file
+    does not keep a name promising something it no longer checks.
+    """
     med = seeded_graph["med"]
     assert store.delete_node(med) is True
-    # Node gone.
+    # Node unreachable through every read path.
     assert store.get_node(med) is None
-    # Its edges gone (toma: hub->med, same-day: hub->med).
     c = store._connect()
-    remaining = c.execute(
-        "SELECT COUNT(*) AS n FROM edges WHERE from_id=? OR to_id=?", (med, med)
+    # …but still on disk, carrying its tombstone.
+    assert c.execute(
+        "SELECT deleted_at FROM nodes WHERE id=?", (med,)
+    ).fetchone()["deleted_at"] is not None
+    # Its edges (toma: hub->med, same-day: hub->med) are tombstoned, not gone.
+    live = c.execute(
+        "SELECT COUNT(*) AS n FROM edges WHERE (from_id=? OR to_id=?) "
+        "AND deleted_at IS NULL", (med, med)
     ).fetchone()["n"]
-    assert remaining == 0
-    # FTS row gone.
+    assert live == 0
+    assert c.execute(
+        "SELECT COUNT(*) AS n FROM edges WHERE from_id=? OR to_id=?", (med, med)
+    ).fetchone()["n"] > 0, "the edges were hard-deleted instead of tombstoned"
+    # FTS row gone — still a HARD delete, deliberately.
     fts = c.execute("SELECT COUNT(*) AS n FROM nodes_fts WHERE rowid=?", (med,)).fetchone()["n"]
     assert fts == 0
 
@@ -157,13 +178,22 @@ def test_delete_node_missing_returns_false():
     assert store.delete_node(999999) is False
 
 
-def test_delete_edge_removes_one_edge(seeded_graph):
+def test_delete_edge_tombstones_exactly_one_edge(seeded_graph):
+    """Same deliberate change of expectation as the node case above."""
     diag = seeded_graph["diag"]
     assert store.delete_edge(diag) is True
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (diag,)).fetchone()["n"] == 0
+    assert c.execute(
+        "SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (diag,)
+    ).fetchone()["n"] == 0
+    assert c.execute(
+        "SELECT deleted_at FROM edges WHERE id=?", (diag,)
+    ).fetchone()["deleted_at"] is not None, "the edge was hard-deleted, not tombstoned"
     # Other edges untouched.
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (seeded_graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute(
+        "SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL",
+        (seeded_graph["toma"],),
+    ).fetchone()["n"] == 1
 
 
 def test_delete_edge_missing_returns_false():
@@ -248,3 +278,69 @@ def test_forget_edge_lane_identical_to_pre_rewrite_query(pr6a_graph):
         assert new == _old_forget_edge_lane(c, target, 50), (
             f"forget edge lane diverged from the pre-rewrite query for {target!r}"
         )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — tombstone filters on the forget candidate lanes (task 7.9/7.10).
+#
+# This surface literally offers rows to the user for deletion. Offering an
+# already-deleted one lets them "delete" something twice and be told it
+# worked, which is a lie about their own memory.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _tombstone_node_row(nid: int) -> None:
+    import time as _t
+
+    store._connect().execute(  # noqa: SLF001
+        "UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), nid)
+    )
+
+
+def _tombstone_edge_row(eid: int) -> None:
+    import time as _t
+
+    store._connect().execute(  # noqa: SLF001
+        "UPDATE edges SET deleted_at=?, updated_at=? WHERE id=?", (_t.time(), _t.time(), eid)
+    )
+
+
+def test_forget_edge_lane_does_not_offer_a_tombstoned_edge():
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    eid = store.add_edge(hub, ana, "esposa")
+
+    found = forget.find_forget_candidates("Ana")
+    assert any(c["type"] == "edge" and c["id"] == eid for c in found)
+
+    _tombstone_edge_row(eid)
+    found = forget.find_forget_candidates("Ana")
+    assert not any(c["type"] == "edge" and c["id"] == eid for c in found), (
+        "forget offered an already-deleted relation as a deletion candidate"
+    )
+
+
+def test_forget_edge_lane_drops_an_edge_whose_endpoint_is_tombstoned():
+    """Both endpoint labels are shown to the user; a deleted one must not be."""
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    eid = store.add_edge(hub, ana, "esposa")
+
+    _tombstone_node_row(ana)
+    found = forget.find_forget_candidates("Ana")
+    assert not any(c["type"] == "edge" and c["id"] == eid for c in found)
+
+
+def test_forget_node_lane_does_not_offer_a_tombstoned_node():
+    """Covered through `search_nodes_fts`, the lane that carries this in tests.
+
+    A node tombstoned WITHOUT a local delete (the sync shape) keeps its FTS
+    row, so only the read filter stops it from being offered.
+    """
+    nid = store.add_node("fact", "toma losartán")
+    found = forget.find_forget_candidates("losartán")
+    assert any(c["type"] == "node" and c["id"] == nid for c in found)
+
+    _tombstone_node_row(nid)
+    found = forget.find_forget_candidates("losartán")
+    assert not any(c["type"] == "node" and c["id"] == nid for c in found)

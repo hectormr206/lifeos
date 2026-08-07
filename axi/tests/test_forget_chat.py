@@ -45,7 +45,7 @@ def test_forget_first_turn_sets_pending_no_deletion(graph):
     # NOTHING deleted yet — safety guarantee.
     assert store.get_node(graph["med"]) is not None
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 1
 
 
 def test_forget_confirm_deletes_and_clears_pending(graph):
@@ -56,7 +56,7 @@ def test_forget_confirm_deletes_and_clears_pending(graph):
     assert "borré" in resp["answer"].lower()
     # The pending candidate edge is now gone.
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 0
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 0
     # Pending cleared.
     assert "s1" not in forget._PENDING
 
@@ -68,7 +68,7 @@ def test_forget_negation_deletes_nothing_and_clears(graph):
     assert resp["mode"] == "forget_cancelled"
     # Nothing deleted.
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 1
     assert "s1" not in forget._PENDING
 
 
@@ -77,7 +77,7 @@ def test_confirm_with_no_pending_falls_through(graph):
     # the normal chat flow proceeds (and nothing is deleted).
     assert forget.handle_chat_forget("sí", "s1") is None
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 1
 
 
 def test_forget_none_when_nothing_matches():
@@ -92,7 +92,7 @@ def test_pending_does_not_leak_across_sessions(graph):
     # A confirmation in a DIFFERENT session must not trigger s1's deletion.
     assert forget.handle_chat_forget("sí", "s2") is None
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 1
     assert "s1" in forget._PENDING
 
 
@@ -103,7 +103,7 @@ def test_ambiguous_keeps_pending_and_reasks(graph):
     assert resp["mode"] == "forget_confirm"
     assert "s1" in forget._PENDING  # still pending
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 1
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 1
 
 
 def test_expired_pending_pruned(graph, monkeypatch):
@@ -130,8 +130,17 @@ def _seed_three_pending(session: str = "s1") -> list[int]:
 
 
 def _alive(nid: int) -> bool:
+    """PR7: "alive" means the row exists AND carries no tombstone.
+
+    Before PR7 a deleted node had no row at all, so row-existence was a
+    sufficient test. It no longer is — the row survives so the delete can be
+    replicated — and leaving this helper as a bare COUNT would have made every
+    forget test in this file report that nothing was ever deleted.
+    """
     c = store._connect()
-    return c.execute("SELECT COUNT(*) AS n FROM nodes WHERE id=?", (nid,)).fetchone()["n"] == 1
+    return c.execute(
+        "SELECT COUNT(*) AS n FROM nodes WHERE id=? AND deleted_at IS NULL", (nid,)
+    ).fetchone()["n"] == 1
 
 
 def test_parse_indices_unit():
@@ -212,4 +221,4 @@ def test_endpoint_forget_then_confirm(client, graph):
     b2 = r2.json()
     assert b2.get("mode") == "forget_done"
     c = store._connect()
-    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=?", (graph["toma"],)).fetchone()["n"] == 0
+    assert c.execute("SELECT COUNT(*) AS n FROM edges WHERE id=? AND deleted_at IS NULL", (graph["toma"],)).fetchone()["n"] == 0

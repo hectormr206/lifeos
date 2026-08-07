@@ -472,8 +472,10 @@ def pr6a_graph():
         stay duplicated — a uuid join must not collapse them),
       * two edges of DIFFERENT kinds between the same pair,
       * a node with no edges at all,
-      * an edge whose endpoint node carries a `deleted_at` tombstone (PR6a
-        does NOT filter tombstones — that is PR7 — so it must still read),
+      * an edge whose endpoint node carries a `deleted_at` tombstone (PR6a did
+        NOT filter tombstones and this node still read; PR7 wired
+        `deleted_at IS NULL` into every read, so the same node is now the
+        fixture's INVISIBLE case — see the 7.9/7.9b tests),
       * a dangling edge whose endpoint node row is gone entirely (legal in
         mobile's model, where an edge may sync before its node arrives).
 

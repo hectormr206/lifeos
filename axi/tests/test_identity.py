@@ -325,10 +325,9 @@ def test_register_alias_merge_dual_writes_edge_endpoint_uuids():
     # A separate node, labelled with the alias, that will be MERGED away.
     alias_id = store.add_node("person", "Ani")
     other_id = store.add_node("fact", "some other node")
-    # add_node does not assign a uuid at insert time (PR4's documented,
-    # deliberate gap — a node gets its uuid on the next init_db() backfill
-    # convergence). Run that backfill here so every node involved has a
-    # real uuid before exercising the endpoint-rewrite dual-write.
+    # `add_node` has assigned a uuid at insert time since task 5.14; this
+    # backfill call is a no-op kept only because it also proves the migration
+    # stays idempotent on an already-converged database.
     store.migrate_nodes_edges_sync_columns()
     canonical_uuid = store._connect().execute(
         "SELECT uuid FROM nodes WHERE id=?", (canonical_id,)
@@ -341,8 +340,20 @@ def test_register_alias_merge_dual_writes_edge_endpoint_uuids():
     identity.register_alias("Ana Ríos", "Ani", "person")
 
     c = store._connect()
-    # The alias node itself is gone (merged).
-    assert c.execute("SELECT 1 FROM nodes WHERE id=?", (alias_id,)).fetchone() is None
+    # PR7 changed this expectation deliberately. It used to read "the alias
+    # node itself is gone (merged)" and assert the row was absent. A merge is
+    # a delete, and PR7 makes every node delete a tombstone: the row survives
+    # carrying `deleted_at`, because sync cannot replicate an absence — a peer
+    # that never sees the row would treat it as not-yet-received and push the
+    # merged-away duplicate straight back. Asserting absence again would
+    # assert the old hard delete, so the check moves to what the merge is
+    # actually claiming: the node is no longer LIVE.
+    assert c.execute(
+        "SELECT 1 FROM nodes WHERE id=? AND deleted_at IS NULL", (alias_id,)
+    ).fetchone() is None
+    assert c.execute(
+        "SELECT deleted_at FROM nodes WHERE id=?", (alias_id,)
+    ).fetchone()["deleted_at"] is not None
 
     row_out = c.execute("SELECT from_id, src_uuid FROM edges WHERE id=?", (e_out,)).fetchone()
     row_in = c.execute("SELECT to_id, dst_uuid FROM edges WHERE id=?", (e_in,)).fetchone()
@@ -566,3 +577,216 @@ def test_edge_exists_disagrees_only_for_an_endpoint_id_that_no_longer_exists(pr6
         (hub, ghost),
     ).fetchone() is not None
     assert identity._edge_exists(c, hub, ghost, "about") is False
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — tombstones in the alias-merge path (tasks 7.7, 7.13) and the read
+# filters that keep a tombstoned entity out of identity resolution.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _merge_fixture():
+    """Two person nodes for the same human, plus edges on the LOSER.
+
+    `register_alias` merges the node labelled with the alias into the canonical
+    one: it rewrites both endpoint representations of every edge, then removes
+    the loser. PR7 turns that removal into a tombstone.
+    """
+    from axi import store
+
+    canonical = store.add_node("person", "Ana Ríos", {"entity": True})
+    loser = store.add_node("person", "Ani", {"entity": True})
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    fact = store.add_node("fact", "cumple en mayo")
+    e_in = store.add_edge(hub, loser, "esposa")      # loser as dst
+    e_out = store.add_edge(loser, fact, "mentions")  # loser as src
+    return {
+        "canonical": canonical, "loser": loser, "hub": hub, "fact": fact,
+        "e_in": e_in, "e_out": e_out,
+    }
+
+
+def test_alias_merge_tombstones_the_loser_node_instead_of_deleting_it():
+    """7.7: the merged-away node row survives carrying `deleted_at`."""
+    from axi import store
+
+    f = _merge_fixture()
+    identity.register_alias("Ana Ríos", "Ani", kind="person")
+
+    row = store._connect().execute(
+        "SELECT id, deleted_at FROM nodes WHERE id=?", (f["loser"],)
+    ).fetchone()
+    assert row is not None, "the alias-merge loser was hard-deleted"
+    assert row["deleted_at"] is not None
+
+
+def test_alias_merge_hard_deletes_the_loser_fts_and_vec_rows():
+    """7.7: `nodes_fts` and `vec_nodes` stay HARD deletes — pinned deliberately.
+
+    They are local derived state and are never synced. Leaving the FTS row
+    behind is the named worst case: search would keep offering a node the
+    graph has merged away.
+    """
+    from axi import store
+
+    f = _merge_fixture()
+    c = store._connect()
+    store.create_vec_nodes_table(c)
+    store.upsert_vec_node(c, node_id=f["loser"], vector=[0.2] * 512)
+
+    identity.register_alias("Ana Ríos", "Ani", kind="person")
+
+    assert c.execute(
+        "SELECT count(*) FROM nodes_fts WHERE rowid=?", (f["loser"],)
+    ).fetchone()[0] == 0, "the merged-away node kept its FTS row"
+    assert c.execute(
+        "SELECT count(*) FROM vec_nodes WHERE node_id=?", (f["loser"],)
+    ).fetchone()[0] == 0, "the merged-away node kept its vec row"
+
+
+def test_alias_merge_leaves_no_edge_pointing_at_the_tombstoned_loser():
+    """7.13, half one: every edge now resolves to the SURVIVING node's uuid."""
+    from axi import store
+
+    f = _merge_fixture()
+    identity.register_alias("Ana Ríos", "Ani", kind="person")
+
+    c = store._connect()
+    loser_uuid = c.execute(
+        "SELECT uuid FROM nodes WHERE id=?", (f["loser"],)
+    ).fetchone()[0]
+    canonical_uuid = c.execute(
+        "SELECT uuid FROM nodes WHERE id=?", (f["canonical"],)
+    ).fetchone()[0]
+    assert loser_uuid and canonical_uuid and loser_uuid != canonical_uuid
+
+    stragglers = c.execute(
+        "SELECT id, src_uuid, dst_uuid FROM edges "
+        "WHERE src_uuid = ? OR dst_uuid = ?",
+        (loser_uuid, loser_uuid),
+    ).fetchall()
+    assert stragglers == [], (
+        "edges still point at the tombstoned loser: "
+        + ", ".join(f"id={r[0]} src={r[1]!r} dst={r[2]!r}" for r in stragglers)
+    )
+
+    for eid, column in ((f["e_in"], "dst_uuid"), (f["e_out"], "src_uuid")):
+        row = c.execute(
+            f"SELECT {column} AS u, from_id, to_id FROM edges WHERE id=?", (eid,)
+        ).fetchone()
+        assert row["u"] == canonical_uuid, (
+            f"edge id={eid} {column}={row['u']!r} expected={canonical_uuid!r}"
+        )
+
+
+def test_alias_merge_keeps_both_endpoint_representations_converged():
+    """7.13, half two: `src_uuid`/`dst_uuid` still agree with `from_id`/`to_id`.
+
+    Written with an explicit `IS NOT`-free comparison per side and an explicit
+    NULL check, because a bare `IS NOT` predicate reads NULL-vs-NULL as
+    agreement — the blind spot this chain has already been bitten by twice.
+    """
+    from axi import store
+
+    f = _merge_fixture()
+    identity.register_alias("Ana Ríos", "Ani", kind="person")
+
+    c = store._connect()
+    rows = c.execute(
+        "SELECT e.id, e.src_uuid, n1.uuid AS n1u, e.dst_uuid, n2.uuid AS n2u "
+        "FROM edges e "
+        "JOIN nodes n1 ON n1.id = e.from_id "
+        "JOIN nodes n2 ON n2.id = e.to_id"
+    ).fetchall()
+    assert rows, "the fixture produced no edges to check"
+    for r in rows:
+        assert r["src_uuid"] is not None, f"edge id={r['id']} has a NULL src_uuid"
+        assert r["dst_uuid"] is not None, f"edge id={r['id']} has a NULL dst_uuid"
+        assert r["src_uuid"] == r["n1u"], (
+            f"edge id={r['id']} src_uuid={r['src_uuid']!r} expected={r['n1u']!r}"
+        )
+        assert r["dst_uuid"] == r["n2u"], (
+            f"edge id={r['id']} dst_uuid={r['dst_uuid']!r} expected={r['n2u']!r}"
+        )
+
+    # The standalone guard must agree, on the same database.
+    store.verify_edge_endpoint_convergence()
+
+
+def test_identity_edge_exists_ignores_a_tombstoned_edge():
+    """A deleted relation must not stop the linkers from re-creating it.
+
+    `_edge_exists` is the duplicate guard in front of every `add_*`/`link_*`
+    helper. If it kept matching tombstones, a relation the user deleted could
+    never come back and nothing would report why.
+    """
+    import time as _t
+
+    from axi import store
+
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    eid = store.add_edge(hub, ana, "esposa")
+    c = store._connect()
+    assert identity._edge_exists(c, hub, ana, "esposa") is True
+
+    c.execute(
+        "UPDATE edges SET deleted_at=?, updated_at=? WHERE id=?", (_t.time(), _t.time(), eid)
+    )
+    assert identity._edge_exists(c, hub, ana, "esposa") is False
+
+
+def test_entity_lookup_does_not_resurrect_a_tombstoned_person():
+    """`ensure_entity` must not hand back a node the user deleted.
+
+    Returning the tombstoned id would silently re-attach new facts to a memory
+    that is supposed to be gone, and every one of them would then be invisible
+    behind the same tombstone.
+    """
+    import time as _t
+
+    from axi import store
+
+    ana = identity.ensure_entity("Ana Ríos", "person")
+    assert ana is not None
+    store._connect().execute(
+        "UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), ana)
+    )
+
+    again = identity.ensure_entity("Ana Ríos", "person")
+    assert again != ana
+    assert store.get_node(again) is not None
+
+
+def test_resolve_relation_person_skips_a_tombstoned_target():
+    """A tombstoned person must not be the answer to "who is my esposa?"."""
+    import time as _t
+
+    from axi import store
+
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    store.add_edge(hub, ana, "esposa")
+    c = store._connect()
+    assert identity._resolve_relation_person("esposa", hub, c) == ana
+
+    c.execute("UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), ana))
+    assert identity._resolve_relation_person("esposa", hub, c) is None
+
+
+def test_find_hub_row_ignores_a_tombstoned_hub():
+    """The hub guard refuses to delete the hub, so this can only arrive by sync.
+
+    It must still not be resolved as the live hub: a tombstoned hub answering
+    identity questions would attach the user's whole graph to a deleted node.
+    """
+    import time as _t
+
+    from axi import store
+
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    c = store._connect()
+    assert identity._find_hub_row(c) is not None
+
+    c.execute("UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), hub))
+    assert identity._find_hub_row(c) is None

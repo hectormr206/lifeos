@@ -524,23 +524,37 @@ def test_new_thread_can_query_vec_nodes():
 #      (proven against the literal old query kept here as an oracle, not by
 #      the weaker "the suite still passes").
 
+# PR7 note on these oracles: `deleted_at IS NULL` was added to all three.
+#
+# They are the PRE-REWRITE query, kept to prove that resolving an edge through
+# `src_uuid`/`dst_uuid` returns exactly what resolving it through
+# `from_id`/`to_id` returned. That claim is about the ENDPOINT COLUMNS and it
+# still holds unchanged. PR7 changes a different thing — a tombstoned row is
+# now invisible — and that change applies to the old columns just as much as
+# to the new ones. Leaving the filter off the oracle would have made it assert
+# "the rewrite kept PR6a's tombstone behaviour", which is not what it is for
+# and is exactly the expectation PR7 deliberately breaks. Tombstone
+# invisibility gets its own tests below; this one stays a column-equivalence
+# oracle.
 _OLD_NEIGHBORS_KIND_SQL = (
     "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id "
-    "WHERE e.from_id = ? AND e.kind = ?"
+    "WHERE e.from_id = ? AND e.kind = ? "
+    "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 _OLD_NEIGHBORS_ANY_SQL = (
-    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id WHERE e.from_id = ?"
+    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id WHERE e.from_id = ? "
+    "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 _OLD_SAME_DAY_SQL = """
     SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
     FROM nodes n
     JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
-    WHERE n.id != ?
+    WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
     UNION
     SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
     FROM nodes n
     JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
-    WHERE n.id != ?
+    WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
 """
 
 
@@ -734,3 +748,493 @@ def test_drift_failure_also_names_the_edge():
     message = str(excinfo.value)
     assert "Row object" not in message
     assert f"id={eid}" in message
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# PR7 — tombstones (design-schema.md Decision 3, tasks 7.1-7.5, 7.9, 7.11,
+# 7.14). A delete stops removing the row and starts marking it. The unit is
+# atomic on purpose: the write half alone would leave every deleted memory
+# readable again, which is worse than either endpoint.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _row(sql, *params):
+    return store._connect().execute(sql, params).fetchone()
+
+
+def _tombstone_graph():
+    """hub -> ana ('esposa'), ana -> fact ('mentions'), plus an untouched pair."""
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    fact = store.add_node("fact", "hipertensión diagnosticada")
+    other = store.add_node("fact", "usa CachyOS")
+    e_hub_ana = store.add_edge(hub, ana, "esposa")
+    e_ana_fact = store.add_edge(ana, fact, "mentions")
+    e_untouched = store.add_edge(hub, other, "about")
+    return {
+        "hub": hub, "ana": ana, "fact": fact, "other": other,
+        "e_hub_ana": e_hub_ana, "e_ana_fact": e_ana_fact,
+        "e_untouched": e_untouched,
+    }
+
+
+# ── 7.4 — the node row survives as a tombstone ────────────────────────────
+
+def test_delete_node_tombstones_the_row_instead_of_removing_it():
+    """7.4: `DELETE FROM nodes` becomes `UPDATE nodes SET deleted_at`.
+
+    The row must still be there. Sync cannot replicate an absence: a peer that
+    never sees the row cannot tell "deleted" from "not yet received", so it
+    hands the memory straight back on the next exchange.
+    """
+    g = _tombstone_graph()
+    assert store.delete_node(g["ana"]) is True
+
+    row = _row("SELECT id, deleted_at FROM nodes WHERE id = ?", g["ana"])
+    assert row is not None, "the node row was hard-deleted; a tombstone must survive"
+    assert row["deleted_at"] is not None
+    assert row["deleted_at"] > 0
+
+
+def test_delete_node_twice_reports_false_the_second_time():
+    """The `AND deleted_at IS NULL` guard makes the tombstone write idempotent.
+
+    Without it a second delete would rewrite `deleted_at` to a later timestamp
+    and report success, i.e. claim to have deleted something that was already
+    gone.
+    """
+    g = _tombstone_graph()
+    assert store.delete_node(g["ana"]) is True
+    first = _row("SELECT deleted_at FROM nodes WHERE id = ?", g["ana"])["deleted_at"]
+    assert store.delete_node(g["ana"]) is False
+    assert _row("SELECT deleted_at FROM nodes WHERE id = ?", g["ana"])["deleted_at"] == first
+
+
+# ── 7.1 — the node's edges are tombstoned in the SAME transaction ──────────
+
+def test_tombstoning_a_node_bumps_updated_at_so_the_delete_can_win_a_merge():
+    """A tombstone IS a write, and last-writer-wins reads `updated_at`.
+
+    Tasks 7.1 and 7.4 came out asymmetric: the edge tombstone sets
+    `updated_at`, the node tombstone sets only `deleted_at`. The design table
+    shows why — the edge row spells out the full SQL, the node row is a
+    one-word placeholder with an empty cell. An omission, not a decision.
+
+    Left alone it resurrects deleted memories. Delete a node here at T=100 and
+    its `updated_at` stays at, say, T=10. A peer that merely EDITED the same
+    node at T=50 carries a later `updated_at`, so under last-writer-wins the
+    edit beats the delete and the memory the user deleted comes back on the
+    next sync — silently, and looking like it was never deleted at all.
+
+    Nothing observable changes today: the row is invisible to every read after
+    PR7, and there is no sync engine yet. That is exactly why it is cheap to
+    fix now and expensive to discover later.
+    """
+    g = _tombstone_graph()
+    before = _row("SELECT updated_at FROM nodes WHERE id = ?", g["ana"])["updated_at"]
+    time.sleep(0.01)
+
+    assert store.delete_node(g["ana"]) is True
+
+    row = _row("SELECT deleted_at, updated_at FROM nodes WHERE id = ?", g["ana"])
+    assert row["updated_at"] > before, "the tombstone did not count as a write"
+    assert row["updated_at"] == row["deleted_at"], (
+        "deletion time and last-write time must agree, or a merge can order "
+        "the delete against the wrong instant"
+    )
+
+
+def test_delete_node_tombstones_its_edges_in_both_directions():
+    """7.1: edges are matched on `src_uuid`/`dst_uuid`, not the rowid pair."""
+    g = _tombstone_graph()
+    store.delete_node(g["ana"])
+
+    for eid in (g["e_hub_ana"], g["e_ana_fact"]):
+        e = _row("SELECT id, deleted_at, updated_at FROM edges WHERE id = ?", eid)
+        assert e is not None, f"edge {eid} was hard-deleted instead of tombstoned"
+        assert e["deleted_at"] is not None, f"edge {eid} lost its tombstone"
+        assert e["updated_at"] >= e["deleted_at"] - 1.0
+
+    untouched = _row("SELECT deleted_at FROM edges WHERE id = ?", g["e_untouched"])
+    assert untouched["deleted_at"] is None, "an unrelated edge was tombstoned"
+
+
+def test_delete_node_edge_tombstone_shares_the_node_transaction():
+    """7.1: same transaction as the node write.
+
+    Proven by failing the node write and asserting the edge write rolled back
+    with it: if the two were separate transactions the edges would already be
+    tombstoned while the node stayed live — every relation gone from a memory
+    the user still has.
+    """
+    g = _tombstone_graph()
+    real_tx = store._tx
+
+    class _Boom(RuntimeError):
+        pass
+
+    import contextlib
+
+    @contextlib.contextmanager
+    def _exploding_tx():
+        with real_tx() as tx:
+            yield tx
+            raise _Boom("simulated crash after the tombstone writes")
+
+    with patch.object(store, "_tx", _exploding_tx):
+        assert store.delete_node(g["ana"]) is False
+
+    assert _row("SELECT deleted_at FROM nodes WHERE id = ?", g["ana"])["deleted_at"] is None
+    assert _row(
+        "SELECT deleted_at FROM edges WHERE id = ?", g["e_hub_ana"]
+    )["deleted_at"] is None, "the edge tombstone survived a rolled-back node delete"
+
+
+# ── 7.2 / 7.3 — FTS and vec rows stay HARD deletes, deliberately ──────────
+
+def test_delete_node_hard_deletes_the_fts_row_and_must_not_tombstone_it():
+    """7.2: `nodes_fts` is local derived state and is never synced.
+
+    Pinned as a deliberate keep, not an oversight. Turning this into a
+    tombstone fails here — and would also break the 7.11 invariant below.
+    """
+    g = _tombstone_graph()
+    store.delete_node(g["ana"])
+
+    remaining = store._connect().execute(
+        "SELECT count(*) FROM nodes_fts WHERE rowid = ?", (g["ana"],)
+    ).fetchone()[0]
+    assert remaining == 0, "the FTS row survived; FTS rows must be hard-deleted"
+
+
+def test_delete_node_hard_deletes_the_vec_row_and_must_not_tombstone_it():
+    """7.3: `vec_nodes` is local derived state too — hard delete, best-effort.
+
+    Also covers a consequence of PR7 that nothing else would notice:
+    `trg_nodes_delete_vec` is an AFTER DELETE trigger, so it stops firing the
+    moment the node delete becomes an UPDATE. The explicit statement in
+    `delete_node` is now the only thing cleaning vec_nodes.
+    """
+    g = _tombstone_graph()
+    c = store._connect()
+    store.create_vec_nodes_table(c)
+    store.upsert_vec_node(c, node_id=g["ana"], vector=[0.1] * 512)
+    assert c.execute(
+        "SELECT count(*) FROM vec_nodes WHERE node_id = ?", (g["ana"],)
+    ).fetchone()[0] == 1
+
+    store.delete_node(g["ana"])
+
+    assert c.execute(
+        "SELECT count(*) FROM vec_nodes WHERE node_id = ?", (g["ana"],)
+    ).fetchone()[0] == 0, "the vec row survived; vec_nodes rows must be hard-deleted"
+
+
+# ── 7.5 — delete_edge ─────────────────────────────────────────────────────
+
+def test_delete_edge_tombstones_the_edge_row():
+    """7.5: `delete_edge` marks instead of removing, and bumps `updated_at`."""
+    g = _tombstone_graph()
+    before = _row("SELECT updated_at FROM edges WHERE id = ?", g["e_hub_ana"])["updated_at"]
+    time.sleep(0.01)
+
+    assert store.delete_edge(g["e_hub_ana"]) is True
+
+    e = _row("SELECT deleted_at, updated_at FROM edges WHERE id = ?", g["e_hub_ana"])
+    assert e is not None, "the edge row was hard-deleted; a tombstone must survive"
+    assert e["deleted_at"] is not None
+    assert e["updated_at"] > before
+
+
+def test_delete_edge_twice_reports_false_the_second_time():
+    g = _tombstone_graph()
+    assert store.delete_edge(g["e_hub_ana"]) is True
+    assert store.delete_edge(g["e_hub_ana"]) is False
+
+
+# ── 7.11 — THE FTS INVARIANT (the named worst case) ───────────────────────
+
+def test_tombstoning_a_node_removes_its_fts_row_in_the_same_transaction():
+    """7.11: search must not hand back a memory the graph says is deleted.
+
+    Asserted directly on `nodes_fts` rather than through `search_nodes_fts`,
+    so a later `deleted_at IS NULL` filter added on the read side cannot make
+    this pass while the stale index row is still sitting there.
+    """
+    nid = store.add_node("fact", "un recuerdo que el usuario borra")
+    assert store._connect().execute(
+        "SELECT count(*) FROM nodes_fts WHERE rowid = ?", (nid,)
+    ).fetchone()[0] == 1
+
+    store.delete_node(nid)
+
+    assert store._connect().execute(
+        "SELECT count(*) FROM nodes_fts WHERE rowid = ?", (nid,)
+    ).fetchone()[0] == 0, (
+        "nodes_fts still carries the deleted node — search would return a "
+        "memory the user deleted"
+    )
+
+
+def test_fts_invariant_holds_across_every_tombstoning_path():
+    """No `nodes_fts` rowid may join a node carrying `deleted_at`.
+
+    Stated as a whole-database invariant, not per call site, so a future
+    tombstone path that forgets the FTS row is caught here rather than by the
+    user searching for something they deleted.
+    """
+    g = _tombstone_graph()
+    store.delete_node(g["ana"])
+    store.delete_node(g["fact"])
+
+    orphans = store._connect().execute(
+        "SELECT f.rowid FROM nodes_fts f JOIN nodes n ON n.id = f.rowid "
+        "WHERE n.deleted_at IS NOT NULL"
+    ).fetchall()
+    assert orphans == [], f"FTS rows survive for tombstoned nodes: {[r[0] for r in orphans]}"
+
+
+def test_search_nodes_fts_cannot_return_a_tombstoned_node():
+    """The user-facing half of 7.11, through the real search entry point."""
+    store.add_node("fact", "Axi corre en CachyOS")
+    doomed = store.add_node("fact", "Axi corre en Windows")
+    assert len(store.search_nodes_fts("Axi")) == 2
+
+    store.delete_node(doomed)
+
+    hits = store.search_nodes_fts("Axi")
+    assert [h["id"] for h in hits] == [
+        h["id"] for h in hits if h["id"] != doomed
+    ], "search returned a deleted memory"
+    assert len(hits) == 1
+
+
+# ── 7.9 — tombstoned rows are invisible to every read path ────────────────
+#
+# These tombstone the row DIRECTLY rather than going through `delete_node`.
+# Two reasons, and the first is the one that matters:
+#
+#   1. Going through `delete_node` would let these tests pass against the
+#      pre-PR7 hard delete for the wrong reason — the row is invisible because
+#      it is gone, not because the read filters. They would then only break in
+#      the exact half-applied state PR7 must never be left in (writes
+#      tombstoning, reads not yet filtering), i.e. they would prove nothing
+#      about the filter and would go RED at the worst possible moment.
+#   2. A row tombstoned without a local delete is the shape sync produces: a
+#      remote tombstone applied by the sync engine. The read filter is the
+#      only thing standing between that and the memory reappearing.
+
+def _tombstone_node(node_id: int) -> None:
+    store._connect().execute(
+        "UPDATE nodes SET deleted_at = ? WHERE id = ?", (time.time(), node_id)
+    )
+
+
+def _tombstone_edge(edge_id: int) -> None:
+    store._connect().execute(
+        "UPDATE edges SET deleted_at = ?, updated_at = ? WHERE id = ?",
+        (time.time(), time.time(), edge_id),
+    )
+
+
+def test_get_node_does_not_return_a_tombstoned_node():
+    g = _tombstone_graph()
+    _tombstone_node(g["ana"])
+    assert store.get_node(g["ana"]) is None
+
+
+def test_neighbors_skips_a_tombstoned_neighbour_node():
+    g = _tombstone_graph()
+    assert {n["id"] for n in store.neighbors(g["hub"])} == {g["ana"], g["other"]}
+
+    _tombstone_node(g["ana"])
+    assert {n["id"] for n in store.neighbors(g["hub"])} == {g["other"]}
+
+
+def test_neighbors_skips_an_edge_tombstoned_on_its_own():
+    """A live node reached only through a deleted relation is not a neighbour."""
+    g = _tombstone_graph()
+    _tombstone_edge(g["e_untouched"])
+    assert {n["id"] for n in store.neighbors(g["hub"])} == {g["ana"]}
+
+
+def test_neighbors_with_an_edge_kind_filter_also_skips_tombstones():
+    """The `edge_kind` branch is a separate SQL string and a separate risk."""
+    g = _tombstone_graph()
+    assert {n["id"] for n in store.neighbors(g["hub"], "esposa")} == {g["ana"]}
+    _tombstone_edge(g["e_hub_ana"])
+    assert store.neighbors(g["hub"], "esposa") == []
+
+
+def test_same_day_neighbors_skips_tombstones_in_both_arms():
+    a = store.add_node("fact", "desayuno")
+    b = store.add_node("fact", "junta")
+    d = store.add_node("fact", "cena")
+    store.add_edge(a, b, "same-day")   # a is the src arm
+    store.add_edge(d, a, "same-day")   # a is the dst arm
+    assert {n["id"] for n in store.same_day_neighbors(a)} == {b, d}
+
+    _tombstone_node(b)
+    _tombstone_node(d)
+    assert store.same_day_neighbors(a) == []
+
+
+def test_same_day_neighbors_skips_a_tombstoned_edge_in_both_arms():
+    a = store.add_node("fact", "desayuno")
+    b = store.add_node("fact", "junta")
+    d = store.add_node("fact", "cena")
+    e1 = store.add_edge(a, b, "same-day")
+    e2 = store.add_edge(d, a, "same-day")
+    _tombstone_edge(e1)
+    _tombstone_edge(e2)
+    assert store.same_day_neighbors(a) == []
+
+
+def test_recent_facts_skips_a_tombstoned_fact():
+    live = store.add_node("fact", "presión 110/81")
+    doomed = store.add_node("fact", "presión 200/120")
+    assert {r["id"] for r in store.recent_facts()} == {live, doomed}
+
+    _tombstone_node(doomed)
+    assert {r["id"] for r in store.recent_facts()} == {live}
+
+
+def test_find_fact_by_label_skips_a_tombstoned_fact():
+    """A tombstoned duplicate must not block re-recording the same fact.
+
+    If the dedup guard kept matching the deleted row, the user could delete a
+    fact and then never be able to record it again — the graph would silently
+    refuse and report nothing.
+    """
+    nid = store.add_node("fact", "toma losartán")
+    assert store.find_fact_by_label("toma losartán") == nid
+    _tombstone_node(nid)
+    assert store.find_fact_by_label("toma losartán") is None
+
+
+def test_search_nodes_fts_filters_a_node_tombstoned_without_a_local_delete():
+    """The FTS invariant covers LOCAL deletes; this covers the sync shape.
+
+    `delete_node` removes the `nodes_fts` row, so the invariant alone protects
+    the local path. A tombstone arriving from a peer does not go through
+    `delete_node`, and then only the read filter stops search from handing back
+    a memory the user deleted on their phone.
+    """
+    store.add_node("fact", "Axi corre en CachyOS")
+    doomed = store.add_node("fact", "Axi corre en Windows")
+    _tombstone_node(doomed)
+
+    assert [h["id"] for h in store.search_nodes_fts("Axi")] != [doomed]
+    assert doomed not in {h["id"] for h in store.search_nodes_fts("Axi")}
+
+
+def test_similar_to_guard_ignores_a_tombstoned_edge():
+    """A tombstoned relation must not permanently block re-linking.
+
+    The duplicate guard in `check_and_create_similar_to_edges` is a READ. If it
+    kept seeing the tombstone, a deleted `similar-to` edge could never be
+    re-derived, and nothing would say why.
+    """
+    a = store.add_node("fact", "vive en México")
+    b = store.add_node("fact", "vive en Ciudad de México")
+    eid = store.add_edge(a, b, "similar-to")
+    _tombstone_edge(eid)
+
+    c = store._connect()
+    exists = c.execute(
+        "SELECT 1 FROM edges WHERE "
+        "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "relation = 'similar-to' AND deleted_at IS NULL LIMIT 1",
+        (a, b),
+    ).fetchone()
+    assert exists is None
+
+    with patch.object(store, "knn_nodes_with_distance", lambda *a2, **k: [(b, 0.05)]), \
+         patch.object(store, "_load_sqlite_vec", lambda *a2, **k: None):
+        c.execute(
+            "UPDATE nodes SET embedding = ?, embedding_dim = 512 WHERE id = ?",
+            (struct.pack("512f", *([0.1] * 512)), a),
+        )
+        created = store.check_and_create_similar_to_edges(a, c)
+    assert created == 1, "the tombstoned edge blocked re-linking"
+
+
+def test_semantic_search_metadata_fetch_skips_tombstoned_nodes():
+    """vec rows are hard-deleted, but the metadata fetch filters too.
+
+    Defence in depth: `vec_nodes` cleanup is explicitly best-effort (it is
+    wrapped in try/except because sqlite-vec may be unloaded), so a surviving
+    vec row must not be able to resurface a deleted memory in recall.
+    """
+    live = store.add_node("fact", "vive en México")
+    doomed = store.add_node("fact", "vive en Marte")
+    _tombstone_node(doomed)
+
+    c = store._connect()
+    with patch.object(store, "embed_text", lambda *a, **k: [0.1] * 512), \
+         patch.object(store, "knn_nodes_scored", lambda *a, **k: [(doomed, 0.1), (live, 0.2)]):
+        out = store.semantic_search_nodes("vive", conn=c)
+
+    assert [r["id"] for r in out] == [live]
+
+
+# ── 7.14 — dangling edges: loud, report-only, never a hard failure ────────
+
+def test_report_dangling_edges_reports_and_does_not_raise():
+    """7.14: an endpoint uuid with no live node is LEGAL.
+
+    Mobile's model allows an edge to sync before its node arrives, so this can
+    never be a hard failure. It must still be visible: silently ignoring it is
+    how a permanently broken link stops being anyone's problem.
+    """
+    hub = store.add_node("person", "Héctor", {"role": "user"})
+    ana = store.add_node("person", "Ana Ríos")
+    eid = store.add_edge(hub, ana, "esposa")
+    # Tombstone the NODE only, leaving the edge live. This is the shape sync
+    # produces: a remote tombstone for the node applied before (or without)
+    # the matching edge tombstone, or an edge that arrived before its node.
+    store._connect().execute(
+        "UPDATE nodes SET deleted_at = ? WHERE id = ?", (time.time(), ana)
+    )
+
+    report = store.report_dangling_edges()
+
+    assert isinstance(report, list)
+    assert len(report) == 1
+    entry = report[0]
+    assert f"id={eid}" in entry, f"the report does not name the offending edge: {entry!r}"
+    assert "Row object" not in entry, "the report leaked a repr instead of values"
+    assert "dst_uuid" in entry
+
+
+def test_report_dangling_edges_is_empty_on_a_healthy_graph():
+    _tombstone_graph()
+    assert store.report_dangling_edges() == []
+
+
+def test_report_dangling_edges_ignores_tombstoned_edges():
+    """A tombstoned edge pointing at a tombstoned node is not a dangling edge.
+
+    Both sides are deleted, which is a consistent state, not a broken link.
+    Reporting it would bury the real cases in noise from every normal delete.
+    """
+    g = _tombstone_graph()
+    store.delete_node(g["ana"])  # tombstones ana AND both of its edges
+    assert store.report_dangling_edges() == []
+
+
+def test_report_dangling_edges_raises_when_it_cannot_run():
+    """LifeOS silent-failure rule: a check that cannot run fails loudly.
+
+    Report-only applies to the FINDINGS, not to the check itself. A check that
+    silently returns "nothing wrong" because it could not execute is the exact
+    shape this codebase has already had to fix once.
+    """
+    class _BrokenConn:
+        def execute(self, *a, **k):
+            raise RuntimeError("no such table: edges")
+
+    with pytest.raises(RuntimeError) as excinfo:
+        store.report_dangling_edges(conn=_BrokenConn())
+    assert "dangling-edge check could not run" in str(excinfo.value)

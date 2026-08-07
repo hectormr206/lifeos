@@ -313,20 +313,29 @@ class TestLeafWriterRouting:
         assert (row["from_id"], row["to_id"], row["kind"]) == (a, b, "rel")
 
     def test_delete_node_forwarded(self):
+        """PR7: the forwarded delete tombstones instead of removing.
+
+        This test is about ROUTING — that `delete_node` reaches the leaf writer
+        and takes effect — not about the storage shape of a delete. It used to
+        express "took effect" as "the row is gone", which stopped being what a
+        delete means. Expressed now as "the row is no longer live", so the test
+        keeps checking routing rather than quietly re-asserting a hard delete.
+        """
         nid = store.add_node(kind="fact", label="doomed")
         assert store.delete_node(nid) is True
         gone = store._connect().execute(
-            "SELECT id FROM nodes WHERE id = ?", (nid,)
+            "SELECT id FROM nodes WHERE id = ? AND deleted_at IS NULL", (nid,)
         ).fetchone()
         assert gone is None
 
     def test_delete_edge_forwarded(self):
+        """Same routing claim, same PR7 change of expression."""
         a = store.add_node(kind="fact", label="a")
         b = store.add_node(kind="fact", label="b")
         eid = store.add_edge(a, b, kind="rel")
         assert store.delete_edge(eid) is True
         gone = store._connect().execute(
-            "SELECT id FROM edges WHERE id = ?", (eid,)
+            "SELECT id FROM edges WHERE id = ? AND deleted_at IS NULL", (eid,)
         ).fetchone()
         assert gone is None
 
