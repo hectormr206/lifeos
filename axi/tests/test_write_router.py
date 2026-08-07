@@ -308,9 +308,11 @@ class TestLeafWriterRouting:
         eid = store.add_edge(a, b, kind="rel", data={"w": 1})
         assert isinstance(eid, int)
         row = store._connect().execute(
-            "SELECT from_id, to_id, kind FROM edges WHERE id = ?", (eid,)
+            "SELECT (SELECT id FROM nodes WHERE uuid = edges.src_uuid) AS from_id, "
+            "       (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id, "
+            "       relation FROM edges WHERE id = ?", (eid,)
         ).fetchone()
-        assert (row["from_id"], row["to_id"], row["kind"]) == (a, b, "rel")
+        assert (row["from_id"], row["to_id"], row["relation"]) == (a, b, "rel")
 
     def test_delete_node_forwarded(self):
         """PR7: the forwarded delete tombstones instead of removing.
@@ -476,8 +478,10 @@ class TestCompoundRoutesViaLeaves:
         c = store._connect()
         assert c.execute("SELECT COUNT(*) AS n FROM nodes WHERE id IN (?, ?)",
                          (a, b)).fetchone()["n"] == 2
-        assert c.execute("SELECT from_id, to_id FROM edges WHERE id = ?",
-                         (eid,)).fetchone()["from_id"] == a
+        assert c.execute(
+            "SELECT (SELECT id FROM nodes WHERE uuid = edges.src_uuid) AS from_id "
+            "FROM edges WHERE id = ?", (eid,)
+        ).fetchone()["from_id"] == a
 
 
 # ─── at-most-once: failure phase decides fallback safety ───────────────────

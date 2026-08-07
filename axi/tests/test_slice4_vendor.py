@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+import uuid as _uuid
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
@@ -147,9 +148,9 @@ def test_api_graph_full_node_shape():
     conn = store._connect()
     now = time.time()
     conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Contract test node", "{}", "health", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "Contract test node", "{}", "health", now, now),
     )
     conn.commit()
 

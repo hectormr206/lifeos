@@ -120,7 +120,7 @@ def test_temporal_fact_linked_to_user_and_entities(monkeypatch):
 
     # Linked to the user hub (edge kind 'about', hub -> fact).
     about = conn.execute(
-        "SELECT 1 FROM edges WHERE to_id=? AND kind='about' LIMIT 1", (fact_id,)
+        "SELECT 1 FROM edges WHERE dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='about' LIMIT 1", (fact_id,)
     ).fetchone()
     assert about is not None, "temporal fact must be linked to the user hub"
 
@@ -130,7 +130,7 @@ def test_temporal_fact_linked_to_user_and_entities(monkeypatch):
     ).fetchone()
     assert hyp is not None, "hipertensión entity must exist from the relations"
     mentions = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='mentions' LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='mentions' LIMIT 1",
         (fact_id, hyp["id"]),
     ).fetchone()
     assert mentions is not None, "temporal fact must mention the hipertensión entity"
@@ -163,7 +163,7 @@ def test_link_fact_to_entities_covers_condition_entities(monkeypatch):
     ).fetchone()
     assert hyp is not None
     mentions = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='mentions' LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='mentions' LIMIT 1",
         (fact_id, hyp["id"]),
     ).fetchone()
     assert mentions is not None, (

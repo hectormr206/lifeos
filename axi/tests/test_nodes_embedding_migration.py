@@ -13,6 +13,7 @@ from __future__ import annotations
 import time
 
 import pytest
+import uuid as _uuid
 
 
 def _get_column_names(conn) -> set[str]:
@@ -54,9 +55,9 @@ def test_migration_existing_rows_have_null_embedding(tmp_path, monkeypatch):
     conn = store._connect()
     now = time.time()
     conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "existing node", "{}", "test", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "existing node", "{}", "test", now, now),
     )
     conn.commit()
 

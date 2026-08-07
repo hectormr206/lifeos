@@ -280,7 +280,15 @@ def test_fresh_db_edges_table_has_pr5_columns_via_create_table_alone():
     ddl = c.execute(
         "SELECT sql FROM sqlite_master WHERE type='table' AND name='edges'"
     ).fetchone()[0]
-    assert "GENERATED ALWAYS AS (kind) VIRTUAL" in ddl
+    # PR5 asserted `relation` here as `GENERATED ALWAYS AS (kind) VIRTUAL`:
+    # one storage cell shared with `kind`, which is what made drift between the
+    # two impossible during the expand window. PR8 ENDS that window — `kind` is
+    # gone, `relation` is the only name left and carries real storage. The
+    # anti-drift property survives for the same reason it was chosen: there is
+    # exactly one column, not two kept in step.
+    assert "GENERATED ALWAYS" not in ddl
+    assert "relation" in ddl
+    assert "from_id" not in ddl and "to_id" not in ddl
 
 
 def _rebuild_post_3a_pre_pr5_edges(c) -> None:
@@ -513,11 +521,19 @@ def test_backfill_repairs_an_edge_missing_only_dst_uuid():
     that edge is invisible to every read that resolves through `dst_uuid`.
 
     The backfill must therefore converge on EITHER endpoint being NULL.
+
+    PR8 note: this half-backfilled state is only REACHABLE on a database that
+    has not been rebuilt yet — `dst_uuid NOT NULL` makes it impossible
+    afterwards. The test therefore runs against the pre-PR8 shape, which is
+    where the repair actually has to work: the owner's real database on the
+    morning it is migrated.
     """
     c = store._connect()
+    _rebuild_post_3a_pre_pr5_edges(c)
     src = store.add_node("person", "Héctor")
     dst = store.add_node("fact", "usa CachyOS")
-    eid = store.add_edge(src, dst, "owns")
+    eid = _insert_post_3a_edge(c, src, dst, "owns")
+    store.migrate_edge_endpoint_uuids()
     c.execute("UPDATE edges SET dst_uuid=NULL WHERE id=?", (eid,))
 
     store.migrate_edge_endpoint_uuids()
@@ -553,7 +569,7 @@ def test_same_day_neighbors_uses_an_index_not_a_full_scan():
             "EXPLAIN QUERY PLAN "
             "SELECT n.id FROM nodes n JOIN edges e "
             "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' "
+            "AND e.dst_uuid = n.uuid AND e.relation= 'same-day' "
             "WHERE n.id != ?",
             (a, a),
         ).fetchall()
@@ -687,10 +703,10 @@ def test_adding_the_deleted_filter_does_not_turn_a_search_into_a_scan():
         "same_day_src": (
             "SELECT n.id FROM nodes n JOIN edges e "
             "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' WHERE n.id != ?",
+            "AND e.dst_uuid = n.uuid AND e.relation= 'same-day' WHERE n.id != ?",
             "SELECT n.id FROM nodes n JOIN edges e "
             "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
-            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' "
+            "AND e.dst_uuid = n.uuid AND e.relation= 'same-day' "
             "WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL",
             (a, a),
         ),
@@ -707,10 +723,10 @@ def test_adding_the_deleted_filter_does_not_turn_a_search_into_a_scan():
         "edge_exists": (
             "SELECT 1 FROM edges WHERE "
             "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation = ? LIMIT 1",
+            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation= ? LIMIT 1",
             "SELECT 1 FROM edges WHERE "
             "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation = ? "
+            "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND relation= ? "
             "AND deleted_at IS NULL LIMIT 1",
             (a, b, "same-day"),
         ),
@@ -769,3 +785,414 @@ def test_pr7_reverts_as_code_but_resurrects_soft_deleted_rows():
         "not see this row, which would make the revert safe; it is not"
     )
     assert store.get_node(nid) is None, "the filtered reader must still hide it"
+
+
+# ══════════════════ PR8 — THE POINT OF NO RETURN (tasks 8.7-8.14) ═══════════
+#
+# Single-transaction rebuild of `nodes`/`edges` to mobile's DDL. After this
+# migration runs there is no code-level revert: `from_id`/`to_id`/`kind` are
+# gone, so reverting the code gives you queries against columns that no longer
+# exist. Recovery is restore-from-verified-backup and nothing else, which is
+# why the gate in `test_migration_backup.py` had to be green first.
+
+
+def _ok_backup() -> str:
+    """A backup callable that succeeds. The gate itself is proven in
+    `test_migration_backup.py`; these tests are about the rebuild."""
+    return "/tmp/pr8-fake-verified-snapshot.db"
+
+
+def _cols(table: str) -> set[str]:
+    # table_xinfo, not table_info: table_info hides GENERATED columns in this
+    # SQLite build, so `relation` would read as absent on the OLD table.
+    return {
+        r[1] for r in store._connect().execute(f"PRAGMA table_xinfo({table})").fetchall()
+    }
+
+
+def _index_names(table: str) -> set[str]:
+    return {
+        r[0] for r in store._connect().execute(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name=?",
+            (table,),
+        ).fetchall()
+    }
+
+
+def test_rebuild_drops_the_rowid_endpoints_and_keeps_every_row(pre_pr8_graph):
+    """8.7 — the rebuild itself: old columns gone, mobile's shape in place,
+    every row still there with its id unchanged."""
+    ids = pre_pr8_graph["nodes"]
+    uuids = pre_pr8_graph["uuids"]
+    c = store._connect()
+    assert "from_id" in _cols("edges")  # sanity: genuinely pre-rebuild
+    nodes_before = c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    edges_before = c.execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+    assert store.migrate_rebuild_graph_tables(backup=_ok_backup) is True
+
+    edge_cols = _cols("edges")
+    assert {"from_id", "to_id", "kind"}.isdisjoint(edge_cols)
+    assert {"src_uuid", "dst_uuid", "relation", "updated_at"} <= edge_cols
+    assert c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == nodes_before
+    assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == edges_before
+
+    # ids copied EXPLICITLY, never reassigned by AUTOINCREMENT.
+    row = c.execute("SELECT uuid, label FROM nodes WHERE id=?", (ids["ana"],)).fetchone()
+    assert row["uuid"] == uuids["ana"]
+    assert row["label"] == "Ana Ríos"
+    # `relation` is now real storage carrying what `kind` held.
+    rels = {r[0] for r in c.execute("SELECT relation FROM edges").fetchall()}
+    assert {"esposa", "about", "same-day"} <= rels
+    # Tombstones are rows too. Dropping them would delete the user's deletions.
+    assert c.execute(
+        "SELECT deleted_at FROM nodes WHERE id=?", (ids["gone"],)
+    ).fetchone()["deleted_at"] is not None
+
+
+def test_rebuild_sets_user_version_and_is_a_no_op_on_the_second_call(pre_pr8_graph):
+    """8.7/8.14 — `PRAGMA user_version` is the idempotence gate. A second call
+    must not re-run (and must not take a second backup)."""
+    c = store._connect()
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert store.migrate_rebuild_graph_tables(backup=_ok_backup) is True
+    assert c.execute("PRAGMA user_version").fetchone()[0] == \
+        store.GRAPH_REBUILD_USER_VERSION
+
+    def _must_not_run() -> str:
+        raise AssertionError("second call took a backup — it did not early-return")
+
+    assert store.migrate_rebuild_graph_tables(backup=_must_not_run) is False
+
+
+def test_in_transaction_verification_runs_while_both_tables_coexist(pre_pr8_graph):
+    """8.8 — verification happens BEFORE `DROP`/`RENAME`/`COMMIT`.
+
+    Verifying after the rename verifies nothing: the evidence — the old table
+    — is already gone. Asserted by observing, from inside the verification
+    call itself, that `nodes`/`nodes_new` and `edges`/`edges_new` all exist.
+    """
+    seen: dict[str, set[str]] = {}
+    real_verify = store._rebuild_verify
+
+    def _spy(tx):
+        seen["tables"] = {
+            r[0] for r in tx.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        return real_verify(tx)
+
+    store._rebuild_verify = _spy
+    try:
+        store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    finally:
+        store._rebuild_verify = real_verify
+    assert {"nodes", "nodes_new", "edges", "edges_new"} <= seen["tables"]
+
+
+def test_a_lost_row_makes_verification_raise_and_rolls_the_whole_thing_back(
+    pre_pr8_graph,
+):
+    """8.9 — row-loss detectability, proven by ROLLBACK, not by a return value.
+
+    Asserting that a check function returns False proves the function works.
+    It does not prove the migration reacts to it. Here a row is genuinely
+    dropped during the copy and the assertion is on the DATABASE afterwards:
+    the OLD schema fully intact, unmigrated, with every row still present.
+    """
+    c = store._connect()
+    ids = pre_pr8_graph["nodes"]
+    nodes_before = c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0]
+    indexes_before = _index_names("nodes") | _index_names("edges")
+    real_copy = store._rebuild_copy_rows
+
+    def _lossy_copy(tx):
+        real_copy(tx)
+        tx.execute("DELETE FROM nodes_new WHERE id = ?", (ids["ana"],))
+
+    store._rebuild_copy_rows = _lossy_copy
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    finally:
+        store._rebuild_copy_rows = real_copy
+    assert "nodes" in str(exc.value)
+
+    assert "from_id" in _cols("edges"), "the OLD schema must survive intact"
+    assert "kind" in _cols("edges")
+    assert c.execute("SELECT COUNT(*) FROM nodes").fetchone()[0] == nodes_before
+    assert c.execute(
+        "SELECT label FROM nodes WHERE id=?", (ids["ana"],)
+    ).fetchone()["label"] == "Ana Ríos"
+    assert _index_names("nodes") | _index_names("edges") == indexes_before
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+    assert "nodes_new" not in {
+        r[0] for r in c.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+    }
+
+
+def test_a_killed_process_mid_rebuild_leaves_the_old_schema_unmigrated(pre_pr8_graph):
+    """8.14 — a kill between `BEGIN IMMEDIATE` and `COMMIT` (simulated with a
+    raise, not by killing the interpreter) rolls back to the intact old schema,
+    and restarting is a clean retry gated by `PRAGMA user_version`."""
+    c = store._connect()
+    real_verify = store._rebuild_verify
+
+    def _die(tx):
+        raise KeyboardInterrupt("simulated SIGINT mid-rebuild")
+
+    store._rebuild_verify = _die
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    finally:
+        store._rebuild_verify = real_verify
+
+    assert "from_id" in _cols("edges")
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+    # Clean retry: the same call now completes.
+    assert store.migrate_rebuild_graph_tables(backup=_ok_backup) is True
+    assert "from_id" not in _cols("edges")
+    assert c.execute("PRAGMA user_version").fetchone()[0] == \
+        store.GRAPH_REBUILD_USER_VERSION
+
+
+def test_node_id_foreign_keys_still_resolve_after_the_rebuild(pre_pr8_graph):
+    """8.11 — `conversations.node_id` and `meetings.node_id` (and every other
+    table pointing at `nodes.id`) still resolve, because the copy carried the
+    ids explicitly instead of letting AUTOINCREMENT reassign them."""
+    c = store._connect()
+    nid = pre_pr8_graph["nodes"]["fact"]
+    c.execute(
+        "INSERT INTO conversations(ts, user_text, axi_text, node_id) "
+        "VALUES (?, ?, ?, ?)", (1000.0, "hola", "hola", nid),
+    )
+    c.execute(
+        "INSERT INTO meetings(start_time, data_dir, status, node_id, created_at) "
+        "VALUES (?, ?, ?, ?, ?)", (1000.0, "/tmp/m", "done", nid, 1000.0),
+    )
+
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+
+    assert c.execute("PRAGMA foreign_key_check").fetchall() == []
+    joined = c.execute(
+        "SELECT n.label FROM conversations cv JOIN nodes n ON n.id = cv.node_id"
+    ).fetchone()
+    assert joined["label"] == "hipertensión diagnosticada"
+    joined = c.execute(
+        "SELECT n.label FROM meetings m JOIN nodes n ON n.id = m.node_id"
+    ).fetchone()
+    assert joined["label"] == "hipertensión diagnosticada"
+
+
+def test_rebuild_tightens_the_constraints_to_mobiles_ddl(pre_pr8_graph):
+    """8.12 — not just column PRESENCE: `uuid NOT NULL UNIQUE` and
+    `lamport NOT NULL DEFAULT 0`, enforced by the engine."""
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    c = store._connect()
+
+    for table in ("nodes", "edges"):
+        info = {r[1]: r for r in c.execute(f"PRAGMA table_xinfo({table})").fetchall()}
+        assert info["uuid"][3] == 1, f"{table}.uuid must be NOT NULL"
+        assert info["lamport"][3] == 1, f"{table}.lamport must be NOT NULL"
+        assert str(info["lamport"][4]) == "0", f"{table}.lamport must DEFAULT 0"
+    for col in ("src_uuid", "dst_uuid", "relation", "updated_at"):
+        info = {r[1]: r for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()}
+        assert info[col][3] == 1, f"edges.{col} must be NOT NULL (mobile's DDL)"
+
+    # UNIQUE is real, not decorative.
+    u = c.execute("SELECT uuid FROM nodes LIMIT 1").fetchone()[0]
+    with pytest.raises(Exception):
+        c.execute(
+            "INSERT INTO nodes(uuid, kind, label, created_at, updated_at) "
+            "VALUES (?, 'fact', 'dup', 1.0, 1.0)", (u,),
+        )
+    # NOT NULL is real too — this is what makes the raw-INSERT test fixtures
+    # that skipped `uuid` fail HARD instead of being quietly wrong.
+    with pytest.raises(Exception):
+        c.execute(
+            "INSERT INTO nodes(kind, label, created_at, updated_at) "
+            "VALUES ('fact', 'sin uuid', 1.0, 1.0)"
+        )
+    # lamport defaults rather than nulls.
+    assert {r[0] for r in c.execute("SELECT lamport FROM nodes").fetchall()} == {0}
+
+
+def test_any_sql_still_naming_the_old_columns_fails_loudly(pre_pr8_graph):
+    """8.13 — the silent-mis-assignment failure mode becomes a hard error by
+    construction. Asserted directly rather than assumed.
+
+    This is a BACKSTOP, not the enumeration: it only fires for SQL that
+    actually executes. The enumeration of every site naming these columns is
+    what stops a query from being missed in the first place.
+    """
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    c = store._connect()
+    for sql in (
+        "SELECT from_id FROM edges",
+        "SELECT to_id FROM edges",
+        "SELECT e.kind FROM edges e",
+        "SELECT 1 FROM edges WHERE from_id = 1 AND to_id = 2 AND kind = 'x'",
+    ):
+        with pytest.raises(Exception) as exc:
+            c.execute(sql).fetchall()
+        assert "no such column" in str(exc.value).lower(), sql
+
+
+def test_rebuild_restores_the_indexes_the_drop_destroyed(pre_pr8_graph):
+    """DROP TABLE takes every index on that table with it, and the RENAME does
+    not bring them back. Measured, not assumed (probe: after DROP/RENAME the
+    only index left on `nodes` was the implicit UNIQUE one).
+
+    Without this the graph browser and the recall hot path silently degrade to
+    full table scans: every answer still correct, no test failing, just slower
+    forever — the exact defect shape this chain has already met three times.
+    """
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    assert {"idx_nodes_kind", "idx_nodes_domain", "idx_nodes_created",
+            "idx_nodes_deleted"} <= _index_names("nodes")
+    assert {"idx_edges_src", "idx_edges_dst", "idx_edges_relation",
+            "idx_edges_deleted"} <= _index_names("edges")
+    # The three indexes on the columns that no longer exist are gone with them.
+    assert {"idx_edges_from", "idx_edges_to", "idx_edges_kind"}.isdisjoint(
+        _index_names("edges")
+    )
+
+
+def test_the_tombstone_indexes_stay_partial_after_the_rebuild(pre_pr8_graph):
+    """The deliberate, documented divergence from mobile's DDL survives PR8.
+
+    Mobile's index is unconditional; axi's carries `WHERE deleted_at IS NOT
+    NULL`. PR8 copies mobile's DDL and is exactly where someone restores the
+    symmetry. Measured in PR7: a FULL index on `deleted_at` gets chosen for
+    the `deleted_at IS NULL` filter every read now carries, and since nearly
+    every row is NULL that "SEARCH" walks the whole table. Name and column
+    match mobile; only the predicate differs, and an index predicate is a
+    local planner concern, not a wire contract.
+    """
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    c = store._connect()
+    for name in ("idx_nodes_deleted", "idx_edges_deleted"):
+        sql = c.execute(
+            "SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)
+        ).fetchone()[0]
+        assert "WHERE deleted_at IS NOT NULL" in sql, name
+
+
+def test_rebuild_restores_the_vec_cleanup_trigger(pre_pr8_graph):
+    """`trg_nodes_delete_vec` is an AFTER DELETE trigger ON nodes, so
+    `DROP TABLE nodes` destroys it and the RENAME does not restore it.
+
+    `init_db()` calls `create_vec_nodes_table` BEFORE the migrations, so
+    nothing would put it back until the NEXT startup — a window in which a
+    hard node delete leaves an orphan embedding behind. Restored inside the
+    migration instead of relying on call ordering.
+    """
+    c = store._connect()
+    had_trigger = c.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+        "AND name='trg_nodes_delete_vec'"
+    ).fetchone()[0]
+    if not had_trigger:
+        pytest.skip("sqlite-vec unavailable in this environment")
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    assert c.execute(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' "
+        "AND name='trg_nodes_delete_vec'"
+    ).fetchone()[0] == 1
+
+
+def test_rebuild_leaves_the_fts_index_intact(pre_pr8_graph):
+    """`nodes_fts` addresses nodes by rowid. The explicit id copy is what keeps
+    those rowids pointing at the same memories; a reassigning AUTOINCREMENT
+    would silently re-attach every search hit to a different node."""
+    ids = pre_pr8_graph["nodes"]
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    c = store._connect()
+    row = c.execute(
+        "SELECT n.id, n.label FROM nodes_fts f JOIN nodes n ON n.id = f.rowid "
+        "WHERE nodes_fts MATCH 'hipertension'"
+    ).fetchone()
+    assert row["id"] == ids["fact"]
+    assert row["label"] == "hipertensión diagnosticada"
+
+
+def test_production_writers_speak_the_new_shape_end_to_end(pre_pr8_graph):
+    """The rebuild is only half the contract: after it, `add_node`/`add_edge`
+    must still work — against a table whose `uuid` is NOT NULL and whose
+    endpoint columns are the uuids. Nothing in the delete/read paths may have
+    been left addressing the columns that are gone."""
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    a = store.add_node("person", "Nuevo")
+    b = store.add_node("fact", "algo nuevo")
+    e = store.add_edge(a, b, "about")
+    c = store._connect()
+    row = c.execute(
+        "SELECT uuid, src_uuid, dst_uuid, relation, updated_at, lamport "
+        "FROM edges WHERE id=?", (e,)
+    ).fetchone()
+    assert row["uuid"] is not None
+    assert row["src_uuid"] == c.execute(
+        "SELECT uuid FROM nodes WHERE id=?", (a,)).fetchone()[0]
+    assert row["relation"] == "about"
+    assert row["updated_at"] is not None
+    assert row["lamport"] == 0
+    assert store.delete_node(a) is True
+    assert store.get_node(a) is None
+    store.verify_edge_endpoint_convergence()
+    # The delete tombstoned the edge along with the node, and a tombstoned edge
+    # is never reported — otherwise every deletion the user ever made would
+    # bury the real findings. No FK exists any more to have cascaded it away.
+    assert store.report_dangling_edges() == []
+
+
+def test_rebuilt_tables_keep_the_index_plans_the_graph_reads_depend_on(pre_pr8_graph):
+    """The measurement, on a REBUILT database rather than a fresh one.
+
+    Every previous index test in this chain runs against `_SCHEMA`'s fresh DDL.
+    The owner's database does not take that path — it takes the rebuild, which
+    creates its own indexes after `DROP TABLE` destroyed the originals. If that
+    list ever drifts from `_SCHEMA`'s, every graph read on the ONE database
+    that matters degrades to a full scan while every test stays green.
+
+    Measured WITHOUT `ANALYZE`, because `store.py` never runs it and with it
+    the planner behaves differently — measuring a configuration that does not
+    ship proves nothing.
+
+    "SEARCH not SCAN" is asserted together with the index NAME, deliberately:
+    a SEARCH on a near-constant column is a full scan wearing an index's name,
+    which is exactly how the tombstone-index defect hid in PR7.
+    """
+    store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    c = store._connect()
+    node_uuid = pre_pr8_graph["uuids"]["hub"]
+
+    def plan(sql: str, params: tuple) -> str:
+        return "\n".join(
+            str(r[3]) for r in c.execute("EXPLAIN QUERY PLAN " + sql, params).fetchall()
+        )
+
+    p = plan("SELECT id FROM edges WHERE src_uuid = ? AND deleted_at IS NULL",
+             (node_uuid,))
+    assert "idx_edges_src" in p, p
+    assert "SCAN edges" not in p, p
+    assert "idx_edges_deleted" not in p, (
+        "the tombstone index was chosen for the LIVE-row filter — that is the "
+        "full-table scan the partial predicate exists to prevent: " + p
+    )
+
+    p = plan("SELECT id FROM edges WHERE (src_uuid = ? OR dst_uuid = ?) "
+             "AND deleted_at IS NULL", (node_uuid, node_uuid))
+    assert "idx_edges_src" in p and "idx_edges_dst" in p, p
+    assert "SCAN edges" not in p, p
+
+    p = plan("SELECT id FROM edges WHERE relation = ? AND deleted_at IS NULL",
+             ("about",))
+    assert "idx_edges_relation" in p, p
+
+    # …and the query the partial index is actually FOR (the sync push).
+    p = plan("SELECT id FROM edges WHERE deleted_at IS NOT NULL", ())
+    assert "idx_edges_deleted" in p, p

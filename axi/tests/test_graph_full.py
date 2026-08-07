@@ -14,6 +14,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+import uuid as _uuid
 
 
 def _float32_blob(values: list[float]) -> bytes:
@@ -75,10 +76,10 @@ def test_graph_full_has_embedding_field():
 
     blob = _float32_blob([0.1] * 512)
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, "
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, "
         "embedding, embedding_model, embedding_dim) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("fact", "Embedded node", "{}", "health", now, now, blob, "test-model", 512),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "Embedded node", "{}", "health", now, now, blob, "test-model", 512),
     )
     nid = cur.lastrowid
     conn.commit()

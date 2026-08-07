@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import patch, MagicMock, call
 
 import pytest
+import uuid as _uuid
 
 
 def _make_interaction_dict(
@@ -87,8 +88,8 @@ def test_backfill_skips_already_mapped_interactions(monkeypatch):
     conn = store._connect()
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) VALUES (?,?,?,?,?,?)",
-        ("fact", "already mapped", "{}", "relationships", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) VALUES (?,?,?,?,?,?,?)",
+        (str(_uuid.uuid4()), "fact", "already mapped", "{}", "relationships", now, now),
     )
     conn.commit()
     existing_node_id = cur.lastrowid
@@ -148,9 +149,9 @@ def test_backfill_similar_to_edges_runs_for_embedded_nodes(monkeypatch):
     blob = struct.pack("512f", *([0.1] * 512))
     for i in [10, 11]:
         conn.execute(
-            "INSERT INTO nodes(id, kind, label, data, domain, created_at, updated_at, "
-            "embedding, embedding_model, embedding_dim) VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (i, "fact", f"node{i}", "{}", "test", now, now, blob, "test-model", 512),
+            "INSERT INTO nodes(id, uuid, kind, label, data, domain, created_at, updated_at, "
+            "embedding, embedding_model, embedding_dim) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            (i, str(_uuid.uuid4()), "fact", f"node{i}", "{}", "test", now, now, blob, "test-model", 512),
         )
         conn.execute(
             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",

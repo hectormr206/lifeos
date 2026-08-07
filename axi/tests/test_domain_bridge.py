@@ -20,6 +20,7 @@ from typing import Any
 from unittest.mock import patch, MagicMock
 
 import pytest
+import uuid as _uuid
 
 
 # ─── helpers ────────────────────────────────────────────────────────────────
@@ -29,9 +30,9 @@ def _insert_fact_node(conn, *, label: str = "test", domain: str = "health") -> i
     """Insert a bare fact node directly; return its id."""
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", label, "{}", domain, now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", label, "{}", domain, now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -45,10 +46,10 @@ def _insert_embedded_node(conn, *, label: str = "test", domain: str = "health") 
     dim = 512
     blob = struct.pack(f"{dim}f", *([0.1] * dim))
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, "
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, "
         "embedding, embedding_model, embedding_dim) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("fact", label, "{}", domain, now, now, blob, "test", dim),
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", label, "{}", domain, now, now, blob, "test", dim),
     )
     conn.commit()
     nid = cur.lastrowid
@@ -471,8 +472,8 @@ def test_same_day_linker_connects_health_and_meeting_nodes():
     # Check there is an edge between the two nodes.
     edge = c.execute(
         "SELECT 1 FROM edges WHERE "
-        "((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) "
-        "AND kind='same-day'",
+        "((src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) OR (src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?))) "
+        "AND relation='same-day'",
         (health_nid, meeting_nid, meeting_nid, health_nid),
     ).fetchone()
     assert edge is not None, (

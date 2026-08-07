@@ -388,23 +388,29 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
                 continue
             did = r["id"]
             with store._tx() as tx:  # noqa: SLF001
-                # Dual-write src_uuid/dst_uuid to the CANONICAL node's uuid
-                # in the SAME transaction as the from_id/to_id rewrite (PR5
-                # "Expand" — design-schema.md Decision 2 step 1). Doing this
-                # as a follow-up step instead would let a crash between the
-                # two leave from_id/src_uuid disagreeing — the exact
-                # dual-representation drift the design flags.
+                # PR8: the endpoints ARE the uuids — there is no longer a
+                # second, integer representation to keep in step, so the whole
+                # dual-representation drift risk the design flagged here is
+                # gone by construction rather than by discipline. `updated_at`
+                # is bumped because re-pointing an edge IS a write: leave it
+                # stale and last-writer-wins lets a peer's older copy of this
+                # edge beat the merge on the next sync.
                 canonical_row = tx.execute(
                     "SELECT uuid FROM nodes WHERE id=?", (cid,)
                 ).fetchone()
+                loser_row = tx.execute(
+                    "SELECT uuid FROM nodes WHERE id=?", (did,)
+                ).fetchone()
                 canonical_uuid = canonical_row[0] if canonical_row else None
+                loser_uuid = loser_row[0] if loser_row else None
+                merged_at = time.time()
                 tx.execute(
-                    "UPDATE edges SET from_id=?, src_uuid=? WHERE from_id=?",
-                    (cid, canonical_uuid, did),
+                    "UPDATE edges SET src_uuid=?, updated_at=? WHERE src_uuid=?",
+                    (canonical_uuid, merged_at, loser_uuid),
                 )
                 tx.execute(
-                    "UPDATE edges SET to_id=?, dst_uuid=? WHERE to_id=?",
-                    (cid, canonical_uuid, did),
+                    "UPDATE edges SET dst_uuid=?, updated_at=? WHERE dst_uuid=?",
+                    (canonical_uuid, merged_at, loser_uuid),
                 )
                 # PR7 (task 7.7): the merged-away node becomes a TOMBSTONE.
                 # Its edges were re-pointed at the canonical node above, in

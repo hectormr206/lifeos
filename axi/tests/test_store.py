@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from axi import store
+import uuid as _uuid
 
 
 def test_add_node_returns_id():
@@ -81,9 +82,12 @@ def test_edges_of_freshly_created_nodes_never_dual_write_null():
 
 
 def test_add_edge_dual_writes_src_dst_uuid():
-    """Task 5.5 RED: `add_edge` (store.py:1281) dual-writes src_uuid/dst_uuid
-    alongside from_id/to_id (PR5 "Expand" — old columns stay authoritative,
-    new ones just have to agree with them from the moment they're written).
+    """Task 5.5 RED: `add_edge` writes the endpoint uuids.
+
+    PR5 called this a DUAL write against the still-authoritative
+    `from_id`/`to_id`. PR8 dropped those, so `src_uuid`/`dst_uuid` are simply
+    the endpoints now — and being `NOT NULL`, an edge that fails to write them
+    does not exist rather than existing unreadably.
 
     The backfill call below is kept deliberately: `add_node` now assigns a uuid
     at insert time, so it is a no-op here, and running it anyway proves the
@@ -111,8 +115,13 @@ def test_add_edge_dual_writes_src_dst_uuid():
 
 
 def test_similar_to_edge_insert_dual_writes_src_dst_uuid():
-    """Task 5.6 RED: the similar-to edge insert (store.py:2978) dual-writes
-    src_uuid/dst_uuid alongside from_id/to_id, same as add_edge."""
+    """Task 5.6 RED: the similar-to edge insert writes the endpoint uuids.
+
+    PR5 called this a DUAL write, alongside `from_id`/`to_id`. PR8 removed the
+    integer endpoints, so it is simply the write now — and the edge also gets
+    its own `uuid`, without which `uuid NOT NULL UNIQUE` means the row cannot
+    exist at all.
+    """
     dim = 512
     now = time.time()
     vec_a = [1.0] + [0.0] * (dim - 1)
@@ -122,12 +131,12 @@ def test_similar_to_edge_insert_dual_writes_src_dst_uuid():
     for nid, label, vec in ((101, "node A", vec_a), (102, "node B", vec_b)):
         blob = struct.pack(f"{dim}f", *vec)
         c.execute(
-            "INSERT INTO nodes(id, kind, label, data, domain, created_at, "
+            "INSERT INTO nodes(id, uuid, kind, label, data, domain, created_at, "
             "updated_at, embedding, embedding_model, embedding_dim) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (nid, "fact", label, "{}", "test", now, now, blob, "test-model", dim),
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (nid, f"uuid-{nid}", "fact", label, "{}", "test", now, now, blob,
+             "test-model", dim),
         )
-        c.execute("UPDATE nodes SET uuid=? WHERE id=?", (f"uuid-{nid}", nid))
         c.execute(
             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
             (nid, blob),
@@ -141,12 +150,14 @@ def test_similar_to_edge_insert_dual_writes_src_dst_uuid():
         store.check_and_create_similar_to_edges(101, c, threshold=0.85)
 
     row = c.execute(
-        "SELECT src_uuid, dst_uuid FROM edges WHERE from_id=101 AND to_id=102 "
-        "AND kind='similar-to'"
+        "SELECT uuid, src_uuid, dst_uuid FROM edges "
+        "WHERE src_uuid='uuid-101' AND dst_uuid='uuid-102' "
+        "AND relation='similar-to'"
     ).fetchone()
     assert row is not None
     assert row["src_uuid"] == "uuid-101"
     assert row["dst_uuid"] == "uuid-102"
+    assert row["uuid"] is not None
 
 
 def test_add_conversation_and_recent():
@@ -537,23 +548,24 @@ def test_new_thread_can_query_vec_nodes():
 # invisibility gets its own tests below; this one stays a column-equivalence
 # oracle.
 _OLD_NEIGHBORS_KIND_SQL = (
-    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id "
-    "WHERE e.from_id = ? AND e.kind = ? "
+    "SELECT n.* FROM nodes n JOIN edges e ON n.uuid = e.dst_uuid "
+    "WHERE e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND e.relation = ? "
     "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 _OLD_NEIGHBORS_ANY_SQL = (
-    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id WHERE e.from_id = ? "
+    "SELECT n.* FROM nodes n JOIN edges e ON n.uuid = e.dst_uuid "
+    "WHERE e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
     "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 _OLD_SAME_DAY_SQL = """
     SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
     FROM nodes n
-    JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
+    JOIN edges e ON e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND n.uuid = e.dst_uuid AND e.relation = 'same-day'
     WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
     UNION
     SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
     FROM nodes n
-    JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
+    JOIN edges e ON e.dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND n.uuid = e.src_uuid AND e.relation = 'same-day'
     WHERE n.id != ? AND e.deleted_at IS NULL AND n.deleted_at IS NULL
 """
 
@@ -566,32 +578,49 @@ def _rows(cursor) -> list[dict]:
 
 
 def test_neighbors_resolves_edges_through_src_uuid_not_from_id():
-    """RED for 6a.1: `neighbors` must follow the endpoint uuids.
+    """6a.1's claim, now provable structurally instead of behaviourally.
 
-    The edge's old integer `from_id` is pointed at a decoy node while its
-    `src_uuid` still names the real source. A reader on `from_id` answers
-    "decoy"; a reader on `src_uuid` answers "source". Only one of those is
-    the shape mobile syncs against, so only one can pass.
+    This test used to point the edge's integer `from_id` at a decoy while
+    `src_uuid` still named the real source, so that a reader on the wrong
+    column gave the wrong answer. PR8 removed `from_id` outright: there is no
+    second representation left to disagree with, which is a STRONGER
+    guarantee than the old assertion, not a weaker one — the wrong column
+    cannot be read because it does not exist.
+
+    What is asserted instead: the column is genuinely gone, and `src_uuid` is
+    genuinely the endpoint — repointing it MOVES the edge, so nothing else is
+    quietly deciding which node a relation belongs to.
     """
     src = store.add_node("person", "Héctor")
     dst = store.add_node("fact", "usa CachyOS")
     decoy = store.add_node("person", "no es el origen")
     eid = store.add_edge(src, dst, "owns")
-    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+
+    cols = {r[1] for r in store._connect().execute("PRAGMA table_xinfo(edges)").fetchall()}
+    assert "from_id" not in cols and "to_id" not in cols
 
     assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [dst]
-    assert store.neighbors(decoy, edge_kind="owns") == []
+    store._connect().execute(
+        "UPDATE edges SET src_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert store.neighbors(src, edge_kind="owns") == []
+    assert [r["id"] for r in store.neighbors(decoy, edge_kind="owns")] == [dst]
 
 
 def test_neighbors_resolves_destination_through_dst_uuid_not_to_id():
-    """RED for 6a.1: the destination side of the same claim."""
+    """The destination side of the same claim — see the note above."""
     src = store.add_node("person", "Héctor")
     dst = store.add_node("fact", "usa CachyOS")
     decoy = store.add_node("fact", "no es el destino")
     eid = store.add_edge(src, dst, "owns")
-    store._connect().execute("UPDATE edges SET to_id=? WHERE id=?", (decoy, eid))
 
     assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [dst]
+    store._connect().execute(
+        "UPDATE edges SET dst_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [decoy]
 
 
 def test_neighbors_identical_to_pre_rewrite_query_on_pr6a_graph(pr6a_graph):
@@ -617,11 +646,19 @@ def test_same_day_neighbors_resolves_through_endpoint_uuids():
     b = store.add_node("fact", "nota B")
     decoy = store.add_node("fact", "señuelo")
     eid = store.add_edge(a, b, "same-day")
-    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
 
     assert [n["id"] for n in store.same_day_neighbors(a)] == [b]
     assert [n["id"] for n in store.same_day_neighbors(b)] == [a]
     assert store.same_day_neighbors(decoy) == []
+    # Both arms of the UNION resolve through the endpoint uuids: move the
+    # source endpoint and BOTH directions follow it.
+    store._connect().execute(
+        "UPDATE edges SET src_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert store.same_day_neighbors(a) == []
+    assert [n["id"] for n in store.same_day_neighbors(decoy)] == [b]
+    assert [n["id"] for n in store.same_day_neighbors(b)] == [decoy]
 
 
 def test_same_day_neighbors_identical_to_pre_rewrite_query(pr6a_graph):
@@ -655,11 +692,12 @@ def test_similar_to_dedupe_resolves_through_endpoint_uuids():
             "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
             (nid, blob),
         )
-    # An already-written similar-to edge whose integer endpoint drifted.
+    # An already-written similar-to edge, addressed the way the graph is
+    # addressed now: by endpoint uuid, with no integer endpoint to drift.
     c.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
-        "src_uuid, dst_uuid, updated_at) "
-        "VALUES (103, 102, 'similar-to', '{}', ?, 'uuid-101', 'uuid-102', ?)",
+        "INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, data, "
+        "created_at, updated_at) "
+        "VALUES ('edge-uuid-1', 'uuid-101', 'uuid-102', 'similar-to', '{}', ?, ?)",
         (now, now),
     )
 
@@ -671,7 +709,7 @@ def test_similar_to_dedupe_resolves_through_endpoint_uuids():
 
     assert created == 0, "the dedupe guard did not recognise the existing edge"
     assert c.execute(
-        "SELECT COUNT(*) FROM edges WHERE kind='similar-to'"
+        "SELECT COUNT(*) FROM edges WHERE relation='similar-to'"
     ).fetchone()[0] == 1
 
 
@@ -684,34 +722,34 @@ def test_edge_with_null_endpoint_uuid_is_detected_loudly_not_silently_dropped():
     result with no error and no log, which is a link missing from the user's
     own memory graph.
 
-    Of the two available answers this PR takes (a): NULL endpoints are
-    impossible by construction — `add_node` assigns a uuid at insert (task
-    5.14), all three edge-insert paths copy it inside the same transaction,
-    and `init_db()` backfills both tables on every start — and the residual
-    case is made LOUD instead of tolerated. Tolerating it in the read (option
-    b) would hide exactly the defect the guard exists to surface.
-
-    So both halves are asserted together: the read genuinely does drop the
-    row (stated, not hidden), and therefore the convergence guard MUST raise
-    on that same database. Weaken the guard and this test fails.
+    PR6a took answer (a): NULL endpoints are impossible by construction, and
+    the residual case is made LOUD instead of tolerated. PR8 finishes the job
+    — `NOT NULL` on `uuid`, `src_uuid` and `dst_uuid` means the state cannot
+    be WRITTEN, so it is no longer a hazard that has to be reported. That is
+    the difference between "we would notice" and "it cannot happen", and it is
+    the whole reason mobile's DDL was the target shape.
     """
     src = store.add_node("person", "Héctor")
     dst = store.add_node("fact", "usa CachyOS")
     store.add_edge(src, dst, "owns")
 
     c = store._connect()
-    # The only reachable route to this state is a node that never got a uuid,
-    # so it is reproduced rather than assumed away.
-    c.execute("UPDATE edges SET src_uuid=NULL WHERE from_id=?", (src,))
-    c.execute("UPDATE nodes SET uuid=NULL WHERE id=?", (src,))
+    # PR8 closes the hazard rather than only reporting it: the state cannot be
+    # written at all any more. Asserted by trying — the engine refuses both
+    # halves of the only route that ever reached it.
+    with pytest.raises(Exception):
+        c.execute("UPDATE nodes SET uuid=NULL WHERE id=?", (src,))
+    with pytest.raises(Exception):
+        c.execute(
+            "UPDATE edges SET src_uuid=NULL "
+            "WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?)", (src,)
+        )
+    # …and the read still returns the relation, because nothing was lost.
+    assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [dst]
+    store.verify_edge_endpoint_convergence()
 
-    assert store.neighbors(src, edge_kind="owns") == []  # the silent failure…
 
-    with pytest.raises(RuntimeError, match="NULL"):
-        store.verify_edge_endpoint_convergence()        # …made loud
-
-
-def test_convergence_failure_names_the_broken_edge_not_a_row_repr():
+def test_convergence_failure_names_the_broken_edge_not_a_row_repr(pre_pr8_graph):
     """Failing loudly is only half of it — the shout has to say what broke.
 
     The guard interpolated raw sqlite Row objects, so a real production
@@ -719,10 +757,13 @@ def test_convergence_failure_names_the_broken_edge_not_a_row_repr():
     uuid, no indication of which side was NULL. That is a check that fires and
     tells you nothing, which in practice sends you to a debugger against a
     database you may not be able to reproduce.
+
+    Run against the PRE-PR8 shape, which is the only place this guard can
+    still fire: after the rebuild both branches are impossible by
+    construction. That is where the owner's real database will be on the
+    morning it migrates, so the message still has to be actionable there.
     """
-    src = store.add_node("person", "Héctor")
-    dst = store.add_node("fact", "usa CachyOS")
-    eid = store.add_edge(src, dst, "owns")
+    eid = pre_pr8_graph["edges"]["esposa"]
     store._connect().execute("UPDATE edges SET dst_uuid=NULL WHERE id=?", (eid,))
 
     with pytest.raises(RuntimeError) as excinfo:
@@ -733,11 +774,11 @@ def test_convergence_failure_names_the_broken_edge_not_a_row_repr():
     assert f"id={eid}" in message, "the failure does not name the offending edge"
 
 
-def test_drift_failure_also_names_the_edge():
-    """Same contract for the drift branch, which shares the defect."""
-    src = store.add_node("person", "Héctor")
-    dst = store.add_node("fact", "usa CachyOS")
-    eid = store.add_edge(src, dst, "owns")
+def test_drift_failure_also_names_the_edge(pre_pr8_graph):
+    """Same contract for the drift branch, which shares the defect. Also on
+    the pre-PR8 shape — after the rebuild there is no second endpoint
+    representation left to drift from."""
+    eid = pre_pr8_graph["edges"]["esposa"]
     store._connect().execute(
         "UPDATE edges SET dst_uuid='not-the-node-uuid' WHERE id=?", (eid,)
     )
@@ -1145,7 +1186,7 @@ def test_similar_to_guard_ignores_a_tombstoned_edge():
         "SELECT 1 FROM edges WHERE "
         "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
         "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
-        "relation = 'similar-to' AND deleted_at IS NULL LIMIT 1",
+        "relation= 'similar-to' AND deleted_at IS NULL LIMIT 1",
         (a, b),
     ).fetchone()
     assert exists is None

@@ -26,6 +26,7 @@ from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
+import uuid as _uuid
 
 
 # ─── shared helpers ──────────────────────────────────────────────────────────
@@ -53,9 +54,10 @@ def _insert_node(
     """Insert a node with explicit created_at/occurred_at for test control."""
     now = created_at if created_at is not None else time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, occurred_at) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        (kind, label, json.dumps(data or {}), domain, now, now, occurred_at),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, "
+        "occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), kind, label, json.dumps(data or {}), domain, now,
+         now, occurred_at),
     )
     conn.commit()
     return cur.lastrowid
@@ -73,7 +75,7 @@ def _insert_meeting(conn, *, start_time: float, title: str = "Test Meeting") -> 
 
 def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=? LIMIT 1",
         (from_id, to_id, kind),
     ).fetchone()
     return row is not None
@@ -532,9 +534,9 @@ def test_backfill_node_occurred_at_sets_occurred_at_from_entry():
     # Create a node with occurred_at = NULL (simulates a pre-fix backfilled node).
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "health vital check", "{}", "health", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "health vital check", "{}", "health", now, now),
     )
     conn.commit()
     node_id = cur.lastrowid
@@ -586,9 +588,9 @@ def test_backfill_node_occurred_at_is_idempotent():
 
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "health to backfill", "{}", "health", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "health to backfill", "{}", "health", now, now),
     )
     conn.commit()
     node_id = cur.lastrowid
@@ -686,9 +688,9 @@ def test_backfill_default_window_covers_entries_older_than_one_year():
 
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "ancient health event", "{}", "health", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "ancient health event", "{}", "health", now, now),
     )
     conn.commit()
     node_id = cur.lastrowid
@@ -771,9 +773,9 @@ def test_backfill_rowcount_reflects_actual_rows_updated():
     entry_ids = []
     for i in range(2):
         cur = conn.execute(
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            ("fact", f"rowcount test node {i}", "{}", "health", now, now),
+            "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(_uuid.uuid4()), "fact", f"rowcount test node {i}", "{}", "health", now, now),
         )
         conn.commit()
         nid = cur.lastrowid

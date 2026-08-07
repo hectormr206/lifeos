@@ -11,6 +11,7 @@ import sqlite3
 import pytest
 
 from axi import store
+import uuid as _uuid
 
 
 def _make_plain_db(path, *, nodes=(), conversations=()):
@@ -24,9 +25,9 @@ def _make_plain_db(path, *, nodes=(), conversations=()):
     now = 1_700_000_000.0
     for kind, label in nodes:
         cur = conn.execute(
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (kind, label, "{}", "setup", now, now, "UTC"),
+            "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, created_tz) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (str(_uuid.uuid4()), kind, label, "{}", "setup", now, now, "UTC"),
         )
         # Mirror text into FTS the same way store.add_node does.
         conn.execute(

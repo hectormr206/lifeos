@@ -147,7 +147,7 @@ def test_delete_normal_node_removes_edges(client):
         (ids["person"],),
     ).fetchone()[0] == 0
     assert conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE (from_id = ? OR to_id = ?) "
+        "SELECT COUNT(*) FROM edges WHERE (src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) "
         "AND deleted_at IS NULL",
         (ids["person"], ids["person"]),
     ).fetchone()[0] == 0
@@ -286,7 +286,9 @@ def test_merge_folds_duplicate_into_canonical(client):
     ).fetchone()[0] == 1
     # The edge was repointed onto the survivor.
     edge = conn.execute(
-        "SELECT from_id, to_id FROM edges WHERE kind = 'amiga'"
+        "SELECT (SELECT id FROM nodes WHERE uuid = edges.src_uuid) AS from_id, "
+        "       (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id "
+        "FROM edges WHERE relation = 'amiga'"
     ).fetchone()
     assert edge["from_id"] == canonical
     assert edge["to_id"] == other

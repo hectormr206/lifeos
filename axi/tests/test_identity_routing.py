@@ -103,7 +103,8 @@ class TestIdentityRoutingEndToEnd:
         ).fetchone() is None
         # Its edge now points at the canonical node.
         assert c.execute(
-            "SELECT to_id FROM edges WHERE from_id=? AND kind='mentions'", (fact,)
+            "SELECT (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id "
+            "FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='mentions'", (fact,)
         ).fetchone()["to_id"] == canonical
         # The alias is recorded on the canonical node's data.
         import json
@@ -119,7 +120,8 @@ class TestIdentityRoutingEndToEnd:
             "SELECT id FROM nodes WHERE kind='person' AND label='Héctor'"
         ).fetchone()["id"]
         row = c.execute(
-            "SELECT to_id FROM edges WHERE from_id=? AND kind='esposa'", (hub,)
+            "SELECT (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id "
+            "FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='esposa'", (hub,)
         ).fetchone()
         assert row is not None
         ent = c.execute(
@@ -140,7 +142,7 @@ class TestIdentityRoutingEndToEnd:
             "SELECT id FROM nodes WHERE label='losartán'"
         ).fetchone()["id"]
         assert c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='tratada_con'",
+            "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='tratada_con'",
             (subj, obj),
         ).fetchone() is not None
 
@@ -152,7 +154,7 @@ class TestIdentityRoutingEndToEnd:
             "SELECT id FROM nodes WHERE kind='person' AND label='Héctor'"
         ).fetchone()["id"]
         assert c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='about'",
+            "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='about'",
             (hub, fact),
         ).fetchone() is not None
 
@@ -161,7 +163,7 @@ class TestIdentityRoutingEndToEnd:
         fact = store.add_node(kind="fact", label="cené con Ana Ríos")
         identity.link_fact_to_entities(fact, "cené con Ana Ríos")
         assert store._connect().execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='mentions'",
+            "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='mentions'",
             (fact, ent),
         ).fetchone() is not None
 

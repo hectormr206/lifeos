@@ -27,7 +27,10 @@ def hub_with_wife(monkeypatch):
 def _involves(from_id: int) -> list[int]:
     from axi import store
     rows = store._connect().execute(
-        "SELECT to_id FROM edges WHERE from_id=? AND kind='involves'", (from_id,)
+        "SELECT (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id "
+        "FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
+        "AND relation='involves'",
+        (from_id,),
     ).fetchall()
     return [r["to_id"] for r in rows]
 

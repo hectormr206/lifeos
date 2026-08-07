@@ -60,7 +60,9 @@ def _node_data(node_id: int) -> dict:
 def _edges(from_id: int, kind: str) -> list[int]:
     from axi import store
     rows = store._connect().execute(
-        "SELECT to_id FROM edges WHERE from_id=? AND kind=?", (from_id, kind)
+        "SELECT (SELECT id FROM nodes WHERE uuid = edges.dst_uuid) AS to_id "
+        "FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=?",
+        (from_id, kind),
     ).fetchall()
     return [r["to_id"] for r in rows]
 
@@ -103,7 +105,7 @@ def test_involves_edge_resolves_relation_synonym(hub_with_wife, monkeypatch) -> 
     from axi import domain_bridge, store
     hub, ana = hub_with_wife
     with store._tx() as tx:  # retype the relation edge
-        tx.execute("UPDATE edges SET kind='mujer' WHERE from_id=? AND to_id=?",
+        tx.execute("UPDATE edges SET relation='mujer' WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)",
                    (hub, ana))
     node_id = domain_bridge.create_fact_node_for_entry(
         "health", HealthEntryStub(id="he-subj-003")

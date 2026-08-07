@@ -133,7 +133,7 @@ def test_add_entity_relation_creates_both_nodes_and_edge():
     ).fetchone()
     assert cond is not None and med is not None
     edge = c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='tratada_con'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='tratada_con'",
         (cond["id"], med["id"]),
     ).fetchone()
     assert edge is not None
@@ -147,7 +147,7 @@ def test_add_entity_relation_is_idempotent():
             subject_kind="condition", object_kind="medication",
         )
     c = store._connect()
-    n = c.execute("SELECT COUNT(*) AS n FROM edges WHERE kind='tratada_con'").fetchone()
+    n = c.execute("SELECT COUNT(*) AS n FROM edges WHERE relation='tratada_con'").fetchone()
     assert n["n"] == 1
 
 
@@ -161,7 +161,7 @@ def test_add_entity_relation_user_subject_routes_to_hub(monkeypatch):
     ent = identity.ensure_entity("hipertensión", "condition")
     c = store._connect()
     edge = c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='padece'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='padece'",
         (hub, ent),
     ).fetchone()
     assert edge is not None
@@ -181,7 +181,7 @@ def test_add_entity_relation_yo_pronoun_routes_to_hub(monkeypatch):
     ent = identity.ensure_entity("hipertensión", "condition")
     c = store._connect()
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='padece'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='padece'",
         (hub, ent),
     ).fetchone() is not None
 
@@ -214,7 +214,7 @@ def test_add_relation_still_works(monkeypatch):
     ent = identity.ensure_entity("Ana Ríos", "person")
     c = store._connect()
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='esposa'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='esposa'",
         (hub, ent),
     ).fetchone() is not None
 
@@ -257,15 +257,15 @@ def test_extract_and_store_hypertension_entity_graph(monkeypatch):
     assert cond is not None and med is not None and doc is not None
     hub = identity.ensure_user_hub()
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='padece'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='padece'",
         (hub, cond["id"]),
     ).fetchone() is not None
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='diagnosticada_por'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='diagnosticada_por'",
         (cond["id"], doc["id"]),
     ).fetchone() is not None
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='tratada_con'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='tratada_con'",
         (cond["id"], med["id"]),
     ).fetchone() is not None
 
@@ -289,7 +289,7 @@ def test_extract_old_shape_creates_user_to_entity_edge(monkeypatch):
     ana = c.execute("SELECT id FROM nodes WHERE kind='person' AND label='Ana'").fetchone()
     assert ana is not None
     assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='esposa'",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='esposa'",
         (hub, ana["id"]),
     ).fetchone() is not None
 
@@ -311,12 +311,14 @@ def test_extract_skips_incomplete_relations(monkeypatch):
 
 
 def test_register_alias_merge_dual_writes_edge_endpoint_uuids():
-    """Task 5.8 RED: the alias-merge endpoint rewrite
-    (identity.py:354-355, `UPDATE edges SET from_id=...`/`to_id=...`) updates
-    src_uuid/dst_uuid to the CANONICAL node's uuid in the SAME transaction as
-    the from_id/to_id rewrite — not a follow-up step, so a crash between the
-    two can never leave from_id/src_uuid disagreeing (the exact
-    dual-representation drift design-schema.md flags)."""
+    """Task 5.8: the alias-merge endpoint rewrite re-points every edge of the
+    merged-away node at the CANONICAL node's uuid.
+
+    PR5 wrote this as a DUAL update, kept in one transaction so a crash could
+    not leave `from_id` and `src_uuid` disagreeing. PR8 removed `from_id`, so
+    the dual-representation drift design-schema.md flagged is gone by
+    construction rather than by transactional discipline. What is asserted is
+    unchanged: after the merge, no edge still points at the loser."""
     from axi import store
 
     canonical_id = identity.ensure_entity("Ana Ríos", "person")
@@ -355,12 +357,10 @@ def test_register_alias_merge_dual_writes_edge_endpoint_uuids():
         "SELECT deleted_at FROM nodes WHERE id=?", (alias_id,)
     ).fetchone()["deleted_at"] is not None
 
-    row_out = c.execute("SELECT from_id, src_uuid FROM edges WHERE id=?", (e_out,)).fetchone()
-    row_in = c.execute("SELECT to_id, dst_uuid FROM edges WHERE id=?", (e_in,)).fetchone()
+    row_out = c.execute("SELECT src_uuid FROM edges WHERE id=?", (e_out,)).fetchone()
+    row_in = c.execute("SELECT dst_uuid FROM edges WHERE id=?", (e_in,)).fetchone()
 
-    assert row_out["from_id"] == canonical_id
     assert row_out["src_uuid"] == canonical_uuid
-    assert row_in["to_id"] == canonical_id
     assert row_in["dst_uuid"] == canonical_uuid
 
     # No lingering drift anywhere in the graph after the merge.
@@ -385,20 +385,20 @@ def test_extract_structured_domain_facts_still_skipped(monkeypatch):
 # ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
 #
 # Every read site listed in task 6a.5 is a "does this edge already exist?"
-# guard or an endpoint resolution. Each test below desyncs the OLD integer
-# endpoint from the NEW uuid endpoint on an already-stored edge, so the
-# function's answer names which column it actually followed. A guard still
-# reading `from_id` fails to recognise an edge it wrote itself and inserts a
-# duplicate on every pass.
+# guard or an endpoint resolution. These tests used to desync the OLD integer
+# endpoint from the NEW uuid endpoint, so the function's answer named which
+# column it followed. PR8 removed the integer endpoint entirely: there is one
+# representation, so the desync is not expressible and the guard cannot read
+# the wrong column. What still matters, and is what these tests now assert, is
+# the CONSEQUENCE the desync was standing in for — a guard that fails to
+# recognise an edge it wrote itself appends a duplicate on every pass, and the
+# user's graph grows a second copy of every relation, forever.
 
-def _desynced_edge(from_id: int, to_id: int, kind: str, decoy: int) -> int:
-    """Store a real `from_id -> to_id` edge, then point its integer source at
-    *decoy* while leaving `src_uuid` naming the real source."""
+def _stored_edge(from_id: int, to_id: int, kind: str) -> int:
+    """Store a real `from_id -> to_id` edge through the production writer."""
     from axi import store
 
-    eid = store.add_edge(from_id, to_id, kind)
-    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
-    return eid
+    return store.add_edge(from_id, to_id, kind)
 
 
 def _edge_count() -> int:
@@ -413,7 +413,7 @@ def test_add_relation_dedupe_resolves_through_endpoint_uuids():
 
     hub = identity.ensure_user_hub()
     ent = identity.ensure_entity("Ana Ríos", "person")
-    _desynced_edge(hub, ent, "esposa", decoy=ent)
+    _stored_edge(hub, ent, "esposa")
     before = _edge_count()
 
     identity.add_relation("esposa", "Ana Ríos", "person")
@@ -425,7 +425,7 @@ def test_add_entity_relation_dedupe_resolves_through_endpoint_uuids():
     """identity.py:469 — the entity--relation-->entity duplicate guard."""
     subj = identity.ensure_entity("hipertensión", "condition")
     obj = identity.ensure_entity("losartán", "medication")
-    _desynced_edge(subj, obj, "tratada_con", decoy=obj)
+    _stored_edge(subj, obj, "tratada_con")
     before = _edge_count()
 
     identity.add_entity_relation(
@@ -442,7 +442,7 @@ def test_link_fact_to_entities_dedupe_resolves_through_endpoint_uuids():
 
     ent = identity.ensure_entity("losartán", "medication")
     fact = store.add_node("fact", "toma losartán por la mañana")
-    _desynced_edge(fact, ent, "mentions", decoy=ent)
+    _stored_edge(fact, ent, "mentions")
     before = _edge_count()
 
     identity.link_fact_to_entities(fact, "toma losartán por la mañana")
@@ -457,7 +457,7 @@ def test_link_fact_to_involved_person_dedupe_resolves_through_endpoint_uuids():
     identity.add_relation("esposa", "Ana Ríos", "person")
     person = identity.ensure_entity("Ana Ríos", "person")
     fact = store.add_node("fact", "cumple años en marzo")
-    _desynced_edge(fact, person, "involves", decoy=person)
+    _stored_edge(fact, person, "involves")
     before = _edge_count()
 
     identity.link_fact_to_involved_person(fact, "esposa")
@@ -471,7 +471,7 @@ def test_link_fact_to_user_dedupe_resolves_through_endpoint_uuids():
 
     hub = identity.ensure_user_hub()
     fact = store.add_node("fact", "usa CachyOS")
-    _desynced_edge(hub, fact, "about", decoy=fact)
+    _stored_edge(hub, fact, "about")
     before = _edge_count()
 
     identity.link_fact_to_user(fact)
@@ -488,7 +488,7 @@ def test_backfill_subject_person_links_dedupe_resolves_through_endpoint_uuids():
     identity.add_relation("esposa", "Ana Ríos", "person")
     person = identity.ensure_entity("Ana Ríos", "person")
     fact = store.add_node("fact", "cumple años en marzo", {"subject": "esposa"})
-    _desynced_edge(fact, person, "involves", decoy=person)
+    _stored_edge(fact, person, "involves")
 
     assert identity.backfill_subject_person_links() == 0
 
@@ -497,9 +497,11 @@ def test_resolve_relation_person_resolves_through_endpoint_uuids():
     """identity.py:571-577 — resolving "esposa" to the person node walks the
     hub's outgoing edges, so it must walk them by uuid.
 
-    Here the edge's integer `to_id` is pointed at a decoy person while
-    `dst_uuid` still names Ana. Following `to_id` links the user's fact to the
-    WRONG person — a wrong answer in their own memory, not a missing one.
+    The integer `to_id` this test used to desync is gone (PR8), so `dst_uuid`
+    is the only thing that can answer. Asserted by moving it: the resolution
+    follows the uuid endpoint and nothing else. Getting this wrong links the
+    user's fact to the WRONG person — a wrong answer in their own memory, not
+    a missing one.
     """
     from axi import store
 
@@ -508,9 +510,13 @@ def test_resolve_relation_person_resolves_through_endpoint_uuids():
     decoy = identity.ensure_entity("Dra Tere", "person")
     eid = store.add_edge(hub, ana, "esposa")
     c = store._connect()
-    c.execute("UPDATE edges SET to_id=? WHERE id=?", (decoy, eid))
 
     assert identity._resolve_relation_person("esposa", hub, c) == ana
+    c.execute(
+        "UPDATE edges SET dst_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert identity._resolve_relation_person("esposa", hub, c) == decoy
 
 
 def test_identity_read_sites_identical_to_pre_rewrite_queries(pr6a_graph):
@@ -530,7 +536,7 @@ def test_identity_read_sites_identical_to_pre_rewrite_queries(pr6a_graph):
         for b in ids:
             for kind in ("about", "mentions", "involves", "esposa", "same-day"):
                 old = c.execute(
-                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+                    "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=? LIMIT 1",
                     (a, b, kind),
                 ).fetchone() is not None
                 assert identity._edge_exists(c, a, b, kind) is old, (
@@ -539,9 +545,9 @@ def test_identity_read_sites_identical_to_pre_rewrite_queries(pr6a_graph):
 
     for hub in ids:
         old_rows = c.execute(
-            "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
-            "JOIN nodes n ON n.id = e.to_id "
-            "WHERE e.from_id = ? AND n.kind = 'person'",
+            "SELECT e.relation AS rel, n.id AS to_id FROM edges e "
+            "JOIN nodes n ON n.uuid = e.dst_uuid "
+            "WHERE e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND n.kind = 'person'",
             (hub,),
         ).fetchall()
         expected = None
@@ -556,27 +562,28 @@ def test_identity_read_sites_identical_to_pre_rewrite_queries(pr6a_graph):
 def test_edge_exists_disagrees_only_for_an_endpoint_id_that_no_longer_exists(pr6a_graph):
     """The single documented behaviour change of 6a.5, pinned rather than hidden.
 
-    The old guard matched on `to_id`, an integer the edge row still carries
-    after its node row is gone. The new guard has to resolve that id to a
+    The old guard matched on `to_id`, an integer the edge row still carried
+    after its node row was gone. The new guard resolves the caller's id to a
     `uuid` first, and a deleted node has no uuid to resolve to — so the answer
-    flips from True to False for a dangling endpoint.
+    is False for a dangling endpoint.
 
     It is unreachable from every caller: all six call sites pass ids they just
     obtained from `ensure_entity`/`ensure_user_hub`/a node they created, so a
     caller cannot hold the id of a row that no longer exists. It is asserted
-    here so the difference is a stated property of the rewrite instead of a
-    surprise for whoever writes PR7's tombstone filters on top of it.
+    here so the difference stays a stated property of the design rather than a
+    surprise. PR8 note: the edge still carries the ghost's `src_uuid`/
+    `dst_uuid` — that is the dangling endpoint mobile's model declares LEGAL,
+    and `report_dangling_edges()` is what makes it visible instead of silent.
     """
     from axi import store
 
     c = store._connect()
     hub, ghost = pr6a_graph["hub"], pr6a_graph["ghost"]
 
-    assert c.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='about' LIMIT 1",
-        (hub, ghost),
-    ).fetchone() is not None
     assert identity._edge_exists(c, hub, ghost, "about") is False
+    assert any(f"id=" in line for line in store.report_dangling_edges()), (
+        "the edge to the vanished node must be REPORTED, not silently ignored"
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -672,7 +679,7 @@ def test_alias_merge_leaves_no_edge_pointing_at_the_tombstoned_loser():
 
     for eid, column in ((f["e_in"], "dst_uuid"), (f["e_out"], "src_uuid")):
         row = c.execute(
-            f"SELECT {column} AS u, from_id, to_id FROM edges WHERE id=?", (eid,)
+            f"SELECT {column} AS u FROM edges WHERE id=?", (eid,)
         ).fetchone()
         assert row["u"] == canonical_uuid, (
             f"edge id={eid} {column}={row['u']!r} expected={canonical_uuid!r}"
@@ -695,8 +702,8 @@ def test_alias_merge_keeps_both_endpoint_representations_converged():
     rows = c.execute(
         "SELECT e.id, e.src_uuid, n1.uuid AS n1u, e.dst_uuid, n2.uuid AS n2u "
         "FROM edges e "
-        "JOIN nodes n1 ON n1.id = e.from_id "
-        "JOIN nodes n2 ON n2.id = e.to_id"
+        "JOIN nodes n1 ON n1.uuid = e.src_uuid "
+        "JOIN nodes n2 ON n2.uuid = e.dst_uuid"
     ).fetchall()
     assert rows, "the fixture produced no edges to check"
     for r in rows:

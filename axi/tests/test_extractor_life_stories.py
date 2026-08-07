@@ -141,7 +141,7 @@ def test_life_story_facts_and_relations_persisted(monkeypatch):
 
     # Héctor --primo--> Rodrigo Zetina (user-as-subject routes via the hub).
     primo_edge = conn.execute(
-        "SELECT 1 FROM edges WHERE to_id=? AND kind='primo' LIMIT 1", (rodrigo["id"],)
+        "SELECT 1 FROM edges WHERE dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='primo' LIMIT 1", (rodrigo["id"],)
     ).fetchone()
     assert primo_edge is not None, "primo edge to Rodrigo Zetina must exist"
 
@@ -151,7 +151,7 @@ def test_life_story_facts_and_relations_persisted(monkeypatch):
     ).fetchone()
     assert taqueria is not None, "taquería place entity must exist"
     owner_edge = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='dueño_de' LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='dueño_de' LIMIT 1",
         (rodrigo["id"], taqueria["id"]),
     ).fetchone()
     assert owner_edge is not None, "dueño_de edge Rodrigo->taquería must exist"
@@ -194,5 +194,5 @@ def test_hallucinated_shape_stores_only_what_json_says(monkeypatch):
         "SELECT id FROM nodes WHERE kind='person' AND label='Rodrigo Zetina'"
     ).fetchone()
     assert rodrigo is not None
-    vive_en = conn.execute("SELECT 1 FROM edges WHERE kind='vive_en' LIMIT 1").fetchone()
+    vive_en = conn.execute("SELECT 1 FROM edges WHERE relation='vive_en' LIMIT 1").fetchone()
     assert vive_en is None, "object-less vive_en relation must not create an edge"

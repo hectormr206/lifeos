@@ -30,7 +30,7 @@ import traceback
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Callable, Iterator
 
 try:
     import fcntl as _fcntl
@@ -196,22 +196,29 @@ PRAGMA foreign_keys=ON;
 
 -- ──────────────────────────── core graph ────────────────────────────
 
+-- PR8 (THE POINT OF NO RETURN): this is mobile's exact v1-base DDL
+-- (`mobile/lib/core/graph/local_graph_schema.dart`) — axi converged, mobile
+-- did not move. A pre-existing database is brought to this same shape by
+-- migrate_rebuild_graph_tables(); a fresh one starts here.
+-- The three `embedding*` columns are axi-only LOCAL DERIVED STATE (mobile has
+-- no embedder), the same category as nodes_fts/vec_nodes, appended last.
 CREATE TABLE IF NOT EXISTS nodes (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  kind        TEXT NOT NULL,         -- 'person'|'fact'|'event'|'conversation'|'medication'|'symptom'|'bp_reading'|...
-  label       TEXT NOT NULL,         -- short human-readable name
-  data        TEXT,                  -- JSON blob of type-specific props
-  domain      TEXT,                  -- 'health'|'finance'|'work'|'home'|… or NULL
-  created_at  REAL NOT NULL,         -- Unix epoch (absolute moment, UTC)
-  updated_at  REAL NOT NULL,
-  created_tz  TEXT,                  -- IANA timezone active when this node was created
-  -- ── sync-over-vpn schema slice 3a (additive only, nothing reads these
-  -- yet — see design.md "Slice 3 in three sub-slices" and
-  -- migrate_nodes_edges_sync_columns for the pre-existing-DB migration) ──
-  uuid        TEXT,                  -- stable sync identity, backfilled for every row
-  lamport     INTEGER,               -- sync Lamport clock, unused until the sync engine ships
-  origin_node TEXT,                  -- sync origin node id, unused until the sync engine ships
-  deleted_at  REAL                   -- soft-delete tombstone; NULL == not deleted (slice 3b wires the delete path)
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,   -- local rowid (per-device)
+  uuid         TEXT    NOT NULL UNIQUE,             -- stable sync identity across replicas
+  kind         TEXT    NOT NULL,                    -- 'person'|'fact'|'event'|'conversation'|...
+  label        TEXT    NOT NULL,                    -- short human-readable name
+  data         TEXT,                                -- JSON blob of type-specific props
+  domain       TEXT,                                -- 'health'|'finance'|'work'|'home'|… or NULL
+  occurred_at  REAL,                                -- real event moment; NULL when unknown
+  created_at   REAL    NOT NULL,                    -- graph-insertion time (Unix epoch UTC)
+  updated_at   REAL    NOT NULL,
+  created_tz   TEXT,                                -- IANA timezone active at creation
+  origin_node  TEXT,                                -- sync: replica that authored this row
+  lamport      INTEGER NOT NULL DEFAULT 0,          -- sync: logical clock for LWW
+  deleted_at   REAL,                                -- sync: tombstone (NULL = live row)
+  embedding       BLOB,                             -- axi-only: float32 vector bytes
+  embedding_model TEXT,                             -- axi-only: model id
+  embedding_dim   INTEGER                           -- axi-only: vector length
 );
 CREATE INDEX IF NOT EXISTS idx_nodes_kind    ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_domain  ON nodes(domain);
@@ -237,41 +244,31 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
 CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deleted_at)
   WHERE deleted_at IS NOT NULL;
 
+-- PR8: mobile's exact edges DDL. Endpoints are node UUIDs, not local rowids —
+-- rowid 42 on the laptop is not rowid 42 on the Pixel, so rowid endpoints
+-- cannot sync at all. `relation` is real storage now (it was a generated alias
+-- of `kind` during the PR5→PR7 expand window). There is NO foreign key: the
+-- `ON DELETE CASCADE` that silently destroyed edges on a hard node delete
+-- ceased to exist along with the columns that carried it, and referential
+-- integrity moved to the application, matching mobile — where a dangling
+-- `src_uuid` is legal by design because an edge may sync before its node.
+-- `report_dangling_edges()` is the loud, report-only check that replaces it.
 CREATE TABLE IF NOT EXISTS edges (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  from_id     INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  to_id       INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
-  kind        TEXT NOT NULL,         -- 'mentioned_in'|'caused_by'|'happened_after'|'belongs_to'|'supersedes'|…
-  data        TEXT,                  -- JSON props
-  created_at  REAL NOT NULL,
-  -- ── sync-over-vpn schema slice 3a (additive only — see nodes above) ──
-  uuid        TEXT,
-  lamport     INTEGER,
-  origin_node TEXT,
-  deleted_at  REAL,
-  -- ── sync-over-vpn PR5 "Expand" (design-schema.md Decision 2 step 1) ──
-  -- src_uuid/dst_uuid are the sync-stable endpoint references (mobile's
-  -- target shape); backfilled/dual-written by migrate_edge_endpoint_uuids
-  -- and every edge-insert path. `relation` shares ONE storage cell with
-  -- `kind` (GENERATED ALWAYS ... VIRTUAL), so it cannot drift from it by
-  -- construction. from_id/to_id/kind remain fully authoritative — nothing
-  -- reads these new columns yet (that is PR6, the reader rewrite).
-  src_uuid    TEXT,
-  dst_uuid    TEXT,
-  updated_at  REAL,
-  relation    TEXT GENERATED ALWAYS AS (kind) VIRTUAL
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,   -- local rowid (per-device)
+  uuid         TEXT    NOT NULL UNIQUE,             -- stable sync identity
+  src_uuid     TEXT    NOT NULL,                    -- source node.uuid
+  dst_uuid     TEXT    NOT NULL,                    -- destination node.uuid
+  relation     TEXT    NOT NULL,                    -- 'mentioned_in'|'caused_by'|…
+  data         TEXT,                                -- JSON props
+  created_at   REAL    NOT NULL,
+  updated_at   REAL    NOT NULL,
+  origin_node  TEXT,                                -- sync: authoring replica
+  lamport      INTEGER NOT NULL DEFAULT 0,          -- sync: logical clock
+  deleted_at   REAL                                 -- sync: tombstone (NULL = live)
 );
-CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
-CREATE INDEX IF NOT EXISTS idx_edges_to   ON edges(to_id);
-CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid);
--- PR6 (the reader rewrite) moves every edge read off from_id/to_id/kind and
--- onto src_uuid/dst_uuid/relation. idx_edges_from/to/kind index the columns
--- the reads just left, so without these three every graph read degrades to a
--- full table scan — same_day_neighbors is written as a UNION specifically so
--- SQLite could use idx_edges_from/idx_edges_to, and the rewrite retires both.
--- Names are mobile's, verbatim (local_graph_schema.dart), so the contract PR
--- has nothing left to reconcile.
+-- Names are mobile's, verbatim (local_graph_schema.dart), so there is nothing
+-- left to reconcile between the two schemas.
 CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid);
 CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid);
 CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
@@ -1167,6 +1164,14 @@ def init_db() -> None:
         migrate_edge_endpoint_uuids()
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
+        # Sync-over-vpn PR8 — THE POINT OF NO RETURN. Rebuilds nodes/edges to
+        # mobile's exact DDL and drops from_id/to_id/kind. Runs LAST of the
+        # graph migrations because it consumes what they produce (every row
+        # needs its uuid and both endpoint uuids before the NOT NULLs bite).
+        # Gated by PRAGMA user_version, so this is a no-op on every startup
+        # after the first, and it refuses to begin without a snapshot it has
+        # proven restorable — that snapshot is the only rollback there is.
+        migrate_rebuild_graph_tables()
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
         migrate_conversations_source()
         # Events live in their own DB (telemetry isolated from user memory).
@@ -1336,24 +1341,44 @@ def add_edge(
     payload = json.dumps(data or {}, ensure_ascii=False)
     now = time.time()
     with _tx() as c:
-        # Dual-write src_uuid/dst_uuid alongside from_id/to_id (PR5 "Expand"
-        # — design-schema.md Decision 2 step 1). Looked up in the SAME
-        # transaction as the insert so a crash mid-write can never leave
-        # from_id/src_uuid disagreeing. from_id/to_id stay fully
-        # authoritative; nothing reads src_uuid/dst_uuid yet.
-        src_row = c.execute("SELECT uuid FROM nodes WHERE id = ?", (from_id,)).fetchone()
-        dst_row = c.execute("SELECT uuid FROM nodes WHERE id = ?", (to_id,)).fetchone()
+        # PR8: the endpoints ARE the uuids now — `from_id`/`to_id` no longer
+        # exist. The caller still passes local rowids because that is what
+        # every caller in this codebase holds; they are resolved here, in the
+        # SAME transaction as the insert.
+        src_uuid, dst_uuid = _require_endpoint_uuids(c, from_id, to_id)
         cur = c.execute(
-            "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
-            "src_uuid, dst_uuid, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                from_id, to_id, kind, payload, now,
-                src_row[0] if src_row else None,
-                dst_row[0] if dst_row else None,
-                now,
-            ),
+            # `uuid` is assigned HERE. It used to be left to the startup
+            # backfill, which was survivable only while the column was
+            # nullable; under mobile's `uuid NOT NULL UNIQUE` an edge written
+            # without one does not exist at all.
+            "INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, data, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (str(uuid.uuid4()), src_uuid, dst_uuid, kind, payload, now, now),
         )
         return cur.lastrowid
+
+
+def _require_endpoint_uuids(conn, from_id: int, to_id: int) -> tuple[str, str]:
+    """Resolve two node rowids to their uuids, or raise naming the culprit.
+
+    Before PR8 a missing node quietly produced a NULL endpoint: an edge that
+    every uuid-resolving read then skipped, so the relation simply was not
+    there — indistinguishable from lost data. `src_uuid NOT NULL` makes that
+    impossible, and this turns the resulting bare `IntegrityError` into a
+    message that says which node id could not be found.
+    """
+    src_row = conn.execute("SELECT uuid FROM nodes WHERE id = ?", (from_id,)).fetchone()
+    dst_row = conn.execute("SELECT uuid FROM nodes WHERE id = ?", (to_id,)).fetchone()
+    missing = [
+        str(nid) for nid, row in ((from_id, src_row), (to_id, dst_row))
+        if row is None or row[0] is None
+    ]
+    if missing:
+        raise ValueError(
+            f"cannot create an edge: node id(s) {', '.join(missing)} have no "
+            "uuid (missing row?), and an edge endpoint must name a node uuid"
+        )
+    return src_row[0], dst_row[0]
 
 
 def delete_node(node_id: int) -> bool:
@@ -2956,21 +2981,27 @@ def migrate_edge_endpoint_uuids() -> None:
     # dual-wrote a real src_uuid and a NULL dst_uuid, which that predicate
     # skipped forever. From PR6 on, such a row is invisible to every read that
     # resolves through dst_uuid.
-    rows = c.execute(
-        "SELECT e.id, n1.uuid, n2.uuid, e.created_at "
-        "FROM edges e "
-        "JOIN nodes n1 ON n1.id = e.from_id "
-        "JOIN nodes n2 ON n2.id = e.to_id "
-        "WHERE e.src_uuid IS NULL OR e.dst_uuid IS NULL"
-    ).fetchall()
-    for edge_id, src_uuid, dst_uuid, created_at in rows:
-        c.execute(
-            # COALESCE: a half-backfilled row may already carry a real
-            # updated_at, and this repair must not rewind it to created_at.
-            "UPDATE edges SET src_uuid = ?, dst_uuid = ?, "
-            "updated_at = COALESCE(updated_at, ?) WHERE id = ?",
-            (src_uuid, dst_uuid, created_at, edge_id),
-        )
+    # After PR8's rebuild there is no `from_id`/`to_id` to backfill FROM — the
+    # uuid endpoints are the only representation and are NOT NULL. Skipping is
+    # correct, not a silent degradation: the state this loop repairs cannot
+    # exist any more. Left running (rather than deleted) because a database
+    # that has not been rebuilt yet still needs it.
+    if "from_id" in existing_edges:
+        rows = c.execute(
+            "SELECT e.id, n1.uuid, n2.uuid, e.created_at "
+            "FROM edges e "
+            "JOIN nodes n1 ON n1.id = e.from_id "
+            "JOIN nodes n2 ON n2.id = e.to_id "
+            "WHERE e.src_uuid IS NULL OR e.dst_uuid IS NULL"
+        ).fetchall()
+        for edge_id, src_uuid, dst_uuid, created_at in rows:
+            c.execute(
+                # COALESCE: a half-backfilled row may already carry a real
+                # updated_at, and this repair must not rewind it to created_at.
+                "UPDATE edges SET src_uuid = ?, dst_uuid = ?, "
+                "updated_at = COALESCE(updated_at, ?) WHERE id = ?",
+                (src_uuid, dst_uuid, created_at, edge_id),
+            )
 
     verify_edge_endpoint_convergence()
 
@@ -3006,13 +3037,24 @@ def verify_edge_endpoint_convergence() -> None:
     """
     c = _connect()
     try:
+        # After PR8's rebuild there is no second endpoint representation to
+        # drift FROM: `src_uuid`/`dst_uuid` ARE the endpoints. The drift half
+        # of this check becomes structurally impossible, so it is skipped
+        # rather than allowed to raise "could not execute" on every startup —
+        # which is what a plain `no such column: from_id` here would do, and it
+        # would take init_db() down with it. The NULL-endpoint half below still
+        # runs; it is now also enforced by `NOT NULL`, and belt-and-braces on
+        # the invariant that PR6's readers depend on is cheap.
+        has_rowid_endpoints = "from_id" in {
+            r[1] for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()
+        }
         mismatches = c.execute(
             "SELECT e.id, e.src_uuid, n1.uuid, e.dst_uuid, n2.uuid "
             "FROM edges e "
             "JOIN nodes n1 ON n1.id = e.from_id "
             "JOIN nodes n2 ON n2.id = e.to_id "
             "WHERE e.src_uuid IS NOT n1.uuid OR e.dst_uuid IS NOT n2.uuid"
-        ).fetchall()
+        ).fetchall() if has_rowid_endpoints else []
         null_endpoints = c.execute(
             "SELECT id, src_uuid, dst_uuid FROM edges "
             "WHERE src_uuid IS NULL OR dst_uuid IS NULL"
@@ -3109,6 +3151,464 @@ def report_dangling_edges(conn=None) -> list[str]:
             len(out), "; ".join(out[:5]),
         )
     return out
+
+
+# ─────────────────── PR8: the pre-rebuild backup gate ───────────────────────
+#
+# PR8 rebuilds `nodes`/`edges` and drops `from_id`/`to_id`/`kind`. There is no
+# code-level revert past that point: `git revert` gives you code that queries
+# columns which no longer exist on disk. The ONLY recovery path is
+# restore-from-verified-backup, so the backup is not a precaution here — it is
+# the entire rollback plan, and a backup that was WRITTEN but cannot be
+# RESTORED is worse than none, because it is trusted.
+
+
+class MigrationBackupError(RuntimeError):
+    """The pre-rebuild snapshot could not be taken, or could not be PROVEN
+    restorable. Either way the rebuild must not start."""
+
+
+# Tables whose row counts must match between the live DB and the snapshot.
+# `nodes_fts` is included even though it is local derived state: a snapshot
+# that silently lost the search index restores a graph whose search box is
+# empty, and the user would meet that months later with no way back.
+_BACKUP_PARITY_TABLES = ("nodes", "edges", "nodes_fts")
+
+# How many (id, uuid) pairs to spot-check per table. Row counts can match while
+# the rows themselves are wrong; this is the half that notices.
+_BACKUP_SAMPLE_SIZE = 25
+
+
+def _vacuum_into(dest: Path) -> None:
+    """Write a transactional snapshot of the live DB to *dest*.
+
+    `VACUUM INTO` rather than a file copy: it is transactional and therefore
+    safe against concurrent writers, which a copy under journal activity is
+    not — a torn copy is exactly the un-restorable backup this gate exists to
+    catch. Separated from the verification below so tests can substitute a
+    deliberately damaged snapshot and exercise the REAL verification code.
+    """
+    _connect().execute("VACUUM INTO ?", (str(dest),))
+
+
+def _verify_snapshot(dest: Path) -> None:
+    """Prove the snapshot at *dest* is restorable. Raises on any doubt.
+
+    Three checks, in order, per design-schema.md Decision 5:
+      1. it opens with the same SQLCipher key,
+      2. `PRAGMA integrity_check` says `ok` — structurally sound,
+      3. row-count parity plus a sampled `(id, uuid)` spot-check — a truncated
+         database passes `integrity_check` perfectly well.
+
+    Raises `MigrationBackupError` if any check fails OR if any check cannot be
+    executed at all. A verification that quietly no-ops because the file would
+    not open is indistinguishable from "the backup is fine".
+    """
+    live = _connect()
+    try:
+        snap = sqlcipher3.connect(str(dest), isolation_level=None)
+    except Exception as exc:  # noqa: BLE001
+        raise MigrationBackupError(
+            f"pre-rebuild snapshot {dest} could not be opened at all: {exc}"
+        ) from exc
+    try:
+        snap.execute(f"PRAGMA key = \"x'{load_key()}'\"")
+        # The snapshot carries `vec_nodes` (a vec0 virtual table) and the
+        # trigger that references it. Without the extension, any statement
+        # SQLite has to compile against them fails with "no such module: vec0",
+        # which would read as a corrupt backup. Best-effort: the checks below
+        # only touch ordinary tables, so an unloadable extension must not by
+        # itself condemn a good snapshot.
+        try:
+            _load_sqlite_vec(snap)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            result = snap.execute("PRAGMA integrity_check").fetchone()
+        except Exception as exc:  # noqa: BLE001
+            raise MigrationBackupError(
+                f"pre-rebuild snapshot {dest} could not be read with the "
+                f"database key — it is not restorable: {exc}"
+            ) from exc
+        if not result or str(result[0]).lower() != "ok":
+            raise MigrationBackupError(
+                f"pre-rebuild snapshot {dest} failed integrity_check "
+                f"({result[0] if result else 'no result'}) — it was written but "
+                "cannot be restored"
+            )
+        for table in _BACKUP_PARITY_TABLES:
+            try:
+                live_n = live.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                snap_n = snap.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+            except Exception as exc:  # noqa: BLE001
+                raise MigrationBackupError(
+                    f"pre-rebuild snapshot {dest}: row-count parity for "
+                    f"`{table}` could not be checked: {exc}"
+                ) from exc
+            if live_n != snap_n:
+                raise MigrationBackupError(
+                    f"pre-rebuild snapshot {dest}: `{table}` has {snap_n} rows, "
+                    f"the live database has {live_n} — the snapshot is missing "
+                    "data and must not be relied on"
+                )
+        for table in ("nodes", "edges"):
+            sample = live.execute(
+                f"SELECT id, uuid FROM {table} ORDER BY id LIMIT ?",
+                (_BACKUP_SAMPLE_SIZE,),
+            ).fetchall()
+            for row_id, row_uuid in sample:
+                got = snap.execute(
+                    f"SELECT uuid FROM {table} WHERE id = ?", (row_id,)
+                ).fetchone()
+                if got is None or got[0] != row_uuid:
+                    raise MigrationBackupError(
+                        f"pre-rebuild snapshot {dest}: `{table}` id={row_id} has "
+                        f"uuid={None if got is None else got[0]!r}, the live "
+                        f"database has {row_uuid!r} — the snapshot does not hold "
+                        "the same rows"
+                    )
+    finally:
+        snap.close()
+
+
+def verified_pre_rebuild_backup() -> str:
+    """Take a snapshot of the graph and PROVE it restorable. Returns its path.
+
+    This is the default `backup` callable of `migrate_rebuild_graph_tables`.
+    It is a callable rather than inline code so tests can drive fake success,
+    fake failure and a fake corrupt snapshot without a real device or key
+    ceremony (task 8.5).
+    """
+    dest = DB_PATH.parent / f"{DB_PATH.name}.pre-rebuild-{int(time.time())}.db"
+    if dest.exists():
+        dest.unlink()
+    try:
+        _vacuum_into(dest)
+    except Exception as exc:  # noqa: BLE001
+        raise MigrationBackupError(
+            f"pre-rebuild snapshot could not be written to {dest}: {exc}"
+        ) from exc
+    _verify_snapshot(dest)
+    log.warning(
+        "verified_pre_rebuild_backup: verified snapshot at %s — this file is "
+        "the ONLY recovery path for the graph table rebuild", dest,
+    )
+    return str(dest)
+
+
+# ──────────── PR8: the single-transaction rebuild (point of no return) ──────
+
+# `PRAGMA user_version` after the rebuild. Design-schema.md Decision 6 numbers
+# the stages PR5=1, PR7=2, PR8=3; only this one needs a gate, because only this
+# one cannot be re-run harmlessly.
+GRAPH_REBUILD_USER_VERSION = 3
+
+# Mobile's exact DDL (`mobile/lib/core/graph/local_graph_schema.dart`), which
+# is the target contract: axi converges, mobile does not move.
+#
+# TWO deliberate additions, both axi-only LOCAL DERIVED STATE of exactly the
+# kind design-schema.md already exempts for `nodes_fts`/`vec_nodes`:
+# `embedding`/`embedding_model`/`embedding_dim`. They are not in mobile's DDL
+# because mobile has no embedder. Dropping them here would silently destroy
+# every embedding in the graph — recall and the whole RAG path — with no error
+# and no failing test, which is the failure mode this entire phase is built to
+# avoid. Column ORDER follows mobile's; the axi-only columns are appended last.
+_NODES_REBUILT_DDL = """
+CREATE TABLE nodes_new (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  uuid         TEXT    NOT NULL UNIQUE,
+  kind         TEXT    NOT NULL,
+  label        TEXT    NOT NULL,
+  data         TEXT,
+  domain       TEXT,
+  occurred_at  REAL,
+  created_at   REAL    NOT NULL,
+  updated_at   REAL    NOT NULL,
+  created_tz   TEXT,
+  origin_node  TEXT,
+  lamport      INTEGER NOT NULL DEFAULT 0,
+  deleted_at   REAL,
+  embedding       BLOB,
+  embedding_model TEXT,
+  embedding_dim   INTEGER
+)
+"""
+
+# `relation` is now REAL storage, not a generated alias of `kind`, and the
+# `from_id`/`to_id` FK columns are gone — so the `ON DELETE CASCADE` that
+# silently destroyed edges on a hard node delete ceases to exist because the
+# columns carrying it do. Referential integrity moves to the application,
+# matching mobile, where a dangling `src_uuid` is legal by design (an edge may
+# sync before its node). `report_dangling_edges` is the loud, report-only check.
+_EDGES_REBUILT_DDL = """
+CREATE TABLE edges_new (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  uuid         TEXT    NOT NULL UNIQUE,
+  src_uuid     TEXT    NOT NULL,
+  dst_uuid     TEXT    NOT NULL,
+  relation     TEXT    NOT NULL,
+  data         TEXT,
+  created_at   REAL    NOT NULL,
+  updated_at   REAL    NOT NULL,
+  origin_node  TEXT,
+  lamport      INTEGER NOT NULL DEFAULT 0,
+  deleted_at   REAL
+)
+"""
+
+# DROP TABLE takes every index on that table with it and the RENAME does not
+# bring them back (measured, not assumed). Without this, every graph read
+# silently degrades to a full table scan: correct answers, no failing test,
+# just a memory graph that gets slower forever.
+_GRAPH_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_nodes_kind    ON nodes(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_nodes_domain  ON nodes(domain)",
+    "CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at)",
+    # Redundant with the column-level UNIQUE, but `migrate_nodes_edges_sync_columns`
+    # recreates it on the very next startup regardless; creating it here keeps
+    # the post-rebuild schema identical to the steady state instead of changing
+    # shape one restart later.
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid)",
+    "CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid)",
+    "CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid)",
+    "CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation)",
+    # PARTIAL on purpose — see the comment on idx_nodes_deleted in _SCHEMA.
+    # Name and column match mobile; only the predicate differs, and an index
+    # predicate is a local planner concern, not a wire contract.
+    "CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deleted_at) "
+    "WHERE deleted_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_edges_deleted ON edges(deleted_at) "
+    "WHERE deleted_at IS NOT NULL",
+)
+
+
+def _rebuild_preflight(c) -> None:
+    """Refuse to start the rebuild if the data cannot satisfy mobile's
+    constraints. Raises with the offending ids named.
+
+    Without this the tightened `NOT NULL`s would surface as a bare
+    `IntegrityError` from deep inside an `INSERT ... SELECT`, naming nothing.
+    `init_db()` runs the backfills that make this impossible first; reaching it
+    means something upstream is broken, and the message has to say what.
+    """
+    bad_nodes = c.execute("SELECT id FROM nodes WHERE uuid IS NULL LIMIT 5").fetchall()
+    if bad_nodes:
+        raise RuntimeError(
+            "rebuild refused: node(s) with a NULL uuid cannot satisfy mobile's "
+            f"`uuid NOT NULL` — ids {[r[0] for r in bad_nodes]}. Run "
+            "migrate_nodes_edges_sync_columns() first."
+        )
+    bad_edges = c.execute(
+        "SELECT id, src_uuid, dst_uuid, uuid FROM edges "
+        "WHERE uuid IS NULL OR src_uuid IS NULL OR dst_uuid IS NULL LIMIT 5"
+    ).fetchall()
+    if bad_edges:
+        detail = "; ".join(
+            f"id={r[0]} src_uuid={r[1]!r} dst_uuid={r[2]!r} uuid={r[3]!r}"
+            for r in bad_edges
+        )
+        raise RuntimeError(
+            "rebuild refused: edge(s) with a NULL uuid or endpoint cannot "
+            f"satisfy mobile's NOT NULL columns — {detail}. Run "
+            "migrate_edge_endpoint_uuids() first."
+        )
+
+
+def _rebuild_copy_rows(tx) -> None:
+    """Copy every row into the new tables with an EXPLICIT `id`.
+
+    Never `INSERT INTO nodes_new(...) SELECT` without the id: AUTOINCREMENT
+    would reassign them, and `conversations.node_id`, `meetings.node_id`,
+    `reminders.related_node_id`, `domain_node_map.node_id` and every
+    `nodes_fts.rowid` address nodes by exactly that integer. A reassignment
+    re-attaches each of them to a DIFFERENT memory, with referential integrity
+    still perfectly intact.
+
+    Tombstoned rows are copied too. They ARE the user's deletions; dropping
+    them here is how a deleted memory comes back on the next sync.
+    """
+    tx.execute(
+        "INSERT INTO nodes_new(id, uuid, kind, label, data, domain, occurred_at, "
+        "created_at, updated_at, created_tz, origin_node, lamport, deleted_at, "
+        "embedding, embedding_model, embedding_dim) "
+        "SELECT id, uuid, kind, label, data, domain, occurred_at, created_at, "
+        "updated_at, created_tz, origin_node, COALESCE(lamport, 0), deleted_at, "
+        "embedding, embedding_model, embedding_dim FROM nodes"
+    )
+    tx.execute(
+        "INSERT INTO edges_new(id, uuid, src_uuid, dst_uuid, relation, data, "
+        "created_at, updated_at, origin_node, lamport, deleted_at) "
+        "SELECT id, uuid, src_uuid, dst_uuid, kind, data, created_at, "
+        "COALESCE(updated_at, created_at), origin_node, COALESCE(lamport, 0), "
+        "deleted_at FROM edges"
+    )
+
+
+def _rebuild_verify(tx) -> None:
+    """Verify the copy while old and new tables COEXIST, before DROP/RENAME.
+
+    Verifying after the rename verifies nothing: the evidence you would need —
+    the old table — is already gone, so a check there can only compare the new
+    table with itself.
+
+    Raises on the first discrepancy, which rolls the whole transaction back and
+    leaves the old schema fully intact.
+    """
+    for old, new in (("nodes", "nodes_new"), ("edges", "edges_new")):
+        n_old = tx.execute(f"SELECT COUNT(*) FROM {old}").fetchone()[0]
+        n_new = tx.execute(f"SELECT COUNT(*) FROM {new}").fetchone()[0]
+        if n_old != n_new:
+            raise RuntimeError(
+                f"rebuild verification failed: `{old}` has {n_old} rows, "
+                f"`{new}` has {n_new} — {abs(n_old - n_new)} row(s) would be "
+                "lost. Rolling back; the old schema is untouched."
+            )
+        nulls = tx.execute(f"SELECT COUNT(*) FROM {new} WHERE uuid IS NULL").fetchone()[0]
+        if nulls:
+            raise RuntimeError(
+                f"rebuild verification failed: {nulls} row(s) in `{new}` carry "
+                "a NULL uuid"
+            )
+        # SUM-based checksums over the identity columns, as specified. Cheap,
+        # order-independent, and it catches a wholesale column mis-mapping that
+        # per-row counts alone would not.
+        sums_old = tx.execute(
+            f"SELECT SUM(id), SUM(LENGTH(uuid)) FROM {old}"
+        ).fetchone()
+        sums_new = tx.execute(
+            f"SELECT SUM(id), SUM(LENGTH(uuid)) FROM {new}"
+        ).fetchone()
+        if tuple(sums_old) != tuple(sums_new):
+            raise RuntimeError(
+                f"rebuild verification failed: id/uuid checksums differ between "
+                f"`{old}` {tuple(sums_old)} and `{new}` {tuple(sums_new)}"
+            )
+    # id -> uuid mapping intact, per row, both endpoints and the relation with
+    # it. Strictly stronger than the checksums above; the checksums stay because
+    # they fail on shapes an equality join cannot reach (e.g. an empty new
+    # table joined against an empty old one).  `IS NOT` rather than `!=` so a
+    # NULL on either side counts as a difference instead of an unknown.
+    drift = tx.execute(
+        "SELECT o.id FROM nodes o LEFT JOIN nodes_new n ON n.id = o.id "
+        "WHERE n.uuid IS NOT o.uuid OR n.kind IS NOT o.kind "
+        "   OR n.label IS NOT o.label OR n.data IS NOT o.data "
+        "   OR n.created_at IS NOT o.created_at OR n.deleted_at IS NOT o.deleted_at "
+        "LIMIT 5"
+    ).fetchall()
+    if drift:
+        raise RuntimeError(
+            "rebuild verification failed: node id->uuid/payload mapping does not "
+            f"survive the copy for ids {[r[0] for r in drift]}"
+        )
+    drift = tx.execute(
+        "SELECT o.id FROM edges o LEFT JOIN edges_new n ON n.id = o.id "
+        "WHERE n.uuid IS NOT o.uuid OR n.src_uuid IS NOT o.src_uuid "
+        "   OR n.dst_uuid IS NOT o.dst_uuid OR n.relation IS NOT o.relation "
+        "   OR n.deleted_at IS NOT o.deleted_at "
+        "LIMIT 5"
+    ).fetchall()
+    if drift:
+        raise RuntimeError(
+            "rebuild verification failed: edge endpoint/relation mapping does "
+            f"not survive the copy for ids {[r[0] for r in drift]}"
+        )
+
+
+def migrate_rebuild_graph_tables(*, backup: Callable[[], str] | None = None) -> bool:
+    """THE POINT OF NO RETURN: rebuild `nodes`/`edges` to mobile's exact DDL.
+
+    Drops `from_id`/`to_id`/`kind` and the `ON DELETE CASCADE` FK with them,
+    promotes `relation` to real storage, and tightens `uuid NOT NULL UNIQUE`
+    and `lamport NOT NULL DEFAULT 0`. **There is no code-level revert past this
+    point** — reverting the code leaves queries against columns that are no
+    longer on disk. Recovery is restore-from-verified-backup, and nothing else,
+    which is why *backup* runs first and raises rather than warns.
+
+    Returns True if the rebuild ran, False if it was already applied
+    (`PRAGMA user_version` gate — a re-run is a safe no-op, and a process
+    killed anywhere before COMMIT leaves the old schema intact and unmigrated,
+    so restarting is a clean retry).
+
+    *backup* is injected so tests can drive fake success, fake failure and a
+    fake corrupt snapshot without a real device or key ceremony. It defaults to
+    `verified_pre_rebuild_backup`; there is no way to opt out of it.
+    """
+    c = _connect()
+    if c.execute("PRAGMA user_version").fetchone()[0] >= GRAPH_REBUILD_USER_VERSION:
+        return False
+    if "from_id" not in {r[1] for r in c.execute("PRAGMA table_xinfo(edges)").fetchall()}:
+        # A fresh database is created at mobile's shape by _SCHEMA and has
+        # nothing to rebuild; record that and stop.
+        c.execute(f"PRAGMA user_version = {GRAPH_REBUILD_USER_VERSION}")
+        return False
+
+    _rebuild_preflight(c)
+    snapshot = (backup or verified_pre_rebuild_backup)()
+    log.warning(
+        "migrate_rebuild_graph_tables: starting the IRREVERSIBLE graph table "
+        "rebuild; verified snapshot at %s is the only way back", snapshot,
+    )
+
+    # PRAGMA foreign_keys is a no-op inside a transaction, so it must be set
+    # here. The connection is autocommit (isolation_level=None, this module's
+    # convention), which is exactly why the explicit BEGIN IMMEDIATE below is
+    # mandatory rather than decorative.
+    c.execute("PRAGMA foreign_keys=OFF")
+    try:
+        c.execute("BEGIN IMMEDIATE")
+        try:
+            c.execute("DROP TABLE IF EXISTS nodes_new")
+            c.execute("DROP TABLE IF EXISTS edges_new")
+            c.execute(_NODES_REBUILT_DDL)
+            c.execute(_EDGES_REBUILT_DDL)
+            _rebuild_copy_rows(c)
+            _rebuild_verify(c)
+            c.execute("DROP TABLE edges")
+            c.execute("DROP TABLE nodes")
+            c.execute("ALTER TABLE edges_new RENAME TO edges")
+            c.execute("ALTER TABLE nodes_new RENAME TO nodes")
+            for stmt in _GRAPH_INDEX_DDL:
+                c.execute(stmt)
+            # user_version lives in the database header and is transactional,
+            # which is what makes it a trustworthy gate: a kill before COMMIT
+            # rolls it back along with everything else.
+            c.execute(f"PRAGMA user_version = {GRAPH_REBUILD_USER_VERSION}")
+            c.execute("COMMIT")
+        except BaseException:
+            # BaseException, not Exception: a KeyboardInterrupt landing here is
+            # precisely the "process killed mid-rebuild" case, and it must roll
+            # back too rather than leave a half-built schema behind.
+            c.execute("ROLLBACK")
+            raise
+    finally:
+        c.execute("PRAGMA foreign_keys=ON")
+
+    violations = c.execute("PRAGMA foreign_key_check").fetchall()
+    if violations:
+        log.error(
+            "migrate_rebuild_graph_tables: %d foreign key violation(s) AFTER the "
+            "rebuild: %s — restore from the snapshot at %s",
+            len(violations), violations[:5], snapshot,
+        )
+        raise RuntimeError(
+            f"rebuild left {len(violations)} foreign key violation(s); restore "
+            f"from {snapshot}"
+        )
+    # DROP TABLE nodes destroyed the AFTER DELETE trigger that cleans up
+    # vec_nodes, and the RENAME does not restore it. init_db() creates it
+    # BEFORE the migrations run, so nothing would put it back until the next
+    # startup.
+    try:
+        create_vec_nodes_table(c)
+    except Exception as exc:  # noqa: BLE001 — sqlite-vec may be unloadable
+        log.warning(
+            "migrate_rebuild_graph_tables: could not restore the vec_nodes "
+            "trigger after the rebuild: %s", exc,
+        )
+    log.warning("migrate_rebuild_graph_tables: rebuild COMMITTED — schema is now "
+                "mobile's shape; %s is the only rollback", snapshot)
+    return True
 
 
 def hash_device_token(token: str) -> str:
@@ -3373,26 +3873,17 @@ def check_and_create_similar_to_edges(
                     (node_id, neighbor_id),
                 ).fetchone()
                 if exists is None:
-                    # Dual-write src_uuid/dst_uuid alongside from_id/to_id
-                    # (PR5 "Expand"), looked up in the SAME transaction as
-                    # the insert — see add_edge's identical rationale.
+                    # PR8: uuid endpoints, real `relation`, and an `uuid` of
+                    # its own — see add_edge's identical rationale.
                     now = time.time()
-                    src_row = c.execute(
-                        "SELECT uuid FROM nodes WHERE id = ?", (node_id,)
-                    ).fetchone()
-                    dst_row = c.execute(
-                        "SELECT uuid FROM nodes WHERE id = ?", (neighbor_id,)
-                    ).fetchone()
+                    src_uuid, dst_uuid = _require_endpoint_uuids(
+                        c, node_id, neighbor_id
+                    )
                     c.execute(
-                        "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
-                        "src_uuid, dst_uuid, updated_at) "
-                        "VALUES (?, ?, 'similar-to', '{}', ?, ?, ?, ?)",
-                        (
-                            node_id, neighbor_id, now,
-                            src_row[0] if src_row else None,
-                            dst_row[0] if dst_row else None,
-                            now,
-                        ),
+                        "INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, "
+                        "data, created_at, updated_at) "
+                        "VALUES (?, ?, ?, 'similar-to', '{}', ?, ?)",
+                        (str(uuid.uuid4()), src_uuid, dst_uuid, now, now),
                     )
                     created += 1
         except Exception as exc:  # noqa: BLE001

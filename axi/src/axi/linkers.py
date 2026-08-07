@@ -24,6 +24,7 @@ from __future__ import annotations
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -69,22 +70,16 @@ def _safe_insert_edge(conn, from_id: int, to_id: int, kind: str) -> bool:
     """
     if _edge_exists(conn, from_id, to_id, kind):
         return False
-    # Dual-write src_uuid/dst_uuid alongside from_id/to_id (PR5 "Expand" —
-    # design-schema.md Decision 2 step 1), looked up on the same `conn` the
-    # insert uses so both stay consistent. from_id/to_id stay authoritative;
-    # nothing reads src_uuid/dst_uuid yet.
+    # PR8: endpoints are node uuids (`from_id`/`to_id` are gone) and the edge
+    # carries its own `uuid`, resolved on the same `conn` the insert uses.
+    from axi import store  # lazy, avoid import cycle
+
     now = time.time()
-    src_row = conn.execute("SELECT uuid FROM nodes WHERE id = ?", (from_id,)).fetchone()
-    dst_row = conn.execute("SELECT uuid FROM nodes WHERE id = ?", (to_id,)).fetchone()
+    src_uuid, dst_uuid = store._require_endpoint_uuids(conn, from_id, to_id)  # noqa: SLF001
     conn.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
-        "src_uuid, dst_uuid, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            from_id, to_id, kind, "{}", now,
-            src_row[0] if src_row else None,
-            dst_row[0] if dst_row else None,
-            now,
-        ),
+        "INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, data, "
+        "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(uuid.uuid4()), src_uuid, dst_uuid, kind, "{}", now, now),
     )
     return True
 

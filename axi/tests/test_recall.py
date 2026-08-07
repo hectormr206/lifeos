@@ -591,10 +591,10 @@ def test_graph_relation_lines_empty_when_no_matches():
 # ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
 
 _OLD_GRAPH_RELATION_SQL = (
-    "SELECT nf.label AS f, e.kind AS k, nt.label AS t "
-    "FROM edges e JOIN nodes nf ON e.from_id = nf.id "
-    "JOIN nodes nt ON e.to_id = nt.id "
-    "WHERE e.from_id IN ({ph}) OR e.to_id IN ({ph})"
+    "SELECT nf.label AS f, e.relation AS k, nt.label AS t "
+    "FROM edges e JOIN nodes nf ON nf.uuid = e.src_uuid "
+    "JOIN nodes nt ON nt.uuid = e.dst_uuid "
+    "WHERE nf.id IN ({ph}) OR nt.id IN ({ph})"
 )
 
 
@@ -635,9 +635,10 @@ def test_graph_relation_lines_resolves_through_endpoint_uuids():
     ("hipertensión diagnosticada por Dra. López"), so both endpoint labels
     must come from the sync-stable uuid endpoints.
 
-    The integer `from_id` is pointed at a decoy while `src_uuid` still names
-    the real source. Following the wrong column puts a sentence in the user's
-    recall context that their graph does not actually assert.
+    The integer `from_id` this test used to desync no longer exists (PR8), so
+    the sentence can only come from `src_uuid`. Asserted by moving that column
+    and watching the sentence follow it: nothing else gets to decide what the
+    user is told their graph says.
     """
     from axi import recall, store
 
@@ -646,11 +647,18 @@ def test_graph_relation_lines_resolves_through_endpoint_uuids():
     decoy = store.add_node("person", "Dra Tere")
     eid = store.add_edge(src, dst, "diagnosticada_por")
     c = store._connect()
-    c.execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
 
-    lines = recall._graph_relation_lines({src}, c)
-    assert lines == ["hipertensión diagnosticada por Dra. López"]
-    assert recall._graph_relation_lines({decoy}, c) == []
+    assert recall._graph_relation_lines({src}, c) == [
+        "hipertensión diagnosticada por Dra. López"
+    ]
+    c.execute(
+        "UPDATE edges SET src_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert recall._graph_relation_lines({src}, c) == []
+    assert recall._graph_relation_lines({decoy}, c) == [
+        "Dra Tere diagnosticada por Dra. López"
+    ]
 
 
 def test_graph_relation_lines_identical_to_pre_rewrite_query(pr6a_graph):

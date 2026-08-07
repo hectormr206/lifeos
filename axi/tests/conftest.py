@@ -457,6 +457,147 @@ def fresh_db(tmp_path, monkeypatch):
     _config._cache = None
 
 
+# The EXACT `nodes`/`edges` DDL as it stood at the PR7 tip, i.e. the shape the
+# owner's real database is in on the morning PR8 runs. Copied verbatim rather
+# than derived, because a fixture that builds the old shape by transforming the
+# new one would drift with the new one and stop testing the migration at all.
+_PRE_PR8_NODES_DDL = """
+CREATE TABLE nodes (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind        TEXT NOT NULL,
+  label       TEXT NOT NULL,
+  data        TEXT,
+  domain      TEXT,
+  created_at  REAL NOT NULL,
+  updated_at  REAL NOT NULL,
+  created_tz  TEXT,
+  uuid        TEXT,
+  lamport     INTEGER,
+  origin_node TEXT,
+  deleted_at  REAL,
+  embedding       BLOB,
+  embedding_model TEXT,
+  embedding_dim   INTEGER,
+  occurred_at REAL
+)
+"""
+
+_PRE_PR8_EDGES_DDL = """
+CREATE TABLE edges (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  from_id     INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  to_id       INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+  kind        TEXT NOT NULL,
+  data        TEXT,
+  created_at  REAL NOT NULL,
+  uuid        TEXT,
+  lamport     INTEGER,
+  origin_node TEXT,
+  deleted_at  REAL,
+  src_uuid    TEXT,
+  dst_uuid    TEXT,
+  updated_at  REAL,
+  relation    TEXT GENERATED ALWAYS AS (kind) VIRTUAL
+)
+"""
+
+_PRE_PR8_INDEXES = (
+    "CREATE INDEX idx_nodes_kind    ON nodes(kind)",
+    "CREATE INDEX idx_nodes_domain  ON nodes(domain)",
+    "CREATE INDEX idx_nodes_created ON nodes(created_at)",
+    "CREATE UNIQUE INDEX idx_nodes_uuid ON nodes(uuid)",
+    "CREATE INDEX idx_nodes_deleted ON nodes(deleted_at) WHERE deleted_at IS NOT NULL",
+    "CREATE INDEX idx_edges_from ON edges(from_id)",
+    "CREATE INDEX idx_edges_to   ON edges(to_id)",
+    "CREATE INDEX idx_edges_kind ON edges(kind)",
+    "CREATE UNIQUE INDEX idx_edges_uuid ON edges(uuid)",
+    "CREATE INDEX idx_edges_src      ON edges(src_uuid)",
+    "CREATE INDEX idx_edges_dst      ON edges(dst_uuid)",
+    "CREATE INDEX idx_edges_relation ON edges(relation)",
+    "CREATE INDEX idx_edges_deleted  ON edges(deleted_at) WHERE deleted_at IS NOT NULL",
+)
+
+
+@pytest.fixture
+def pre_pr8_graph():
+    """Put `nodes`/`edges` back into their exact pre-PR8 shape, seeded.
+
+    `fresh_db` runs the full migration chain, so from PR8 on a fresh test DB is
+    ALREADY rebuilt — a naive rebuild test would exercise the early-return and
+    prove nothing. This fixture is the same technique
+    `_rebuild_post_3a_pre_pr5_edges` used for PR5, one slice further on.
+
+    Seeds through raw SQL (the production writers speak the NEW shape after
+    PR8) and returns the ids/uuids the rebuild must preserve exactly.
+    """
+    import json as _json
+    import time as _t
+    import uuid as _uuid
+
+    from axi import store as _store
+
+    c = _store._connect()  # noqa: SLF001
+    c.execute("PRAGMA foreign_keys=OFF")
+    c.execute("DROP TABLE IF EXISTS edges")
+    c.execute("DROP TABLE IF EXISTS nodes")
+    c.execute(_PRE_PR8_NODES_DDL)
+    c.execute(_PRE_PR8_EDGES_DDL)
+    for stmt in _PRE_PR8_INDEXES:
+        c.execute(stmt)
+    c.execute("PRAGMA user_version = 0")
+    # The AFTER DELETE trigger lives on `nodes` and therefore died with the
+    # DROP above. Restore it so the rebuild is tested against a DB that has it.
+    try:
+        _store.create_vec_nodes_table(c)
+    except Exception:  # noqa: BLE001 — sqlite-vec may not be loadable here
+        pass
+
+    now = _t.time()
+    ids: dict[str, int] = {}
+    uuids: dict[str, str] = {}
+    for role, (kind, label) in {
+        "hub": ("person", "Héctor"),
+        "ana": ("person", "Ana Ríos"),
+        "fact": ("fact", "hipertensión diagnosticada"),
+        "gone": ("fact", "recuerdo borrado"),
+    }.items():
+        u = str(_uuid.uuid4())
+        c.execute(
+            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, "
+            "created_tz, uuid, occurred_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (kind, label, _json.dumps({"role": "user"} if role == "hub" else {}),
+             "health", now, now, "UTC", u, now),
+        )
+        ids[role] = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+        uuids[role] = u
+        c.execute(
+            "INSERT INTO nodes_fts(rowid, label, data_text) VALUES (?, ?, ?)",
+            (ids[role], label, label),
+        )
+    # A tombstoned node: the rebuild copies EVERY row, tombstones included —
+    # dropping them would delete the user's deletions, which is how a deleted
+    # memory comes back on the next sync.
+    c.execute("UPDATE nodes SET deleted_at=? WHERE id=?", (now, ids["gone"]))
+
+    edges: dict[str, int] = {}
+    for role, (src, dst, kind) in {
+        "esposa": ("hub", "ana", "esposa"),
+        "about": ("hub", "fact", "about"),
+        "self": ("fact", "fact", "same-day"),
+        "dead": ("hub", "gone", "about"),
+    }.items():
+        c.execute(
+            "INSERT INTO edges(from_id, to_id, kind, data, created_at, uuid, "
+            "src_uuid, dst_uuid, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (ids[src], ids[dst], kind, "{}", now, str(_uuid.uuid4()),
+             uuids[src], uuids[dst], now),
+        )
+        edges[role] = c.execute("SELECT last_insert_rowid()").fetchone()[0]
+    c.execute("UPDATE edges SET deleted_at=? WHERE id=?", (now, edges["dead"]))
+    c.execute("PRAGMA foreign_keys=ON")
+    return {"nodes": ids, "uuids": uuids, "edges": edges}
+
+
 @pytest.fixture
 def pr6a_graph():
     """A small graph carrying the shapes a uuid-join rewrite can get wrong.

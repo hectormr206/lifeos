@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 import pytest
+import uuid as _uuid
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -66,9 +67,9 @@ def test_config_timezone_default_falls_back_to_utc_when_tzlocal_fails():
 def _insert_node(conn, kind="fact", label="test", domain="health", ts=None) -> int:
     now = ts or time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (kind, label, "{}", domain, now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), kind, label, "{}", domain, now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -76,7 +77,7 @@ def _insert_node(conn, kind="fact", label="test", domain="health", ts=None) -> i
 
 def _edge_exists(conn, a: int, b: int, kind: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=? LIMIT 1",
         (a, b, kind),
     ).fetchone()
     return row is not None

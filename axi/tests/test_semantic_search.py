@@ -13,6 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+import uuid as _uuid
 
 
 def _float32_blob(values: list[float]) -> bytes:
@@ -25,15 +26,15 @@ def _insert_node_with_embedding(conn, label: str, vector: list[float], node_id: 
     blob = _float32_blob(vector)
     if node_id is not None:
         conn.execute(
-            "INSERT INTO nodes(id, kind, label, data, domain, created_at, updated_at, "
-            "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (node_id, "fact", label, "{}", "test", now, now, blob, "test-model", len(vector)),
+            "INSERT INTO nodes(id, uuid, kind, label, data, domain, created_at, updated_at, "
+            "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (node_id, str(_uuid.uuid4()), "fact", label, "{}", "test", now, now, blob, "test-model", len(vector)),
         )
     else:
         cur = conn.execute(
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, "
-            "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            ("fact", label, "{}", "test", now, now, blob, "test-model", len(vector)),
+            "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, "
+            "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (str(_uuid.uuid4()), "fact", label, "{}", "test", now, now, blob, "test-model", len(vector)),
         )
         node_id = cur.lastrowid
     conn.commit()
@@ -93,9 +94,9 @@ def test_semantic_search_empty_when_no_embeddings():
     # Insert nodes without embeddings.
     now = time.time()
     conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "no embed", "{}", "test", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "no embed", "{}", "test", now, now),
     )
     conn.commit()
 

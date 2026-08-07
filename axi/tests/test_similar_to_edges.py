@@ -78,7 +78,7 @@ def test_similar_to_edges_created_above_threshold(monkeypatch):
         check_and_create_similar_to_edges(1, conn, threshold=0.85)
 
     row = conn.execute(
-        "SELECT id FROM edges WHERE from_id=1 AND to_id=2 AND kind='similar-to'"
+        "SELECT id FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=1) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=2) AND relation='similar-to'"
     ).fetchone()
     assert row is not None, "similar-to edge A→B not created (cosine 0.91 >= 0.85)"
 
@@ -101,7 +101,7 @@ def test_similar_to_edges_not_created_below_threshold(monkeypatch):
         check_and_create_similar_to_edges(3, conn, threshold=0.85)
 
     row = conn.execute(
-        "SELECT id FROM edges WHERE from_id=3 AND to_id=4 AND kind='similar-to'"
+        "SELECT id FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=3) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=4) AND relation='similar-to'"
     ).fetchone()
     assert row is None, "no edge expected when cosine 0.72 < threshold 0.85"
 
@@ -124,7 +124,7 @@ def test_similar_to_edges_created_with_lower_threshold(monkeypatch):
         check_and_create_similar_to_edges(5, conn, threshold=0.75)
 
     row = conn.execute(
-        "SELECT id FROM edges WHERE from_id=5 AND to_id=6 AND kind='similar-to'"
+        "SELECT id FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=5) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=6) AND relation='similar-to'"
     ).fetchone()
     assert row is not None, "edge expected when cosine 0.78 >= threshold 0.75"
 
@@ -146,7 +146,7 @@ def test_similar_to_edges_no_self_link(monkeypatch):
         check_and_create_similar_to_edges(7, conn, threshold=0.85)
 
     row = conn.execute(
-        "SELECT id FROM edges WHERE from_id=7 AND to_id=7 AND kind='similar-to'"
+        "SELECT id FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=7) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=7) AND relation='similar-to'"
     ).fetchone()
     assert row is None, "self-link must not be created"
 
@@ -169,6 +169,6 @@ def test_similar_to_edges_idempotent(monkeypatch):
         check_and_create_similar_to_edges(8, conn, threshold=0.85)
 
     count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=8 AND to_id=9 AND kind='similar-to'"
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=8) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=9) AND relation='similar-to'"
     ).fetchone()[0]
     assert count == 1, f"expected 1 edge, found {count} (idempotency failure)"

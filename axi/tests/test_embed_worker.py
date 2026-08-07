@@ -9,6 +9,7 @@ import threading
 from unittest.mock import patch, MagicMock
 
 import pytest
+import uuid as _uuid
 
 
 def _float32_blob(values: list[float]) -> bytes:
@@ -19,9 +20,9 @@ def _insert_null_embedding_node(conn, label: str = "test node") -> int:
     """Helper: insert a node with NULL embedding into the test DB."""
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", label, "{}", "test", now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", label, "{}", "test", now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -68,9 +69,9 @@ def test_embed_pending_nodes_skips_already_embedded(monkeypatch):
     # Insert one already-embedded node.
     fake_blob = _float32_blob([0.1] * 512)
     conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, "
-        "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ("fact", "already done", "{}", "test", now, now, fake_blob, "test-model", 512),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at, "
+        "embedding, embedding_model, embedding_dim) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", "already done", "{}", "test", now, now, fake_blob, "test-model", 512),
     )
     # Insert one node that needs embedding.
     _insert_null_embedding_node(conn, label="needs embed")

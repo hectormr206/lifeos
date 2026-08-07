@@ -12,6 +12,7 @@ import struct
 import time
 
 import pytest
+import uuid as _uuid
 
 
 def _float32_blob(values: list[float]) -> bytes:
@@ -57,9 +58,9 @@ def test_vec_nodes_insert_and_knn(tmp_path, monkeypatch):
     now = time.time()
     for i in range(3):
         conn.execute(
-            "INSERT INTO nodes(id, kind, label, data, domain, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (i + 1, "fact", f"node{i}", "{}", "test", now, now),
+            "INSERT INTO nodes(id, uuid, kind, label, data, domain, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (i + 1, str(_uuid.uuid4()), "fact", f"node{i}", "{}", "test", now, now),
         )
     conn.commit()
 

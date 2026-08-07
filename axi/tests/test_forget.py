@@ -156,12 +156,12 @@ def test_delete_node_tombstones_node_and_edges_and_removes_fts(seeded_graph):
     ).fetchone()["deleted_at"] is not None
     # Its edges (toma: hub->med, same-day: hub->med) are tombstoned, not gone.
     live = c.execute(
-        "SELECT COUNT(*) AS n FROM edges WHERE (from_id=? OR to_id=?) "
+        "SELECT COUNT(*) AS n FROM edges WHERE (src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) "
         "AND deleted_at IS NULL", (med, med)
     ).fetchone()["n"]
     assert live == 0
     assert c.execute(
-        "SELECT COUNT(*) AS n FROM edges WHERE from_id=? OR to_id=?", (med, med)
+        "SELECT COUNT(*) AS n FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR dst_uuid=(SELECT uuid FROM nodes WHERE id=?)", (med, med)
     ).fetchone()["n"] > 0, "the edges were hard-deleted instead of tombstoned"
     # FTS row gone — still a HARD delete, deliberately.
     fts = c.execute("SELECT COUNT(*) AS n FROM nodes_fts WHERE rowid=?", (med,)).fetchone()["n"]
@@ -214,15 +214,15 @@ def _old_forget_edge_lane(c, target: str, limit: int) -> list[tuple[int, str]]:
     params: list = []
     for w in words:
         where.append(
-            "(LOWER(nf.label) LIKE ? OR LOWER(nt.label) LIKE ? OR LOWER(e.kind) LIKE ?)"
+            "(LOWER(nf.label) LIKE ? OR LOWER(nt.label) LIKE ? OR LOWER(e.relation) LIKE ?)"
         )
         like = f"%{w}%"
         params.extend([like, like, like])
     sql = (
-        "SELECT e.id AS eid, e.kind AS k, nf.label AS f, nt.label AS t "
+        "SELECT e.id AS eid, e.relation AS k, nf.label AS f, nt.label AS t "
         "FROM edges e "
-        "JOIN nodes nf ON e.from_id = nf.id "
-        "JOIN nodes nt ON e.to_id = nt.id "
+        "JOIN nodes nf ON nf.uuid = e.src_uuid "
+        "JOIN nodes nt ON nt.uuid = e.dst_uuid "
         f"WHERE ({' OR '.join(where)}) "
         "LIMIT ?"
     )
@@ -245,22 +245,32 @@ def test_forget_edge_lane_resolves_through_endpoint_uuids():
     with its two endpoint labels, so it must resolve them through
     `src_uuid`/`dst_uuid`.
 
-    The edge's integer `from_id` is pointed at a decoy while `src_uuid` still
-    names the real source, so the candidate's label reveals which column the
-    join actually followed. Reading the wrong one offers the user a deletion
-    described with the WRONG endpoint — worse than offering nothing.
+    This used to point the edge's integer `from_id` at a decoy while
+    `src_uuid` still named the real source, so the candidate's label revealed
+    which column the join followed. PR8 deleted `from_id`, so the wrong column
+    can no longer be read at all. The claim is asserted the other way round
+    now: the label follows `src_uuid`, and moving `src_uuid` moves the label.
+    Reading the wrong endpoint would offer the user a deletion described with
+    the WRONG relation — worse than offering nothing.
     """
     src = store.add_node("person", "Ana Ríos")
     dst = store.add_node("medication", "losartán")
     decoy = store.add_node("person", "Dra Tere")
     eid = store.add_edge(src, dst, "toma")
-    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
 
     edges = [c for c in forget.find_forget_candidates("losartán")
              if c["type"] == "edge"]
     assert edges, "the edge lane returned nothing for a matching relation"
     assert "Ana Ríos" in edges[0]["label"]
     assert "Dra Tere" not in edges[0]["label"]
+
+    store._connect().execute(
+        "UPDATE edges SET src_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    edges = [c for c in forget.find_forget_candidates("losartán")
+             if c["type"] == "edge"]
+    assert edges and "Dra Tere" in edges[0]["label"]
 
 
 def test_forget_edge_lane_identical_to_pre_rewrite_query(pr6a_graph):

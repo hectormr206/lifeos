@@ -1908,3 +1908,369 @@ converged; recorded so PR8 does not "fix" it.
 
 **Gate 7.12: satisfied in this tree.** FTS invariant proven RED-first, suite
 green, zero new failures, tombstones on every delete path. PR8 may open.
+
+---
+
+## Phase 8 (PR8) — THE POINT OF NO RETURN: verified backup + single-transaction rebuild
+
+**Mode**: Strict TDD. **Scope**: tasks 8.0–8.16 plus 8.17 (added during apply).
+No branch, no commit — the coordinator commits.
+
+### Gate 8.0 — confirmed, not assumed
+
+PR7 is at `f379acc0` and the coordinator's 950/23 measurement is recorded in the
+Phase 7 verification above. Rather than re-run it, the gate's *substance* was
+re-checked directly: `rg 'DELETE FROM nodes\b|DELETE FROM edges\b'` across
+`axi/src/axi/*.py` returns **zero** hits, and all three delete paths
+(`store.delete_node`, `store.delete_edge`, `meeting.py:887`, `identity.py:413`)
+are `UPDATE ... SET deleted_at`. The `ON DELETE CASCADE` FK that PR8 removes
+therefore had nothing left to cascade. Gate satisfied.
+
+Independent baseline re-measured for this phase: **951 passed / 23 failed**
+across the 59 store-dependent files at `f379acc0` (a `git worktree` detached
+checkout under `~/dev/gama/lifeos/lifeos-app-worktrees/`, never `/tmp`).
+
+### THE ENUMERATION (task 8.13 is the backstop; this is the actual work)
+
+Every site in the repo that READS, JOINS ON, SELECTS or otherwise NAMES
+`edges.from_id` / `edges.to_id` / `edges.kind`, and what happened to it.
+
+**Production — WRITE sites the design never enumerated (this is the trap):**
+
+| Site | Was | Now |
+|---|---|---|
+| `store.add_edge` (`store.py:1346`) | `INSERT INTO edges(from_id, to_id, kind, …)` | `INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, …)`; endpoints resolved via new `_require_endpoint_uuids` |
+| similar-to auto-edge (`store.py:3387`) | same shape | same rewrite |
+| `linkers._safe_insert_edge` (`linkers.py:80`) | same shape | same rewrite |
+| `identity.register_alias` (`identity.py:402,406`) | `UPDATE edges SET from_id=?, src_uuid=? WHERE from_id=?` | `UPDATE edges SET src_uuid=?, updated_at=? WHERE src_uuid=?` (matched on the loser's uuid) |
+
+The delete-site table in design-schema.md enumerates sites that DELETE. The
+reader-rewrite tasks enumerate sites that READ. Nothing enumerated sites that
+**WRITE** these columns — and all four would have failed at the first insert
+after the rebuild. Same shape as PR7's `POST /api/graph/merge` defect, one
+level over.
+
+**Production — MIGRATION sites, the one that would have been fatal:**
+
+| Site | Risk | Fix |
+|---|---|---|
+| `migrate_edge_endpoint_uuids` backfill (`store.py:2993`) | `JOIN nodes n1 ON n1.id = e.from_id` — runs on EVERY `init_db()` | guarded by `if "from_id" in existing_edges` |
+| `verify_edge_endpoint_convergence` (`store.py:3054`) | same JOIN, and it RAISES on any execution failure by design | drift half skipped when the column is gone; NULL-endpoint half still runs |
+
+`verify_edge_endpoint_convergence()` is called at the end of
+`migrate_edge_endpoint_uuids()`, which `init_db()` calls unconditionally. Left
+alone, the first startup after the rebuild would have raised
+`RuntimeError: could not execute the convergence check` — **the daemon would
+not have come up at all, on a database with no code-level revert**. Task 8.13
+would not have caught this: it asserts that such SQL fails loudly, and this SQL
+did exactly that, inside the one function whose contract is to treat "cannot
+run" as fatal.
+
+**Production — schema/index sites:**
+`_SCHEMA`'s `nodes`/`edges` `CREATE TABLE` moved to mobile's exact DDL, and
+`idx_edges_from` / `idx_edges_to` / `idx_edges_kind` were removed with the
+columns they indexed. Without the `_SCHEMA` change a *fresh install* would have
+kept `from_id NOT NULL` while the rewritten `add_edge` no longer supplies it —
+every new install broken on the first edge.
+
+**Tests — ~90 sites across 22 files**, all rewritten (see "Existing test
+expectations that changed" below). They failed with `no such column`, which is
+task 8.13's property working exactly as designed, at scale.
+
+**Out of scope, re-verified as still holding:**
+`lifeos/src/lifeos/edges.py` has no `from_id`/`to_id` at all (its columns are
+`src_domain`/`dst_domain`/`rel`). `lifeos/src/lifeos/relationships/{store,people}.py`
+own a `person_links` table with its own `from_id`/`to_id`/`kind` in a
+*different database*. `mobile/lib/features/graph/domain/graph_node_detail.dart:45`
+is a comment. None touched; scope not widened.
+
+### Backup gate (8.1–8.6) — finished and green BEFORE the rebuild was written
+
+`axi/tests/test_migration_backup.py` (new, 8 tests) went RED first — 8/8 with a
+genuine `AttributeError: module 'axi.store' has no attribute
+'verified_pre_rebuild_backup'` — and only then was `store.verified_pre_rebuild_backup`
+implemented. It is the ONLY recovery path that will exist, so it was completed
+before a line of the rebuild was typed.
+
+| Task | Test | Evidence |
+|---|---|---|
+| 8.1 | `test_snapshot_opens_with_the_key_and_carries_every_row` | snapshot opens with `load_key()`, row counts equal live, both labels present |
+| 8.2 | `test_snapshot_stays_encrypted_without_the_key` | `sqlcipher3.DatabaseError` without the key — pins the half that, had it changed, would have left an unencrypted dump of the whole graph on disk |
+| 8.3 | `test_gate_aborts_when_the_snapshot_fails_integrity_check` | the REAL verification code run against a REAL torn file: `_vacuum_into` monkeypatched to take the real snapshot and then truncate it to a third |
+| 8.4 | `test_gate_aborts_on_row_count_mismatch`, `test_gate_aborts_when_a_sampled_id_uuid_pair_disagrees` | a structurally sound snapshot with one node deleted, and one with a scrambled uuid — `integrity_check` passes both; parity and the sampled `(id, uuid)` spot-check catch them |
+| 8.5 | `test_rebuild_refuses_to_start_when_the_injected_backup_fails` / `..._runs_with_an_injected_successful_backup` | fake failure leaves `edges` byte-identical and `user_version` at 0; fake success needs no device or key ceremony |
+| 8.6 | `test_default_backup_callable_is_the_verified_one` | calling the migration with no `backup=` still takes a verified snapshot — the gate is not opt-in |
+
+**Defect found while writing 8.4**: `_verify_snapshot` opened the snapshot with
+a bare `sqlcipher3.connect` and no sqlite-vec. The snapshot carries a `vec0`
+virtual table and the trigger referencing it, so any statement SQLite must
+compile against them fails `no such module: vec0` — a *good* backup reported as
+unreadable. Fixed by loading the extension best-effort on the snapshot
+connection.
+
+### In-transaction verification (8.8) — evidence
+
+`test_in_transaction_verification_runs_while_both_tables_coexist` does not take
+the ordering on trust. It wraps `store._rebuild_verify` and, **from inside the
+call**, lists `sqlite_master`, asserting `{nodes, nodes_new, edges, edges_new}`
+are all present. Verifying after the rename verifies nothing: the old table —
+the only evidence — is already gone.
+
+`_rebuild_verify` checks, per table: row counts equal; zero NULL `uuid` in the
+new table; `SUM(id)`/`SUM(LENGTH(uuid))` checksums equal (as 8.8 specifies);
+plus a per-row `LEFT JOIN` anti-join on `id` comparing `uuid`/`kind`/`label`/
+`data`/`created_at`/`deleted_at` for nodes and `uuid`/`src_uuid`/`dst_uuid`/
+`relation`/`deleted_at` for edges. `IS NOT`, not `!=`, so a NULL on either side
+counts as a difference instead of an unknown — the blind spot this chain has
+already been bitten by twice.
+
+### 8.9 — ROLLBACK proven, not a return value
+
+`test_a_lost_row_makes_verification_raise_and_rolls_the_whole_thing_back`
+replaces `_rebuild_copy_rows` with one that copies everything and then genuinely
+`DELETE`s a node from `nodes_new`. The assertions are all on the **database
+afterwards**:
+
+- `from_id` and `kind` still in `edges` (the OLD schema survived intact)
+- node count unchanged, `Ana Ríos`'s label still readable
+- the full index set on both tables byte-identical to before
+- `PRAGMA user_version` still 0
+- `nodes_new` gone from `sqlite_master`
+
+### 8.14 — kill-safety evidence
+
+`test_a_killed_process_mid_rebuild_leaves_the_old_schema_unmigrated` raises
+`KeyboardInterrupt` from inside `_rebuild_verify`, i.e. after `BEGIN IMMEDIATE`
+and the copy, before `DROP`/`RENAME`/`COMMIT` (simulated with a raise, not by
+killing the interpreter). Old schema intact, `user_version` still 0, and the
+same call then completes cleanly on retry. The handler catches `BaseException`,
+not `Exception`, precisely so a `KeyboardInterrupt` rolls back rather than
+leaving a half-built schema. `PRAGMA user_version` is transactional (it lives in
+the DB header), which is what makes it a trustworthy gate rather than a hope.
+
+### Triggers, FTS and vec across DROP/RENAME — measured
+
+A standalone probe (plain `sqlite3`, a temp file, never the default `DB_PATH`)
+reproduced the exact sequence. Findings:
+
+| Object | What DROP/RENAME does | Action taken |
+|---|---|---|
+| `trg_nodes_delete_vec` (AFTER DELETE ON nodes) | **DESTROYED** by `DROP TABLE nodes`; the RENAME does not bring it back | recreated inside the migration via `create_vec_nodes_table`. `init_db()` calls that BEFORE the migrations, so nothing would have restored it until the NEXT startup |
+| every index on `nodes`/`edges` | **DESTROYED**; only the implicit UNIQUE index survives | all recreated from `_GRAPH_INDEX_DDL` inside the transaction |
+| `vec_nodes` rows | untouched — `DROP TABLE` does **not** fire the AFTER DELETE trigger (measured; the row survived) | nothing needed. Had it fired, every embedding in the graph would have been silently deleted mid-migration |
+| `nodes_fts` | untouched (separate virtual table, addresses nodes by rowid) | preserved by the explicit `id` copy; `test_rebuild_leaves_the_fts_index_intact` searches through the FTS join after the rebuild |
+| `conversations`/`meetings`/`reminders`/`domain_node_map` FK text | unchanged; still `REFERENCES nodes(id)`, resolves after the rename | `PRAGMA foreign_key_check` returns empty (8.11) |
+
+### Zero-regression, dual-tree (the mandated proof)
+
+Measured twice, `-p no:randomly` so ordering is identical, failure sets diffed
+with `comm`. The baseline is a `git worktree` detached checkout of `f379acc0`
+under `~/dev/gama/lifeos/lifeos-app-worktrees/` (never `/tmp`), removed after.
+
+**A. The 59 store-dependent files** (`add_node|axi\.store|from axi import store`):
+
+| Tree state | Passed | Failed |
+|---|---|---|
+| PR7 tip `f379acc0` | 951 | 23 |
+| PR8 | 970 | 24 |
+
+**B. The WHOLE `axi/tests/` directory** (`--continue-on-collection-errors`;
+~39 files fail collection on unrelated missing deps in both trees):
+
+| Tree state | Passed | Failed | Skipped |
+|---|---|---|---|
+| PR7 tip `f379acc0` | 3294 | 98 | 6 |
+| PR8 | 3314 | 99 | 6 |
+
+**+20 net passing tests. `comm` is EMPTY in the masked direction on both
+runs** — zero pre-existing failures were hidden. The single entry new to PR8,
+in both runs, is `test_memory.py::test_clear_wipes_history_returns_count`: the
+daemon-thread/`DB_PATH` TOCTOU flake documented in the Phase 5 verification
+(`conftest.py:21`, stderr signature `hmac check failed for pgno=1`). Re-checked
+rather than asserted — `tests/test_memory.py` passes 6/6 four runs in a row on
+the PR8 tree and 6/6 three runs in a row at baseline; it only fails inside a
+full-suite run, on either tree.
+
+**C. The three edge-relevant files the 59-file glob excludes**
+(`test_meeting_sql_contract.py`, `test_extractor_life_stories.py`,
+`test_wakeword.py`, run with the meeting suite): **12 failed / 107 passed on
+BOTH trees**, identical sets, all in `test_wakeword.py` and unrelated to the
+graph. Checked explicitly because a file-name glob is not an enumeration.
+
+### Existing test expectations that changed, and WHY
+
+| Test | Old expectation | New | Why |
+|---|---|---|---|
+| `test_fresh_db_edges_table_has_pr5_columns_via_create_table_alone` | `relation` is `GENERATED ALWAYS AS (kind) VIRTUAL` | real `NOT NULL` storage; no `from_id`/`to_id` in the DDL | PR5 chose a generated column so `relation` could not drift from `kind` during the expand window. PR8 ends the window: `kind` is gone, so there is exactly one column — the anti-drift property survives for the same reason it was chosen |
+| `test_backfill_repairs_an_edge_missing_only_dst_uuid` | ran on the current schema | runs on the pre-PR5 shape | a NULL endpoint is unwritable after the rebuild. The repair still has to work on the shape the owner's database is in the morning it migrates, which is where the test now runs |
+| `test_neighbors_resolves_edges_through_src_uuid_not_from_id` (+ the dst and `same_day` twins, `linkers`/`identity`/`forget`/`recall` equivalents, ~10 tests) | desync the integer endpoint from the uuid endpoint, assert the reader follows the uuid | assert `from_id`/`to_id` are GONE, then move `src_uuid` and assert the read follows it | the desync is no longer expressible — which is a STRONGER guarantee than the assertion it replaces (the wrong column cannot be read because it does not exist). The consequence the desync stood in for is asserted directly instead |
+| `test_edge_with_null_endpoint_uuid_is_detected_loudly_not_silently_dropped` | write a NULL endpoint, assert the guard raises | assert the WRITE is refused | PR6a's option (a) was "impossible by construction, and loud if reached". `NOT NULL` makes it impossible to write at all — the difference between "we would notice" and "it cannot happen" |
+| `test_convergence_failure_names_the_broken_edge_not_a_row_repr`, `test_drift_failure_also_names_the_edge` | current schema | `pre_pr8_graph` fixture | 6a.8's message-quality pin is preserved, moved to the only shape where the guard can still fire. It is exactly the shape a real firing would happen on |
+| `test_pr6b_*_identical_to_pre_rewrite_oracle` (9 tests) | the literal pre-rewrite SQL as oracle | the same questions rewritten onto uuid endpoints, resolving ids back through `nodes.uuid` | a pre-rewrite query is not executable against a schema with no such columns. They remain INDEPENDENT hand-written oracles, which is what still catches a production query dropping or duplicating a row |
+| `test_pr6b_node_without_uuid_is_refused_loudly_and_names_the_node` | NULL a node's uuid over HTTP | assert the write is refused, then exercise `_require_node_uuid` directly | same reason as above; the guard stays because a future sync peer can still hand us a uuid-less row |
+| `test_register_alias_merge_dual_writes_edge_endpoint_uuids` | both representations converge | only the uuid endpoints, still converged | there is no second representation to converge WITH |
+| `_desynced_edge` helper (`test_identity.py`, 6 call sites) | store an edge then desync it | `_stored_edge`, just stores it | same reason; the dedupe consequence (a duplicate relation appended on every pass, forever) is what the tests assert now |
+| ~35 raw `INSERT INTO nodes(...)` fixtures across 15 files | no `uuid` | explicit `str(uuid4())` | the predicted **fifth batch**. Under `uuid NOT NULL` they HARD FAIL instead of being quietly wrong. Every one that could go through `store.add_node` already did; the rest pin an explicit `id` or an embedding blob, so writing a real uuid is the honest fix. No constraint weakened, no test deleted |
+
+### What the design got wrong
+
+1. **PR8 was scoped as readers-only.** design-schema.md's blast radius lists
+   read sites and estimates 90–140 production lines. It missed four WRITE
+   sites, two migration functions, `_SCHEMA` itself, and the index set — and
+   the migration functions would have prevented the daemon from starting.
+2. **"mobile's exact DDL" is not literally achievable.** axi's `nodes` carries
+   `embedding`/`embedding_model`/`embedding_dim`, which mobile has no
+   equivalent for. Copying mobile's DDL verbatim would have **silently deleted
+   every embedding in the graph** — recall and the whole RAG path — with no
+   error and no failing test. They are kept, appended last, documented as
+   axi-only local derived state, the same category design-schema.md already
+   exempts for `nodes_fts`/`vec_nodes`.
+3. **`uuid NOT NULL` was listed as a constraint change, not a writer change.**
+   None of the three edge-insert paths assigned `edges.uuid`; they relied on
+   the startup backfill, which is survivable only while the column is nullable.
+   This is task 5.14's defect one table over, and 8.12 is where it becomes a
+   hard failure instead of a silent one.
+4. **The trigger.** design-schema.md's rebuild recipe does not mention
+   `trg_nodes_delete_vec`. `DROP TABLE nodes` destroys it and the rename does
+   not restore it; `init_db()` recreates it *before* the migrations, so the gap
+   would have lasted a full restart.
+
+### Things deliberately NOT changed
+
+- **The tombstone indexes stay PARTIAL** (`WHERE deleted_at IS NOT NULL`).
+  Name and column match mobile; only the predicate differs, and an index
+  predicate is a local planner concern, not a wire contract. Re-measured on a
+  REBUILT database (`test_rebuilt_tables_keep_the_index_plans_the_graph_reads_depend_on`,
+  `EXPLAIN QUERY PLAN`, no `ANALYZE` because `store.py` never runs it): the
+  live-row reads use `idx_edges_src` / a MULTI-INDEX OR over src+dst /
+  `idx_edges_relation` and **never** `idx_edges_deleted`, while the sync-push
+  query (`deleted_at IS NOT NULL`) does use it. Asserted on index NAMES, not
+  just "SEARCH not SCAN" — a SEARCH on a near-constant column is a full scan
+  wearing an index's name.
+- **`verify_edge_endpoint_convergence()` still does not filter tombstones.**
+  The rebuild copies every row and their endpoints must stay converged.
+
+### Found but NOT fixed (carried forward)
+
+- **Tombstone purge/GC is still unowned.** Every delete grows the database
+  forever, and the rebuild now copies every tombstone too.
+- **`migrate_nodes_edges_sync_columns` still creates `idx_nodes_uuid`/
+  `idx_edges_uuid`,** now redundant with the column-level `UNIQUE`. Harmless
+  and identical to today's steady state, so the rebuild creates them as well
+  rather than letting the schema change shape one restart later. Retiring them
+  is a separate, purely cosmetic slice.
+- **`/api/graph/full` still reads the whole edge table every call** and filters
+  in Python against a 500-node window (pre-existing; carried since PR6b).
+
+### Workload / PR boundary
+
+- Mode: chained PR slice (feature-branch-chain), PR8 of 8 — **the point of no
+  return**.
+- Production diff: `store.py` +588/-97, `identity.py` +16/-10, `linkers.py`
+  +9/-14 = **734 changed production lines**. Over the 400 budget:
+  **`size:exception` recommended**.
+  Rationale: PR8 has no correct intermediate state. A database whose schema is
+  rebuilt but whose `add_edge` still names `from_id` is a broken installation,
+  and the split that would reduce the diff is exactly the split that would ship
+  one. The design's 90–140 estimate assumed the readers were the whole blast
+  radius. Roughly half the added lines are the explanatory comments this
+  codebase requires on irreversible decisions. **No test was deleted to fit a
+  number.**
+- Rollback boundary: **none past the migration.** Reverting the commit gives
+  code that queries columns which are no longer on disk. Recovery is
+  restore-from-verified-backup (`memory.db.pre-rebuild-<ts>.db`) and nothing
+  else. **This must appear in the PR description** (task 8.16), not only in
+  `design-schema.md`.
+
+### Status
+
+17/17 Phase 8 tasks complete (8.0–8.16 plus 8.17 added during apply). Ready for
+verify.
+
+### Coordinator verification of Phase 8 (independent, post-apply)
+
+**The apply agent's headline catch is the most valuable find of the entire
+chain, and it is worth stating plainly.** `verify_edge_endpoint_convergence()`
+joins `nodes ON n1.id = e.from_id`. It is called at the end of
+`migrate_edge_endpoint_uuids()`, which `init_db()` calls unconditionally. Its
+contract — written in PR5, hardened by me in PR6a — is to RAISE when it cannot
+execute, per the LifeOS silent-failure rule.
+
+So on the first boot after the rebuild it would have raised
+`RuntimeError: could not execute the convergence check`, and **the daemon
+would not have started, on a database with no code-level revert**. Task 8.13
+cannot catch this: 8.13 asserts that stale SQL fails loudly, and this SQL did
+fail loudly — inside the guard whose entire job is to treat "cannot run" as
+fatal. A safety mechanism became the failure. Both it and the backfill are now
+gated on `"from_id" in table_xinfo(edges)`.
+
+The generalisation, recorded because it will recur: when a migration drops a
+column, READ sites, WRITE sites and STARTUP-MIGRATION sites are three
+different greps, and the third runs before anything else can report a problem.
+This is the same enumeration trap that broke `/api/graph/merge` in PR7 — there
+it was "sites that assert absence" versus "sites that delete"; here it is
+"sites that run at startup" versus "sites that query".
+
+**Second catch, equally silent:** "mobile's exact DDL" (task 8.7) is not
+literally achievable. axi's `nodes` carries `embedding`/`embedding_model`/
+`embedding_dim`; mobile has no embedder. Copying verbatim would have deleted
+**every embedding in the graph** — recall and the whole RAG path — with no
+error and no failing test. Kept, appended last, documented as axi-only local
+derived state, the category design-schema.md already exempts for `nodes_fts`
+and `vec_nodes`.
+
+**End-to-end upgrade rehearsal (coordinator, not the agent).** Unit tests
+prove the pieces; this proves what the user actually experiences. Built a
+legacy database with PRE-PR8 code in a `git worktree` at `f379acc0` —
+`from_id` present, 4 nodes (one genuinely tombstoned via `delete_node`), 3
+edges, a 2048-byte embedding, a `conversations.node_id` FK, 3 `nodes_fts`
+rows — then ran the NEW `init_db()` against that same file, which is exactly
+what happens when axi restarts after an update.
+
+| Property | Result |
+|---|---|
+| `init_db()` completes without raising (daemon starts) | yes |
+| `from_id`/`to_id`/`kind` gone | yes |
+| nodes: id, uuid, kind, label, deleted_at | identical, tombstone survived |
+| edges: id, endpoints, relation, deleted_at | identical |
+| embedding bytes + model preserved | 2048 bytes, `bge-m3` |
+| `conversations.node_id` FK still resolves | yes (explicit id copy held) |
+| `nodes_fts` rows | 3, unchanged |
+| `PRAGMA foreign_key_check` | clean |
+| `trg_nodes_delete_vec` recreated after DROP/RENAME | yes |
+| `edges.uuid` | `NOT NULL UNIQUE` |
+
+**Backup snapshot: BOTH halves proven on the real file**, not on a fixture.
+This is the only recovery path that will ever exist, so neither half is
+optional.
+
+- *Stays encrypted*: raw bytes contain no `Héctor`, `Ana`, `CachyOS`, and not
+  even the `SQLite format 3` header; an unkeyed open is refused with
+  `file is not a database`.
+- *Is restorable*: keyed open succeeds, `PRAGMA integrity_check` returns `ok`,
+  all 4 nodes and 3 edges are present with labels intact, the 2048-byte
+  embedding survives, and the schema inside is the PRE-rebuild one.
+
+An encrypted backup that cannot be opened is worse than none — it is a false
+sense of safety. Both directions measured.
+
+**Zero-regression.** 57 store-dependent files, `-p no:randomly`, failure sets
+diffed with `comm` against the PR7 tip (`f379acc0`).
+
+| Tree state | Passed | Failed |
+|---|---|---|
+| PR7 tip `f379acc0` | 950 | 23 |
+| PR8 | 973 | 23 |
+
+`comm` empty in BOTH directions. PR8's own six core files: 270 passed.
+
+**Endorsed:** tombstone indexes stay PARTIAL, re-measured on a REBUILT
+database — live reads never touch `idx_edges_deleted`; the sync-push query
+does. `verify_edge_endpoint_convergence()` still does not filter tombstones.
+~35 raw-INSERT fixtures given real uuids (the predicted fifth batch, now hard
+failures rather than quiet wrongness, which is the point). No test deleted, no
+constraint weakened.
+
+**Still unowned, and now real:** tombstone purge/GC. Every delete grows the
+database forever. Flagged in PR7, unchanged here, and explicitly NOT part of
+this chain.

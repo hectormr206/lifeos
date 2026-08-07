@@ -14,15 +14,16 @@ from __future__ import annotations
 import time
 
 import pytest
+import uuid as _uuid
 
 
 def _insert_fact_node(conn, label: str = "test fact", domain: str = "relationships") -> int:
     """Helper: insert a bare fact node and return its id."""
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", label, "{}", domain, now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", label, "{}", domain, now, now),
     )
     conn.commit()
     return cur.lastrowid

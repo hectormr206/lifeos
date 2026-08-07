@@ -50,7 +50,7 @@ def _insert_meeting(conn, start_time: float, title="Test meeting") -> int:
 
 def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
     row = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+        "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=? LIMIT 1",
         (from_id, to_id, kind),
     ).fetchone()
     return row is not None
@@ -128,7 +128,7 @@ def test_happened_at_idempotent():
 
     # Count edges of this kind between the pair.
     count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='happened-at'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='happened-at'",
         (meeting_node_id, fact_id),
     ).fetchone()[0]
     assert count == 1
@@ -197,7 +197,7 @@ def test_involves_person_no_edge_without_matching_person():
     assert created == 0
     # No edge created.
     count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND kind='involves-person'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='involves-person'",
         (fact_id,),
     ).fetchone()[0]
     assert count == 0
@@ -229,7 +229,7 @@ def test_involves_person_idempotent():
     run_involves_person_linker(conn)
 
     count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='involves-person'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='involves-person'",
         (fact_id, person_node_id),
     ).fetchone()[0]
     assert count == 1
@@ -306,11 +306,11 @@ def test_same_day_idempotent():
 
     # At most 1 edge between nid1 and nid2 in either direction.
     count_fwd = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='same-day'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='same-day'",
         (nid1, nid2),
     ).fetchone()[0]
     count_rev = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='same-day'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='same-day'",
         (nid2, nid1),
     ).fetchone()[0]
     assert count_fwd + count_rev == 1
@@ -394,7 +394,7 @@ def test_mood_at_idempotent():
     run_mood_at_linker(conn)
 
     count = conn.execute(
-        "SELECT COUNT(*) FROM edges WHERE from_id=? AND to_id=? AND kind='mood-at'",
+        "SELECT COUNT(*) FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='mood-at'",
         (mood_id, meeting_node_id),
     ).fetchone()[0]
     assert count == 1
@@ -644,7 +644,7 @@ def test_safe_insert_edge_dual_writes_src_dst_uuid():
     src_uuid = conn.execute("SELECT uuid FROM nodes WHERE id=?", (n1,)).fetchone()[0]
     dst_uuid = conn.execute("SELECT uuid FROM nodes WHERE id=?", (n2,)).fetchone()[0]
     row = conn.execute(
-        "SELECT src_uuid, dst_uuid FROM edges WHERE from_id=? AND to_id=? AND kind='happened-at'",
+        "SELECT src_uuid, dst_uuid FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation='happened-at'",
         (n1, n2),
     ).fetchone()
     assert row["src_uuid"] == src_uuid
@@ -659,10 +659,14 @@ def test_edge_exists_guard_resolves_through_endpoint_uuids():
     every auto-linker insert, so it must recognise an edge by the same
     endpoints the insert wrote — `src_uuid`/`dst_uuid`.
 
-    The stored edge's integer `from_id` is pointed at a decoy while its
-    `src_uuid` still names the real source. A guard reading `from_id` fails to
-    see its own edge and the linker writes a second one on every pass, so the
-    graph grows a duplicate per run.
+    This used to point the stored edge's integer `from_id` at a decoy while
+    `src_uuid` still named the real source, so a guard reading the wrong column
+    failed to see its own edge. PR8 deleted `from_id`, so the wrong column
+    cannot be read. The consequence that mattered is asserted directly instead:
+    the guard recognises the edge it wrote, `_safe_insert_edge` declines to add
+    a second one — and moving `src_uuid` makes the guard correctly stop
+    recognising it, proving that column is what it actually reads. Get this
+    wrong and the linker appends a duplicate on every daemon pass, forever.
     """
     from axi import linkers, store
 
@@ -671,11 +675,17 @@ def test_edge_exists_guard_resolves_through_endpoint_uuids():
     decoy = store.add_node("fact", "señuelo")
     eid = store.add_edge(src, dst, "same-day")
     c = store._connect()
-    c.execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
 
     assert linkers._edge_exists(c, src, dst, "same-day") is True
     assert linkers._safe_insert_edge(c, src, dst, "same-day") is False
     assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 1
+
+    c.execute(
+        "UPDATE edges SET src_uuid=(SELECT uuid FROM nodes WHERE id=?) WHERE id=?",
+        (decoy, eid),
+    )
+    assert linkers._edge_exists(c, src, dst, "same-day") is False
+    assert linkers._edge_exists(c, decoy, dst, "same-day") is True
 
 
 def test_edge_exists_identical_to_pre_rewrite_query(pr6a_graph):
@@ -692,7 +702,7 @@ def test_edge_exists_identical_to_pre_rewrite_query(pr6a_graph):
         for b in ids:
             for kind in ("about", "mentions", "involves", "esposa", "same-day"):
                 old = c.execute(
-                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+                    "SELECT 1 FROM edges WHERE src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?) AND relation=? LIMIT 1",
                     (a, b, kind),
                 ).fetchone() is not None
                 assert linkers._edge_exists(c, a, b, kind) is old, (

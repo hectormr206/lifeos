@@ -19,6 +19,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
+import uuid as _uuid
 
 
 # ─── stub helpers ────────────────────────────────────────────────────────────
@@ -74,9 +75,9 @@ def _insert_fact_node(conn, *, label: str = "test", domain: str = "health") -> i
     """Insert a bare fact node; return its id."""
     now = time.time()
     cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", label, "{}", domain, now, now),
+        "INSERT INTO nodes(uuid, kind, label, data, domain, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (str(_uuid.uuid4()), "fact", label, "{}", domain, now, now),
     )
     conn.commit()
     return cur.lastrowid
@@ -709,7 +710,7 @@ def test_three_domain_same_day_linkage():
     # Check health <-> finance edge.
     edge_hf = c.execute(
         "SELECT 1 FROM edges WHERE "
-        "((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND kind='same-day'",
+        "((src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) OR (src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?))) AND relation='same-day'",
         (health_nid, finance_nid, finance_nid, health_nid),
     ).fetchone()
     assert edge_hf is not None, "Expected same-day edge between health and finance nodes"
@@ -717,7 +718,7 @@ def test_three_domain_same_day_linkage():
     # Check health <-> exercise edge.
     edge_he = c.execute(
         "SELECT 1 FROM edges WHERE "
-        "((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND kind='same-day'",
+        "((src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) OR (src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?))) AND relation='same-day'",
         (health_nid, exercise_nid, exercise_nid, health_nid),
     ).fetchone()
     assert edge_he is not None, "Expected same-day edge between health and exercise nodes"
@@ -725,7 +726,7 @@ def test_three_domain_same_day_linkage():
     # Check finance <-> exercise edge.
     edge_fe = c.execute(
         "SELECT 1 FROM edges WHERE "
-        "((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND kind='same-day'",
+        "((src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) OR (src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?))) AND relation='same-day'",
         (finance_nid, exercise_nid, exercise_nid, finance_nid),
     ).fetchone()
     assert edge_fe is not None, "Expected same-day edge between finance and exercise nodes"

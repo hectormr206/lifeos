@@ -768,15 +768,19 @@ def test_activate_non4b_set_active_fails_error_includes_vt_state(client_activate
 # PR6b — dashboard.py reader rewrite to src_uuid/dst_uuid/relation
 #
 # Tasks 6b.1-6b.3 of openspec/changes/sync-over-vpn. Four read sites move off
-# the integer from_id/to_id join and off edges.kind, onto the sync-stable
+# the integer from_id/to_id join and off edges.relation, onto the sync-stable
 # endpoint uuids and the generated `relation` column.
 #
-# The literal PRE-REWRITE queries are kept below as ORACLES. They still work
-# (PR5 dual-writes both representations and PR8 is what finally drops the old
-# columns), so they are the only honest definition of "identical results":
-# each test runs the oracle against the same seeded DB the endpoint just read
-# and compares. They are regression guards by design — they must stay green
-# across the rewrite, which is exactly the claim being made.
+# The oracles below started as the literal PRE-REWRITE queries. PR8 dropped
+# `from_id`/`to_id`/`kind`, so they can no longer be that — a pre-rewrite
+# query is not executable against a schema that has no such columns. They are
+# kept, rewritten onto the uuid endpoints, as INDEPENDENT hand-written
+# implementations of the same question: each test runs the oracle against the
+# same seeded DB the endpoint just read and compares. That still catches a
+# production query that quietly drops or duplicates a row, which is what these
+# were for. Where a client contract returns integer ids, the oracle resolves
+# them back through `nodes.uuid` — the same uuid-in/id-out shape PR6b found in
+# the endpoints themselves.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # PR7 note: `deleted_at IS NULL` was added to all five oracles.
@@ -790,23 +794,25 @@ def test_activate_non4b_set_active_fails_error_includes_vt_state(client_activate
 # preserved PR6b's tombstone behaviour, which is precisely the expectation PR7
 # exists to break. Tombstone invisibility has its own tests (7.9b) below.
 _ORACLE_CONV_FACT_IDS = (
-    "SELECT e.to_id FROM edges e "
-    "JOIN nodes n ON n.id = e.to_id "
-    "WHERE e.from_id = ? AND n.kind = 'fact' "
+    "SELECT n.id AS to_id FROM edges e "
+    "JOIN nodes n ON n.uuid = e.dst_uuid "
+    "WHERE e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND n.kind = 'fact' "
     "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 _ORACLE_ALL_EDGES = (
-    "SELECT e.id, e.from_id, e.to_id, e.kind FROM edges e "
-    "JOIN nodes s ON s.id = e.from_id JOIN nodes d ON d.id = e.to_id "
+    "SELECT e.id, s.id AS from_id, d.id AS to_id, e.relation FROM edges e "
+    "JOIN nodes s ON s.uuid = e.src_uuid JOIN nodes d ON d.uuid = e.dst_uuid "
     "WHERE e.deleted_at IS NULL "
     "AND s.deleted_at IS NULL AND d.deleted_at IS NULL"
 )
 _ORACLE_EDGES_TOUCHING_NODE = (
-    "SELECT e.id AS eid, e.kind AS ekind, e.from_id, e.to_id, "
+    "SELECT e.id AS eid, e.relation AS ekind, "
+    "       (e.src_uuid=(SELECT uuid FROM nodes WHERE id=?)) AS is_out, "
     "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
     "FROM edges e "
-    "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
-    "WHERE (e.from_id = ? OR e.to_id = ?) "
+    "JOIN nodes n ON n.uuid = CASE WHEN e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
+    "                              THEN e.dst_uuid ELSE e.src_uuid END "
+    "WHERE (e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR e.dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) "
     "AND e.deleted_at IS NULL AND n.deleted_at IS NULL"
 )
 # Deliberately NOT joined back to `nodes`: this oracle must still return the
@@ -814,13 +820,18 @@ _ORACLE_EDGES_TOUCHING_NODE = (
 # `test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot`. Node-level
 # liveness is applied by each test through `_live_node_ids`.
 _ORACLE_NEIGHBOR_IDS = (
-    "SELECT DISTINCT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS nid "
-    "FROM edges WHERE (from_id = ? OR to_id = ?) AND deleted_at IS NULL"
+    "SELECT DISTINCT (SELECT id FROM nodes WHERE uuid = "
+    "  CASE WHEN edges.src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
+    "       THEN edges.dst_uuid ELSE edges.src_uuid END) AS nid, "
+    "  CASE WHEN edges.src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
+    "       THEN edges.dst_uuid ELSE edges.src_uuid END AS nuuid "
+    "FROM edges WHERE (src_uuid=(SELECT uuid FROM nodes WHERE id=?) "
+    "OR dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) AND deleted_at IS NULL"
 )
 _ORACLE_NEIGHBORHOOD_EDGES = (
-    "SELECT e.id, e.from_id, e.to_id, e.kind FROM edges e "
-    "JOIN nodes s ON s.id = e.from_id JOIN nodes d ON d.id = e.to_id "
-    "WHERE (e.from_id = ? OR e.to_id = ?) "
+    "SELECT e.id, s.id AS from_id, d.id AS to_id, e.relation FROM edges e "
+    "JOIN nodes s ON s.uuid = e.src_uuid JOIN nodes d ON d.uuid = e.dst_uuid "
+    "WHERE (e.src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR e.dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) "
     "AND e.deleted_at IS NULL AND s.deleted_at IS NULL AND d.deleted_at IS NULL"
 )
 
@@ -950,7 +961,7 @@ def test_pr6b_graph_full_edges_identical_to_pre_rewrite_oracle(client, pr6b_grap
     c = store._connect()  # noqa: SLF001
     live_ids = _live_node_ids(c)
     expected = {
-        (r["id"], r["from_id"], r["to_id"], r["kind"])
+        (r["id"], r["from_id"], r["to_id"], r["relation"])
         for r in c.execute(_ORACLE_ALL_EDGES).fetchall()
         # the endpoint has always dropped edges whose endpoints are not in the
         # returned node set; a dangling endpoint is exactly that case
@@ -979,12 +990,12 @@ def test_pr6b_node_detail_identical_to_pre_rewrite_oracle(client, pr6b_graph, ro
     node_id = pr6b_graph[role]
     c = store._connect()  # noqa: SLF001
     oracle = c.execute(
-        _ORACLE_EDGES_TOUCHING_NODE, (node_id, node_id, node_id)
+        _ORACLE_EDGES_TOUCHING_NODE, (node_id,) * 4
     ).fetchall()
 
     exp_relations = {
         (r["eid"], r["oid"], r["olabel"], r["okind"], r["ekind"],
-         "out" if r["from_id"] == node_id else "in")
+         "out" if r["is_out"] else "in")
         for r in oracle
         if r["ekind"] and r["ekind"] not in _STRUCTURAL_EDGE_KINDS
     }
@@ -1003,7 +1014,7 @@ def test_pr6b_node_detail_identical_to_pre_rewrite_oracle(client, pr6b_graph, ro
 
 
 def test_pr6b_node_detail_keeps_the_multi_index_or_plan(client, pr6b_graph, sql_sink):
-    """INDEX PARITY: the old predicate `from_id = ? OR to_id = ?` was served by
+    """INDEX PARITY: the old predicate `src_uuid=(SELECT uuid FROM nodes WHERE id=?) OR dst_uuid=(SELECT uuid FROM nodes WHERE id=?)` was served by
     a MULTI-INDEX OR over idx_edges_from/idx_edges_to. The rewritten predicate
     must be served the same way over idx_edges_src/idx_edges_dst."""
     client.get(f"/api/graph/node/{pr6b_graph['hub']}")
@@ -1023,7 +1034,7 @@ def test_pr6b_neighborhood_identical_to_pre_rewrite_oracle(client, pr6b_graph):
     live_ids = _live_node_ids(c)
     oracle_neigh = [
         r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 4).fetchall()
         if r["nid"] != node_id and r["nid"] in live_ids
     ]
     got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
@@ -1031,7 +1042,7 @@ def test_pr6b_neighborhood_identical_to_pre_rewrite_oracle(client, pr6b_graph):
 
     in_set = {n["id"] for n in got["nodes"]}
     exp_edges = {
-        (r["id"], r["from_id"], r["to_id"], r["kind"])
+        (r["id"], r["from_id"], r["to_id"], r["relation"])
         for r in c.execute(_ORACLE_NEIGHBORHOOD_EDGES, (node_id, node_id)).fetchall()
         if r["from_id"] in in_set and r["to_id"] in in_set
     }
@@ -1075,7 +1086,7 @@ def test_pr6b_neighbor_order_is_pinned_because_the_list_is_truncated(
     live_ids = _live_node_ids(c)
     live_neighbors = sorted(
         r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 4).fetchall()
         if r["nid"] != node_id and r["nid"] in live_ids
     )
     assert len(live_neighbors) >= 2, "fixture must have something to truncate"
@@ -1112,19 +1123,26 @@ def test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot(
 
     node_id = pr6b_graph["hub"]
     c = store._connect()  # noqa: SLF001
-    oracle_ids = {
-        r["nid"]
-        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 3).fetchall()
-        if r["nid"] != node_id
-    }
+    rows = c.execute(_ORACLE_NEIGHBOR_IDS, (node_id,) * 4).fetchall()
+    oracle_ids = {r["nid"] for r in rows if r["nid"] not in (None, node_id)}
     live_ids = _live_node_ids(c)
-    phantoms = oracle_ids - live_ids
-    assert phantoms, "fixture must carry at least one dangling endpoint"
+    # PR8 note: the phantom used to be an integer endpoint pointing at a row
+    # that no longer existed. With uuid endpoints there is no integer to
+    # return — the dangling edge still carries its endpoint uuid, and that
+    # uuid resolves to no node. Same fixture case, named by uuid now.
+    phantom_uuids = {r["nuuid"] for r in rows if r["nid"] is None}
+    assert phantom_uuids, "fixture must carry at least one dangling endpoint"
 
     monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", len(oracle_ids & live_ids))
     got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
-    assert not (phantoms & {n["id"] for n in got["nodes"]})
+    # The phantom does not occupy a slot: every returned node is a live one,
+    # and none of them carries a phantom endpoint uuid.
     assert {n["id"] for n in got["nodes"]} == (oracle_ids & live_ids) | {node_id}
+    returned_uuids = {
+        c.execute("SELECT uuid FROM nodes WHERE id=?", (n["id"],)).fetchone()["uuid"]
+        for n in got["nodes"]
+    }
+    assert not (phantom_uuids & returned_uuids)
     assert got["truncated"] is False
 
 
@@ -1151,22 +1169,34 @@ def test_pr6b_dashboard_has_no_sql_left_on_from_id_to_id_or_edge_kind():
 def test_pr6b_node_without_uuid_is_refused_loudly_and_names_the_node(client, pr6b_graph):
     """A uuid-less node matches no edge, so both node endpoints would answer
     "no relations" with a 200 — a wrong answer that looks like an empty graph.
-    PR6a chose option (a) (NULL is impossible and reaching it is loud); this is
-    the same choice at the read boundary. The message must name the node id:
-    a guard that fires and identifies nothing sends you to a debugger against a
-    database you may not be able to reproduce (PR6a, task 6a.8)."""
-    from axi import store
+    PR6a chose option (a) (NULL is impossible and reaching it is loud); PR6b
+    made the same choice at the read boundary.
+
+    PR8 closes it one level further down: `uuid NOT NULL` means the state can
+    no longer be WRITTEN. Both halves are asserted — the engine refuses to
+    create the condition, and `_require_node_uuid` is still in place as the
+    belt-and-braces guard for a row that arrives from somewhere else (a future
+    sync peer), naming the node id when it fires. A guard that identifies
+    nothing sends you to a debugger against a database you may not be able to
+    reproduce (PR6a, task 6a.8)."""
+    import pytest as _pytest
+
+    from axi import dashboard, store
 
     node_id = pr6b_graph["ana"]
     c = store._connect()  # noqa: SLF001
-    c.execute("UPDATE nodes SET uuid = NULL WHERE id = ?", (node_id,))
+    with _pytest.raises(Exception):
+        c.execute("UPDATE nodes SET uuid = NULL WHERE id = ?", (node_id,))
 
-    for path in (f"/api/graph/node/{node_id}", f"/api/graph/node/{node_id}/neighborhood"):
-        r = client.get(path)
-        assert r.status_code == 500, path
-        detail = r.json()["detail"]
-        assert f"id={node_id}" in detail, detail
-        assert "uuid" in detail, detail
+    # The endpoints still answer correctly, because nothing was lost.
+    assert client.get(f"/api/graph/node/{node_id}").status_code == 200
+
+    # The guard itself, exercised directly on a uuid-less row the schema can
+    # no longer produce but a sync peer could still hand us.
+    with _pytest.raises(Exception) as excinfo:
+        dashboard._require_node_uuid({"id": 10_042, "uuid": None})
+    assert "id=10042" in str(excinfo.value)
+    assert "uuid" in str(excinfo.value)
 
 
 # ═══════════════════════════════════════════════════════════════════════════

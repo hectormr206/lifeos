@@ -553,7 +553,7 @@ def test_real_pipeline_cross_domain_same_day_edge():
     # Assert a same-day edge was formed between the two nodes.
     edge = conn.execute(
         "SELECT 1 FROM edges WHERE "
-        "((from_id=? AND to_id=?) OR (from_id=? AND to_id=?)) AND kind='same-day'",
+        "((src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?)) OR (src_uuid=(SELECT uuid FROM nodes WHERE id=?) AND dst_uuid=(SELECT uuid FROM nodes WHERE id=?))) AND relation='same-day'",
         (fin_node_id, ex_node_id, ex_node_id, fin_node_id),
     ).fetchone()
     assert edge is not None, (
