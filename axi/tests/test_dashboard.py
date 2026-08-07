@@ -762,3 +762,364 @@ def test_activate_non4b_set_active_fails_error_includes_vt_state(client_activate
     assert "vt" in detail.lower() or "stop" in detail.lower(), (
         f"Error detail must include VT state info, got: {detail}"
     )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PR6b — dashboard.py reader rewrite to src_uuid/dst_uuid/relation
+#
+# Tasks 6b.1-6b.3 of openspec/changes/sync-over-vpn. Four read sites move off
+# the integer from_id/to_id join and off edges.kind, onto the sync-stable
+# endpoint uuids and the generated `relation` column.
+#
+# The literal PRE-REWRITE queries are kept below as ORACLES. They still work
+# (PR5 dual-writes both representations and PR8 is what finally drops the old
+# columns), so they are the only honest definition of "identical results":
+# each test runs the oracle against the same seeded DB the endpoint just read
+# and compares. They are regression guards by design — they must stay green
+# across the rewrite, which is exactly the claim being made.
+# ─────────────────────────────────────────────────────────────────────────────
+
+_ORACLE_CONV_FACT_IDS = (
+    "SELECT e.to_id FROM edges e "
+    "JOIN nodes n ON n.id = e.to_id "
+    "WHERE e.from_id = ? AND n.kind = 'fact'"
+)
+_ORACLE_ALL_EDGES = "SELECT id, from_id, to_id, kind FROM edges"
+_ORACLE_EDGES_TOUCHING_NODE = (
+    "SELECT e.id AS eid, e.kind AS ekind, e.from_id, e.to_id, "
+    "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
+    "FROM edges e "
+    "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
+    "WHERE e.from_id = ? OR e.to_id = ?"
+)
+_ORACLE_NEIGHBOR_IDS = (
+    "SELECT DISTINCT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS nid "
+    "FROM edges WHERE from_id = ? OR to_id = ?"
+)
+_ORACLE_NEIGHBORHOOD_EDGES = (
+    "SELECT id, from_id, to_id, kind FROM edges WHERE from_id = ? OR to_id = ?"
+)
+
+
+@pytest.fixture
+def pr6b_graph(pr6a_graph):
+    """`pr6a_graph` plus the conversation provenance the dashboard reads.
+
+    Reuses the shared PR6a fixture (self-edge, duplicate edges between the same
+    pair, a tombstoned endpoint and a dangling one) rather than building a
+    parallel graph, and adds what only dashboard.py touches: a conversation
+    node with a `conversations` row bridged to it, and edges from that node to
+    both facts plus one non-fact (which must NOT surface as a fact id).
+    """
+    from axi import store
+
+    ids = dict(pr6a_graph)
+    ids["conv"] = store.add_node("conversation", "turno de conversación")
+    store.add_edge(ids["conv"], ids["fact_bp"], "mentions")
+    store.add_edge(ids["conv"], ids["fact_os"], "mentions")
+    store.add_edge(ids["conv"], ids["ana"], "mentions")  # person, not a fact
+    c = store._connect()  # noqa: SLF001
+    c.execute(
+        "INSERT INTO conversations (ts, user_text, axi_text, session_id, node_id) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (1.0, "¿qué sabes de mí?", "bastante", "s1", ids["conv"]),
+    )
+    return ids
+
+
+class _RecordingConn:
+    """Delegating proxy that records every SQL statement an endpoint executes.
+
+    Used instead of re-typing the production query into the test: the plan
+    assertions below run EXPLAIN QUERY PLAN on the bytes dashboard.py actually
+    sent, so they cannot drift away from the code they claim to measure.
+    """
+
+    def __init__(self, conn, sink):
+        self._conn = conn
+        self._sink = sink
+
+    def execute(self, sql, *args, **kwargs):
+        self._sink.append((sql, args[0] if args else ()))
+        return self._conn.execute(sql, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._conn, name)
+
+
+@pytest.fixture
+def sql_sink(monkeypatch):
+    from axi import dashboard, store
+
+    sink: list[tuple[str, object]] = []
+    real_connect = store._connect  # noqa: SLF001
+    monkeypatch.setattr(
+        dashboard.store, "_connect", lambda: _RecordingConn(real_connect(), sink)
+    )
+    return sink
+
+
+def _edge_plans(sink):
+    """EXPLAIN QUERY PLAN for every recorded SELECT that reads the edges table."""
+    from axi import store
+
+    c = store._connect()  # noqa: SLF001
+    out = []
+    for sql, args in sink:
+        if not sql.lstrip().upper().startswith("SELECT"):
+            continue
+        if " edges" not in sql:
+            continue
+        rows = c.execute("EXPLAIN QUERY PLAN " + sql, args).fetchall()
+        out.append((sql, "\n".join(r[3] for r in rows)))
+    return out
+
+
+# ── 6b.1 / 6b.2 — site 1: /api/conversations fact ids ────────────────────────
+
+def test_pr6b_conversation_fact_ids_identical_to_pre_rewrite_oracle(client, pr6b_graph):
+    from axi import store
+
+    c = store._connect()  # noqa: SLF001
+    expected = [
+        int(r["to_id"])
+        for r in c.execute(_ORACLE_CONV_FACT_IDS, (pr6b_graph["conv"],)).fetchall()
+    ]
+    assert expected, "fixture must produce at least one fact edge"
+
+    rows = client.get("/api/conversations").json()
+    assert len(rows) == 1
+    assert sorted(rows[0]["fact_ids"]) == sorted(expected)
+
+
+def test_pr6b_conversation_fact_query_still_uses_an_edge_index(client, pr6b_graph, sql_sink):
+    """INDEX PARITY: the old join seeked idx_edges_from; the new one must seek
+    idx_edges_src. A silent degradation to a full scan is the exact failure
+    PR6a caught in same_day_neighbors — no test fails, the graph just gets
+    slower forever."""
+    client.get("/api/conversations")
+    plans = [p for sql, p in _edge_plans(sql_sink)]
+    assert plans, "no edges query was recorded"
+    joined = "\n".join(plans)
+    assert "idx_edges_src" in joined, joined
+    assert "SCAN e\n" not in joined + "\n" and "SCAN edges" not in joined, joined
+
+
+# ── 6b.1 / 6b.2 — site 2: /api/graph/full edges ──────────────────────────────
+
+def test_pr6b_graph_full_edges_identical_to_pre_rewrite_oracle(client, pr6b_graph):
+    from axi import store
+
+    c = store._connect()  # noqa: SLF001
+    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    expected = {
+        (r["id"], r["from_id"], r["to_id"], r["kind"])
+        for r in c.execute(_ORACLE_ALL_EDGES).fetchall()
+        # the endpoint has always dropped edges whose endpoints are not in the
+        # returned node set; a dangling endpoint is exactly that case
+        if r["from_id"] in live_ids and r["to_id"] in live_ids
+    }
+
+    got = client.get("/api/graph/full").json()
+    a_edges = {
+        (e["id"], e["source"], e["target"], e["kind"])
+        for e in got["edges"]
+        if e["system"] == "A"
+    }
+    assert a_edges == expected
+    # duplicate edges between the same pair must stay duplicated: a uuid join
+    # must not collapse them
+    assert len([e for e in got["edges"] if e["system"] == "A"]) == len(expected)
+
+
+# ── 6b.1 / 6b.2 — site 3: /api/graph/node/{id} ───────────────────────────────
+
+@pytest.mark.parametrize("role", ["hub", "fact_bp", "fact_os", "orphan", "ana"])
+def test_pr6b_node_detail_identical_to_pre_rewrite_oracle(client, pr6b_graph, role):
+    from axi import store
+    from axi.recall import _STRUCTURAL_EDGE_KINDS
+
+    node_id = pr6b_graph[role]
+    c = store._connect()  # noqa: SLF001
+    oracle = c.execute(
+        _ORACLE_EDGES_TOUCHING_NODE, (node_id, node_id, node_id)
+    ).fetchall()
+
+    exp_relations = {
+        (r["eid"], r["oid"], r["olabel"], r["okind"], r["ekind"],
+         "out" if r["from_id"] == node_id else "in")
+        for r in oracle
+        if r["ekind"] and r["ekind"] not in _STRUCTURAL_EDGE_KINDS
+    }
+    exp_facts = {
+        r["oid"] for r in oracle
+        if (r["ekind"] or "") in ("mentions", "about") and r["okind"] == "fact"
+    }
+
+    got = client.get(f"/api/graph/node/{node_id}").json()
+    assert {
+        (r["edge_id"], r["other_id"], r["other_label"], r["other_kind"],
+         r["kind"], r["direction"])
+        for r in got["relations"]
+    } == exp_relations
+    assert {f["id"] for f in got["facts"]} == exp_facts
+
+
+def test_pr6b_node_detail_keeps_the_multi_index_or_plan(client, pr6b_graph, sql_sink):
+    """INDEX PARITY: the old predicate `from_id = ? OR to_id = ?` was served by
+    a MULTI-INDEX OR over idx_edges_from/idx_edges_to. The rewritten predicate
+    must be served the same way over idx_edges_src/idx_edges_dst."""
+    client.get(f"/api/graph/node/{pr6b_graph['hub']}")
+    joined = "\n".join(p for _sql, p in _edge_plans(sql_sink))
+    assert "MULTI-INDEX OR" in joined, joined
+    assert "idx_edges_src" in joined and "idx_edges_dst" in joined, joined
+    assert "SCAN e" not in joined and "SCAN edges" not in joined, joined
+
+
+# ── 6b.1 / 6b.2 — site 4: /api/graph/node/{id}/neighborhood ──────────────────
+
+def test_pr6b_neighborhood_identical_to_pre_rewrite_oracle(client, pr6b_graph):
+    from axi import store
+
+    node_id = pr6b_graph["hub"]
+    c = store._connect()  # noqa: SLF001
+    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    oracle_neigh = [
+        r["nid"]
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        if r["nid"] != node_id and r["nid"] in live_ids
+    ]
+    got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
+    assert {n["id"] for n in got["nodes"]} == set(oracle_neigh) | {node_id}
+
+    in_set = {n["id"] for n in got["nodes"]}
+    exp_edges = {
+        (r["id"], r["from_id"], r["to_id"], r["kind"])
+        for r in c.execute(_ORACLE_NEIGHBORHOOD_EDGES, (node_id, node_id)).fetchall()
+        if r["from_id"] in in_set and r["to_id"] in in_set
+    }
+    assert {
+        (e["id"], e["source"], e["target"], e["kind"]) for e in got["edges"]
+    } == exp_edges
+
+
+def test_pr6b_neighborhood_keeps_the_multi_index_or_plan(client, pr6b_graph, sql_sink):
+    client.get(f"/api/graph/node/{pr6b_graph['hub']}/neighborhood")
+    plans = _edge_plans(sql_sink)
+    assert len(plans) >= 2, plans
+    for sql, plan in plans:
+        assert "MULTI-INDEX OR" in plan, (sql, plan)
+        assert "idx_edges_src" in plan and "idx_edges_dst" in plan, (sql, plan)
+        assert "SCAN e" not in plan and "SCAN edges" not in plan, (sql, plan)
+
+
+def test_pr6b_neighbor_order_is_pinned_because_the_list_is_truncated(
+    client, pr6b_graph, monkeypatch
+):
+    """ORDER-BY CONTRACT: `neighbor_ids[:_NEIGHBORHOOD_CAP]` truncates an
+    unordered query, so before this rewrite the query planner decided WHICH
+    neighbors the user saw. The rewrite changes the plan, so the truncation
+    would have silently started keeping different nodes. The order is pinned to
+    ascending node id — which is what the DISTINCT temp b-tree happened to
+    produce before, so the pin preserves today's behaviour instead of changing
+    it."""
+    from axi import dashboard
+
+    from axi import store
+
+    monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", 2)
+    node_id = pr6b_graph["hub"]
+    c = store._connect()  # noqa: SLF001
+    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    live_neighbors = sorted(
+        r["nid"]
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        if r["nid"] != node_id and r["nid"] in live_ids
+    )
+    assert len(live_neighbors) > 2, "fixture must exceed the patched cap"
+
+    got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
+    assert got["truncated"] is True
+    kept = sorted(n["id"] for n in got["nodes"] if n["id"] != node_id)
+    # the two LOWEST live neighbour ids — pinned, not whatever the plan emits
+    assert kept == live_neighbors[:2]
+    again = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
+    assert [n["id"] for n in again["nodes"]] == [n["id"] for n in got["nodes"]]
+
+
+def test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot(
+    client, pr6b_graph, monkeypatch
+):
+    """DOCUMENTED BEHAVIOUR CHANGE, asserted rather than hidden.
+
+    `pr6a_graph` keeps a "ghost" edge whose endpoint node row is gone (legal in
+    mobile's model — an edge may sync before its node). The old integer query
+    returned that phantom id: it counted toward `_NEIGHBORHOOD_CAP`, could flip
+    `truncated` to True with one fewer real neighbour, and resolved to no node
+    row, so the client never rendered it. Resolving through `dst_uuid` drops it
+    at the query. PR6b takes option (a), consistent with PR6a: no from_id/to_id
+    fallback — the phantom is gone, and that is a fix, not a loss.
+
+    The cap is patched to exactly the number of LIVE neighbours, which is where
+    the difference is observable: the phantom used to push the count over the
+    cap, so the user lost a real neighbour and got `truncated: true` for a node
+    that was not actually truncated."""
+    from axi import dashboard, store
+
+    node_id = pr6b_graph["hub"]
+    c = store._connect()  # noqa: SLF001
+    oracle_ids = {
+        r["nid"]
+        for r in c.execute(_ORACLE_NEIGHBOR_IDS, (node_id, node_id, node_id)).fetchall()
+        if r["nid"] != node_id
+    }
+    live_ids = {r["id"] for r in c.execute("SELECT id FROM nodes").fetchall()}
+    phantoms = oracle_ids - live_ids
+    assert phantoms, "fixture must carry at least one dangling endpoint"
+
+    monkeypatch.setattr(dashboard, "_NEIGHBORHOOD_CAP", len(oracle_ids & live_ids))
+    got = client.get(f"/api/graph/node/{node_id}/neighborhood").json()
+    assert not (phantoms & {n["id"] for n in got["nodes"]})
+    assert {n["id"] for n in got["nodes"]} == (oracle_ids & live_ids) | {node_id}
+    assert got["truncated"] is False
+
+
+# ── 6b.2 — no old-column SQL left behind ─────────────────────────────────────
+
+def test_pr6b_dashboard_has_no_sql_left_on_from_id_to_id_or_edge_kind():
+    """Every dashboard read of axi's own edges table must be off the columns
+    PR8 deletes. Fails loudly if a new one is introduced."""
+    import pathlib
+
+    from axi import dashboard
+
+    src = pathlib.Path(dashboard.__file__).read_text(encoding="utf-8")
+    offenders = [
+        (i, line)
+        for i, line in enumerate(src.splitlines(), 1)
+        if ("from_id" in line or "to_id" in line)
+        # lifeos.db has its own edges table with src_id/dst_id/rel — out of
+        # scope by design (design-schema.md Decision 3), and it uses neither name
+    ]
+    assert offenders == [], offenders
+
+
+def test_pr6b_node_without_uuid_is_refused_loudly_and_names_the_node(client, pr6b_graph):
+    """A uuid-less node matches no edge, so both node endpoints would answer
+    "no relations" with a 200 — a wrong answer that looks like an empty graph.
+    PR6a chose option (a) (NULL is impossible and reaching it is loud); this is
+    the same choice at the read boundary. The message must name the node id:
+    a guard that fires and identifies nothing sends you to a debugger against a
+    database you may not be able to reproduce (PR6a, task 6a.8)."""
+    from axi import store
+
+    node_id = pr6b_graph["ana"]
+    c = store._connect()  # noqa: SLF001
+    c.execute("UPDATE nodes SET uuid = NULL WHERE id = ?", (node_id,))
+
+    for path in (f"/api/graph/node/{node_id}", f"/api/graph/node/{node_id}/neighborhood"):
+        r = client.get(path)
+        assert r.status_code == 500, path
+        detail = r.json()["detail"]
+        assert f"id={node_id}" in detail, detail
+        assert "uuid" in detail, detail

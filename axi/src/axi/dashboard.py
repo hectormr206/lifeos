@@ -2249,18 +2249,22 @@ def api_conversations(
     sql += " ORDER BY c.ts DESC LIMIT ?"
     args.append(limit)
     rows = c.execute(sql, args).fetchall()
-    # Gather fact ids per conversation node via edges (from_id = node_id).
+    # Gather fact ids per conversation node via edges (PR6b: endpoints resolve
+    # through the sync-stable src_uuid/dst_uuid, not the rowid pair PR8 drops).
+    # Plan parity measured: SEARCH e USING INDEX idx_edges_src, i.e. the same
+    # single-key seek the retired idx_edges_from gave.
     out = []
     for r in rows:
         fact_ids: list[int] = []
         if r["node_id"] is not None:
             edges = c.execute(
-                "SELECT e.to_id FROM edges e "
-                "JOIN nodes n ON n.id = e.to_id "
-                "WHERE e.from_id = ? AND n.kind = 'fact'",
+                "SELECT n.id AS fact_id FROM edges e "
+                "JOIN nodes n ON n.uuid = e.dst_uuid "
+                "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+                "AND n.kind = 'fact'",
                 (r["node_id"],),
             ).fetchall()
-            fact_ids = [int(e["to_id"]) for e in edges]
+            fact_ids = [int(e["fact_id"]) for e in edges]
         out.append({
             "id": r["id"],
             "ts": r["ts"],
@@ -2476,6 +2480,30 @@ def _attach_lifeos_edges(conn) -> list[dict[str, Any]]:
             pass
 
 
+def _require_node_uuid(row) -> str:
+    """Return a node row's `uuid`, refusing to answer without one.
+
+    PR6b resolves every edge through `src_uuid`/`dst_uuid`. A node with no uuid
+    matches no edge, so the endpoint would answer "this memory has no
+    relations" — a wrong answer wearing a 200, which is precisely the silent
+    failure PR6a's option (a) exists to prevent. `store.add_node` has assigned a
+    uuid at insert since task 5.14 and `init_db()` backfills the rest, so
+    reaching this branch means the invariant broke; say so, name the node, and
+    do not answer.
+    """
+    uuid = row["uuid"]
+    if not uuid:
+        raise HTTPException(
+            500,
+            detail=(
+                f"node id={row['id']} has no uuid, so its edges cannot be "
+                "resolved (expected impossible since store.add_node assigns "
+                "one at insert — run store.verify_edge_endpoint_convergence)"
+            ),
+        )
+    return uuid
+
+
 @app.get("/api/graph/full")
 def graph_full(limit: int = 500) -> dict[str, Any]:
     """Return a merged graph: System A nodes+edges + System B cross-domain edges.
@@ -2522,20 +2550,30 @@ def graph_full(limit: int = 500) -> dict[str, Any]:
     node_id_set = {r["id"] for r in node_rows}
 
     # ── System A: edges (including similar-to) ────────────────────────────────
+    # PR6b: endpoints resolve through src_uuid/dst_uuid. The client contract is
+    # still integer node ids, so both uuids are mapped back through nodes — an
+    # INNER join, which also drops edges whose endpoint node row is gone. That
+    # costs nothing here: the `node_id_set` filter below already dropped them.
+    # Plan parity measured: the old query was `SCAN edges` (no WHERE clause, by
+    # design — this endpoint returns the whole edge table); the new one is the
+    # same scan plus two covering-index seeks on idx_nodes_uuid.
     edge_rows = c.execute(
-        "SELECT id, from_id, to_id, kind FROM edges"
+        "SELECT e.id AS id, s.id AS src_id, d.id AS dst_id, e.relation AS relation "
+        "FROM edges e "
+        "JOIN nodes s ON s.uuid = e.src_uuid "
+        "JOIN nodes d ON d.uuid = e.dst_uuid"
     ).fetchall()
 
     a_edges = [
         {
             "id": r["id"],
-            "source": r["from_id"],
-            "target": r["to_id"],
-            "kind": r["kind"],
+            "source": r["src_id"],
+            "target": r["dst_id"],
+            "kind": r["relation"],
             "system": "A",
         }
         for r in edge_rows
-        if r["from_id"] in node_id_set and r["to_id"] in node_id_set
+        if r["src_id"] in node_id_set and r["dst_id"] in node_id_set
     ]
 
     # ── System B: cross-domain edges via ATTACH ──────────────────────────────
@@ -2693,12 +2731,13 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
 
     c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
     row = c.execute(
-        "SELECT id, kind, label, domain, data, created_at, occurred_at "
+        "SELECT id, uuid, kind, label, domain, data, created_at, occurred_at "
         "FROM nodes WHERE id = ?",
         (node_id,),
     ).fetchone()
     if row is None:
         raise HTTPException(404, detail="node not found")
+    node_uuid = _require_node_uuid(row)
 
     try:
         data = json.loads(row["data"] or "{}")
@@ -2715,13 +2754,17 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
     }
 
     # All edges touching this node, joined with the neighbor node.
+    # PR6b: same shape, resolved through src_uuid/dst_uuid and e.relation. Plan
+    # parity measured: the OR predicate is still served by MULTI-INDEX OR, now
+    # over idx_edges_src/idx_edges_dst instead of idx_edges_from/idx_edges_to.
     edge_rows = c.execute(
-        "SELECT e.id AS eid, e.kind AS ekind, e.from_id, e.to_id, "
+        "SELECT e.id AS eid, e.relation AS ekind, e.src_uuid, e.dst_uuid, "
         "       n.id AS oid, n.kind AS okind, n.label AS olabel, n.created_at AS ocreated "
         "FROM edges e "
-        "JOIN nodes n ON n.id = CASE WHEN e.from_id = ? THEN e.to_id ELSE e.from_id END "
-        "WHERE e.from_id = ? OR e.to_id = ?",
-        (node_id, node_id, node_id),
+        "JOIN nodes n ON n.uuid = "
+        "     CASE WHEN e.src_uuid = ? THEN e.dst_uuid ELSE e.src_uuid END "
+        "WHERE e.src_uuid = ? OR e.dst_uuid = ?",
+        (node_uuid, node_uuid, node_uuid),
     ).fetchall()
 
     facts: list[dict[str, Any]] = []
@@ -2730,7 +2773,7 @@ def graph_node_detail(node_id: int) -> dict[str, Any]:
     seen_facts: set[int] = set()
     for er in edge_rows:
         ekind = er["ekind"] or ""
-        direction = "out" if er["from_id"] == node_id else "in"
+        direction = "out" if er["src_uuid"] == node_uuid else "in"
         if ekind in ("mentions", "about") and er["okind"] == "fact":
             if er["oid"] not in seen_facts:
                 seen_facts.add(er["oid"])
@@ -2928,12 +2971,13 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
     """
     c = store._connect()  # noqa: SLF001  (read-only — reads don't route)
     center = c.execute(
-        "SELECT id, kind, label, domain, embedding, created_at, occurred_at "
+        "SELECT id, uuid, kind, label, domain, embedding, created_at, occurred_at "
         "FROM nodes WHERE id = ?",
         (node_id,),
     ).fetchone()
     if center is None:
         raise HTTPException(404, detail="node not found")
+    center_uuid = _require_node_uuid(center)
 
     def _node_dict(r) -> dict[str, Any]:
         return {
@@ -2947,10 +2991,22 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
         }
 
     # Distinct 1-hop neighbor ids (either edge direction), excluding self.
+    # PR6b: resolved through src_uuid/dst_uuid (MULTI-INDEX OR plan preserved
+    # over idx_edges_src/idx_edges_dst). ORDER BY is NOT decoration here: the
+    # list is truncated at _NEIGHBORHOOD_CAP three lines down, so without an
+    # explicit order the query planner decides WHICH neighbours the user sees,
+    # and this rewrite changes the plan. Ascending node id is what the DISTINCT
+    # temp b-tree already produced, so pinning it preserves today's behaviour
+    # rather than changing it. The join to `nodes` also means a dangling
+    # endpoint (edge synced before its node) no longer burns a cap slot for a
+    # node the client could never render.
     neigh_rows = c.execute(
-        "SELECT DISTINCT CASE WHEN from_id = ? THEN to_id ELSE from_id END AS nid "
-        "FROM edges WHERE from_id = ? OR to_id = ?",
-        (node_id, node_id, node_id),
+        "SELECT DISTINCT n.id AS nid FROM edges e "
+        "JOIN nodes n ON n.uuid = "
+        "     CASE WHEN e.src_uuid = ? THEN e.dst_uuid ELSE e.src_uuid END "
+        "WHERE e.src_uuid = ? OR e.dst_uuid = ? "
+        "ORDER BY nid",
+        (center_uuid, center_uuid, center_uuid),
     ).fetchall()
     neighbor_ids = [r["nid"] for r in neigh_rows if r["nid"] != node_id]
 
@@ -2971,13 +3027,17 @@ def graph_node_neighborhood(node_id: int) -> dict[str, Any]:
     # never injects a dangling edge when the neighbor list was truncated).
     in_set = {n["id"] for n in nodes}
     edge_rows = c.execute(
-        "SELECT id, from_id, to_id, kind FROM edges WHERE from_id = ? OR to_id = ?",
-        (node_id, node_id),
+        "SELECT e.id AS id, s.id AS src_id, d.id AS dst_id, e.relation AS relation "
+        "FROM edges e "
+        "JOIN nodes s ON s.uuid = e.src_uuid "
+        "JOIN nodes d ON d.uuid = e.dst_uuid "
+        "WHERE e.src_uuid = ? OR e.dst_uuid = ?",
+        (center_uuid, center_uuid),
     ).fetchall()
     edges = [
-        {"id": er["id"], "source": er["from_id"], "target": er["to_id"], "kind": er["kind"]}
+        {"id": er["id"], "source": er["src_id"], "target": er["dst_id"], "kind": er["relation"]}
         for er in edge_rows
-        if er["from_id"] in in_set and er["to_id"] in in_set
+        if er["src_id"] in in_set and er["dst_id"] in in_set
     ]
 
     return {"nodes": nodes, "edges": edges, "truncated": truncated}

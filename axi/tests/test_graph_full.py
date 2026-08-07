@@ -25,28 +25,13 @@ def test_graph_full_returns_system_a_nodes_and_edges():
     from axi.dashboard import app
     import axi.store as store
 
-    conn = store._connect()
-    now = time.time()
-
-    # Insert two nodes and an edge.
-    cur1 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Alpha node", "{}", "health", now, now),
-    )
-    nid1 = cur1.lastrowid
-    cur2 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Beta node", "{}", "relationships", now, now),
-    )
-    nid2 = cur2.lastrowid
-    conn.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (nid1, nid2, "similar-to", "{}", now),
-    )
-    conn.commit()
+    # Inserted through the store API on purpose: a raw INSERT leaves
+    # nodes.uuid / edges.src_uuid NULL, a row shape production has been unable
+    # to produce since task 5.14, and which PR6b's uuid-resolved reads treat as
+    # a missing endpoint. Fixtures must model rows the daemon can actually write.
+    nid1 = store.add_node("fact", "Alpha node", domain="health")
+    nid2 = store.add_node("fact", "Beta node", domain="relationships")
+    store.add_edge(nid1, nid2, "similar-to")
 
     client = TestClient(app)
     resp = client.get("/api/graph/full")
@@ -150,26 +135,10 @@ def test_graph_full_similar_to_edges_included():
     from axi.dashboard import app
     import axi.store as store
 
-    conn = store._connect()
-    now = time.time()
-
-    cur1 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Node A", "{}", "health", now, now),
-    )
-    nid1 = cur1.lastrowid
-    cur2 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Node B", "{}", "health", now, now),
-    )
-    nid2 = cur2.lastrowid
-    conn.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at) VALUES (?, ?, ?, ?, ?)",
-        (nid1, nid2, "similar-to", "{}", now),
-    )
-    conn.commit()
+    # Store API, not raw SQL — see the note in the first test in this file.
+    nid1 = store.add_node("fact", "Node A", domain="health")
+    nid2 = store.add_node("fact", "Node B", domain="health")
+    store.add_edge(nid1, nid2, "similar-to")
 
     client = TestClient(app)
     resp = client.get("/api/graph/full")

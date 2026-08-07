@@ -1260,3 +1260,241 @@ agreed: `ORDER BY e.id` on `recall._graph_relation_lines`. An unordered
 query whose results are truncated has a plan-dependent contract, and the
 rewrite changes the plan — without the explicit order the user would have
 silently started seeing different relations.
+
+---
+
+## Phase 6b (PR6b) — `dashboard.py` reader rewrite to `src_uuid`/`dst_uuid`/`relation`
+
+**Mode**: Strict TDD. **Scope**: tasks 6b.1–6b.4 only. No tombstones (PR7), no
+table rebuild (PR8), PR6a's five files untouched (no defect found in them).
+
+### Completed tasks
+
+- [x] 6b.1 four `dashboard.py` read sites, oracle-compared on a seeded fixture
+- [x] 6b.2 GREEN implementation (108 production lines)
+- [x] 6b.3 zero-regression proof across both tree states
+- [x] 6b.4 `meeting.py` needed zero rewrite — asserted, not claimed
+
+### The four sites
+
+| Endpoint | Old | New |
+|---|---|---|
+| `/api/conversations` fact ids | `JOIN nodes n ON n.id = e.to_id WHERE e.from_id = ?` | `JOIN nodes n ON n.uuid = e.dst_uuid WHERE e.src_uuid = (SELECT uuid …)` |
+| `/api/graph/full` edges | `SELECT id, from_id, to_id, kind FROM edges` | same scan + two `idx_nodes_uuid` seeks mapping both uuids back to the integer ids the client contract still speaks |
+| `/api/graph/node/{id}` | `from_id = ? OR to_id = ?` + CASE join | `src_uuid = ? OR dst_uuid = ?` + CASE join, `e.relation` |
+| `/api/graph/node/{id}/neighborhood` | two queries on `from_id`/`to_id` | both on `src_uuid`/`dst_uuid`, neighbour query now ordered |
+
+### INDEX PARITY — measured with `EXPLAIN QUERY PLAN`, before and after
+
+Measured on a seeded DB **without `ANALYZE`**, because `store.py` never runs it
+(verified by grep), so production plans come from the default planner. That
+detail mattered: with `ANALYZE` on a 12-row table the planner abandons the
+MULTI-INDEX OR for both the old and the new query, which would have made the
+comparison meaningless in both directions.
+
+| Site | Old plan | New plan |
+|---|---|---|
+| conversations fact ids | `SEARCH e USING INDEX idx_edges_from` | `SEARCH e USING INDEX idx_edges_src` |
+| graph/full edges | `SCAN edges` | `SCAN e` + 2 × `SEARCH … COVERING INDEX idx_nodes_uuid` |
+| node detail | `MULTI-INDEX OR` over `idx_edges_from`/`idx_edges_to` | `MULTI-INDEX OR` over `idx_edges_src`/`idx_edges_dst` |
+| neighbourhood (both queries) | `MULTI-INDEX OR` over `idx_edges_from`/`idx_edges_to` | `MULTI-INDEX OR` over `idx_edges_src`/`idx_edges_dst` |
+
+No site turned a `SEARCH` into a `SCAN`. PR6a's three indexes
+(`idx_edges_src`/`idx_edges_dst`/`idx_edges_relation`) were exactly what this
+PR needed, so no new index was required — that find is what made PR6b free.
+`/api/graph/full` was and remains a full edge scan: it has no WHERE clause by
+design (it returns the whole edge table), so the scan is the contract, not a
+regression. It is pinned as such in the test rather than left to be
+re-discovered as a suspected defect later.
+
+The plan assertions do NOT re-type the production SQL. A `_RecordingConn`
+proxy captures the exact statements the endpoint executes and runs
+`EXPLAIN QUERY PLAN` on those bytes, so a future edit that changes the query
+cannot leave a stale plan test passing behind it.
+
+### ORDER-BY CONTRACT — one found, in the shape PR6a warned about
+
+`graph_node_neighborhood` truncates: `kept_ids = neighbor_ids[:_NEIGHBORHOOD_CAP]`
+(cap 60). The query feeding it had **no `ORDER BY`**, so the query planner
+decided which 60 neighbours the user saw — and this rewrite changes the plan.
+Pinned to `ORDER BY nid` (ascending node id), which is what the `DISTINCT` temp
+b-tree already emitted, so the pin preserves today's behaviour instead of
+quietly changing it. `ORDER BY nid` is free here: the DISTINCT b-tree satisfies
+it, no extra sort appears in the plan.
+
+The other three sites were checked for the same shape and do **not** have it —
+their results are returned complete, so their order is presentation, not a
+contract. No `ORDER BY` was added there, because each would have bought a temp
+b-tree sort for nothing.
+
+### One documented behaviour change (asserted, not hidden)
+
+A **dangling endpoint no longer burns a neighbour slot.** The old integer query
+returned the raw `to_id` of an edge whose node row is gone (legal in mobile's
+model — an edge may sync before its node). That phantom id counted toward
+`_NEIGHBORHOOD_CAP`, could flip `truncated` to `true` for a node that was not
+truncated, and cost the user a real neighbour — while never rendering, because
+the follow-up `SELECT … FROM nodes WHERE id IN (…)` found nothing. Resolving
+through `dst_uuid` drops it at the query. Consistent with PR6a's option (a):
+no `from_id`/`to_id` fallback. Pinned by
+`test_pr6b_dangling_endpoint_no_longer_burns_a_neighbor_slot`, which patches
+the cap to exactly the live-neighbour count so the difference is observable
+rather than asserted in the abstract.
+
+### One new error path, made actionable (PR6a lesson 3)
+
+`_require_node_uuid`. Both node-scoped endpoints resolve edges through the
+centre node's uuid; a uuid-less node matches no edge, so the endpoint would
+have answered "this memory has no relations" with a **200**. A wrong answer
+wearing a success code is exactly what option (a) exists to prevent, so it now
+raises 500 with a message naming the node (`node id=42 has no uuid …`) and
+pointing at `verify_edge_endpoint_convergence`. Test asserts the id appears in
+the detail. This state is believed impossible (`add_node` assigns uuid since
+task 5.14, `init_db()` backfills), which is precisely why it must shout rather
+than degrade.
+
+### Test fixtures that modelled an impossible state (again)
+
+Three tests failed on the first GREEN run: `test_graph_full.py` (2) and
+`test_slice4_vendor.py` (1). Same cause PR6a documented — they raw-`INSERT`ed
+nodes and edges with no `uuid`/`src_uuid`, a row shape the daemon has been
+unable to produce since task 5.14. Routed through `store.add_node`/
+`store.add_edge`; no assertion was weakened and no test deleted. Worth noting
+that PR6a's sweep did not catch these because nothing read the columns from
+`dashboard.py` until now — the same class of fixture debt surfaces once per
+reader-rewrite PR, and PR7 should expect a third batch.
+
+### Zero-regression proof (dual tree state)
+
+All 59 test files referencing `add_node|axi.store|from axi import store`,
+`-p no:randomly`, failure sets normalised and diffed with `comm`. Baseline is a
+`git worktree` at HEAD `b72f5cd9`, removed afterwards.
+
+| Tree state | Passed | Failed | Total |
+|---|---|---|---|
+| HEAD `b72f5cd9` (pre-PR6b, git worktree) | 872 | 23 | 895 |
+| PR6b | 887 | 23 | 910 |
+
++15 tests, all new and all passing. `comm` in both directions is empty: **zero
+failures new to PR6b and zero pre-existing failures masked**. The 23 shared
+failures are the known `test_domain_bridge*` (19) and `test_mcp_tools` (4)
+sets. `test_memory::test_clear_wipes_history_returns_count` flickered once
+across the runs of this phase (24 failures in one intermediate run, 23 in the
+two measured ones) — the documented daemon-thread/`DB_PATH` TOCTOU flake,
+behaving like a flake.
+
+### Metrics
+
+| | Added | Deleted | Total |
+|---|---|---|---|
+| Production (`axi/src/axi/dashboard.py`) | 84 | 24 | **108** |
+| Tests | 443 | 62 | 505 |
+
+Production is far under the 400-line budget and under the forecast's own
+140–190 estimate, because PR6a had already paid for the indexes and the shared
+fixture. Tests are over the 80–120 forecast for the same reason PR6a's were:
+"identical results to the pre-rewrite version" means carrying five literal
+pre-rewrite queries as oracles, plus plan measurement, plus the behaviour
+change. Combined diff is 613 lines — **recommend `size:exception`**, with the
+note that the 108 production lines are where all the risk lives.
+
+### Rollback boundary
+
+Revert `axi/src/axi/dashboard.py` alone. `from_id`/`to_id`/`kind` are untouched
+and still dual-written by PR5, so the old readers work unchanged. Test-side
+revert: the PR6b block appended to `test_dashboard.py`, the new
+`test_meeting_sql_contract.py`, and the three fixture rewrites in
+`test_graph_full.py`/`test_slice4_vendor.py` (those are strictly better
+fixtures and can stay).
+
+### What the design got wrong / did not say
+
+1. `design-schema.md` lists dashboard's sites as "mechanical join/name
+   rewrites". Two of the four are not mechanical: `/api/graph/full` and
+   `/api/graph/node/{id}/neighborhood` return **integer node ids** in their
+   client contract, so the rewrite is uuid-in / id-out and needs a second join
+   back through `nodes` — which is also what silently changes the dangling-edge
+   behaviour. A pure name swap would have been wrong here.
+2. The design named no `ORDER BY` work, and `_NEIGHBORHOOD_CAP` truncates an
+   unordered query. Same defect shape PR6a found in `recall._graph_relation_lines`;
+   it is worth assuming every remaining truncation site has it until measured.
+3. Task 6b.4 names `test_meeting.py`, which does not exist (the repo has
+   `test_meeting_*.py`), and says "from_id/to_id/kind" — but `nodes.kind` is
+   not being renamed, so the accurate contract is edge-table-only.
+
+### Found but not fixed (out of PR6b's boundary)
+
+- `/api/graph/full` reads the entire `edges` table on every call and filters in
+  Python against a 500-node window. With a large graph that is a full scan plus
+  a large discarded result set. Pre-existing, unchanged here, and a real
+  performance item for whoever owns the 3D browser — not a schema-convergence
+  concern.
+- `graph_node_detail`'s edge read has no `deleted_at IS NULL` filter, so a
+  tombstoned endpoint still shows. That is correct today (PR7 owns tombstone
+  filtering) and the fixture pins it deliberately, but PR7 must revisit all
+  four of these sites, not only `store.py`.
+- The `test_memory` TOCTOU flake still deserves its own slice.
+
+### Status
+
+4/4 tasks complete (6b.1–6b.4). PR7 (tombstones) NOT started.
+
+### Coordinator verification of Phase 6b (independent, post-apply)
+
+Re-ran the dual-tree comparison myself rather than accepting the reported
+numbers: 57 store-dependent test files, `-p no:randomly`, failure sets
+diffed with `comm` against the PR6a tip (`b72f5cd9`).
+
+| Tree state | Passed | Failed |
+|---|---|---|
+| PR6a tip `b72f5cd9` | 872 | 23 |
+| PR6b | 887 | 23 |
+
+`comm` empty in BOTH directions — zero new failures and zero masked ones.
+Matches the apply agent's reported figures exactly. PR6b's own four test
+files: 100 passed.
+
+**Endorsed without change.** Three judgement calls worth naming because a
+later reader will meet them and wonder:
+
+1. `_require_node_uuid` raising 500 rather than answering 200. A uuid-less
+   centre node matches no edge, so the endpoint would have replied "this
+   memory has no relations" — a wrong answer wearing a success code, about
+   the user's own memory. A 500 that names the node is strictly better than
+   a confident lie. Unreachable since task 5.14; that is the point.
+2. Measuring EXPLAIN QUERY PLAN WITHOUT running `ANALYZE`, because
+   `store.py` never runs it. With `ANALYZE` on a small table the planner
+   drops the MULTI-INDEX OR for old and new alike, which would have made the
+   comparison read clean while proving nothing. Measuring the configuration
+   that actually ships is the whole value of measuring.
+3. `ORDER BY nid` on `graph_node_neighborhood` only. It truncates at
+   `_NEIGHBORHOOD_CAP`, so the planner was deciding which neighbours the
+   user saw — the same defect shape found in `recall._graph_relation_lines`
+   during PR6a, now twice in one chain. The other three sites return
+   complete lists and correctly got no ORDER BY; adding one there would buy
+   a sort for nothing.
+
+**Design correction accepted:** `/api/graph/full` and the neighborhood
+endpoint return integer node ids in their CLIENT contract, so the rewrite is
+uuid-in/id-out and needs a join back through `nodes`. That is not the
+"mechanical join/name rewrite" the design promised, and that second join is
+exactly what changes the dangling-edge behaviour. Design was wrong; the
+apply agent was right to say so rather than quietly widen the diff.
+
+**Handoff gap closed here, added as task 7.9b.** The agent flagged that none
+of the four dashboard sites filter `deleted_at IS NULL` and that PR7 must
+revisit all four. Task 7.10 does already say "the read sites touched in
+Phase 6", which includes them — but task 7.9, which is where the
+INVISIBILITY is actually PROVEN, named only `test_store.py`. So PR7 could
+have gone green with the store layer fully tombstone-aware while a
+tombstoned memory still rendered in the graph browser and the 3D brain. The
+endpoints are what the user looks at. 7.9b now requires the assertion at the
+HTTP boundary. This matters more than usual because PR7 is the last gate
+before PR8, the point of no return.
+
+**Carried forward, not fixed:** `/api/graph/full` reads the whole edge table
+every call and filters in Python against a 500-node window (pre-existing;
+perf item for the 3D browser, not this chain). Third batch of fixtures
+raw-INSERTing rows without `uuid` found and routed through the production
+writers — expect a fourth in PR7, and note that only `uuid NOT NULL` (PR8)
+makes that route impossible rather than merely wrong.

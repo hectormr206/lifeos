@@ -167,27 +167,13 @@ def test_api_graph_full_edge_shape():
     """Data contract: every edge has source, target, kind, system."""
     from axi.dashboard import app
     import axi.store as store
-    import time
 
-    conn = store._connect()
-    now = time.time()
-    c1 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Edge node A", "{}", "health", now, now),
-    )
-    n1 = c1.lastrowid
-    c2 = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        ("fact", "Edge node B", "{}", "health", now, now),
-    )
-    n2 = c2.lastrowid
-    conn.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at) VALUES (?, ?, ?, ?, ?)",
-        (n1, n2, "similar-to", "{}", now),
-    )
-    conn.commit()
+    # Store API, not raw SQL: a raw INSERT leaves nodes.uuid / edges.src_uuid
+    # NULL, which the daemon cannot produce (task 5.14) and which PR6b's
+    # uuid-resolved edge reads correctly treat as a missing endpoint.
+    n1 = store.add_node("fact", "Edge node A", domain="health")
+    n2 = store.add_node("fact", "Edge node B", domain="health")
+    store.add_edge(n1, n2, "similar-to")
 
     client = TestClient(app)
     resp = client.get("/api/graph/full")
