@@ -1035,3 +1035,228 @@ slice.
 "PR4's documented, deliberate gap". Rewritten — a stale comment asserting a
 bug still exists is the same class of defect as the `init_db()` comment
 this phase already had to fix once.
+
+---
+
+## Phase 6a (PR6a) — reader rewrite to `src_uuid`/`dst_uuid`/`relation`
+
+**Mode**: Strict TDD. **Scope**: tasks 6a.1–6a.7 only. `dashboard.py` untouched
+(PR6b), no tombstones (PR7), no table rebuild (PR8).
+
+### Completed tasks
+
+- [x] 6a.1 `store.py` read sites → `src_uuid`/`dst_uuid`/`relation`
+- [x] 6a.2 `forget.py` edge lane
+- [x] 6a.3 `recall.py` `_graph_relation_lines`
+- [x] 6a.4 `linkers.py` `_edge_exists`
+- [x] 6a.5 `identity.py` — six existence guards + `_resolve_relation_person`
+- [x] 6a.6 GREEN implementation of 6a.1–6a.5
+- [x] 6a.7 zero-regression proof across both tree states
+
+### The NULL-endpoint decision: (a), and made loud
+
+The hazard, stated plainly: reads used to join `from_id`/`to_id` (NOT NULL
+INTEGER) and now join `src_uuid`/`dst_uuid` (nullable TEXT). A NULL endpoint
+does not match the join, so the edge vanishes with no error and no log — a
+link missing from the user's own memory graph.
+
+**Option (a) was taken: NULL is made impossible, and reaching it anyway is
+made loud. The readers do NOT fall back to `from_id`/`to_id`.** Silent
+tolerance would hide exactly the defect the guard exists to surface, and would
+have hidden the two real bugs found below.
+
+Impossibility is proven by enumeration, not assumed:
+
+- `store.add_node` is the ONLY `INSERT INTO nodes` in `axi/src` and in the
+  sibling `lifeos` package (verified by grep), and it has assigned `uuid` at
+  insert since task 5.14.
+- All three edge-insert paths (`store.add_edge`, the similar-to insert,
+  `linkers._safe_insert_edge`) copy the endpoint uuids inside the same
+  transaction as the insert; `identity.register_alias` rewrites both
+  representations in one transaction.
+- `init_db()` runs `migrate_nodes_edges_sync_columns()` (backfills node uuids)
+  then `migrate_edge_endpoint_uuids()` (backfills edge endpoints) on every
+  start.
+
+Loudness: `verify_edge_endpoint_convergence()` now RAISES on any NULL endpoint
+uuid. Previously it could not: its predicate is `src_uuid IS NOT n1.uuid`, so
+NULL-vs-NULL read as *converged* — the same blind spot the Phase 5 coordinator
+review found from the other side. It runs at the end of
+`migrate_edge_endpoint_uuids()`, i.e. on every `init_db()`, so a NULL endpoint
+cannot survive a daemon start quietly.
+
+The binding test is
+`test_store.py::test_edge_with_null_endpoint_uuid_is_detected_loudly_not_silently_dropped`:
+it seeds the state, asserts the read genuinely DOES drop the edge (the hazard
+is stated, not hidden), and asserts the guard raises on that same database.
+Weakening the guard fails the test.
+
+### Two real defects found, both from PR5, both closed here
+
+1. **The backfill could never repair a half-NULL edge.** It selected
+   `WHERE e.src_uuid IS NULL`. An edge from an already-uuid'd node to a node
+   created after the last restart (pre-5.14) dual-wrote a real `src_uuid` and
+   a NULL `dst_uuid` — invisible to that predicate forever, and from PR6a on
+   invisible to every read resolving through `dst_uuid`. Now
+   `WHERE e.src_uuid IS NULL OR e.dst_uuid IS NULL`, with `updated_at` set via
+   `COALESCE` so the repair cannot rewind a real timestamp.
+   Test: `test_backfill_repairs_an_edge_missing_only_dst_uuid`.
+2. **No indexes existed on the columns the rewrite reads.**
+   `idx_edges_from`/`idx_edges_to`/`idx_edges_kind` index the columns the reads
+   just left. `same_day_neighbors` is written as a UNION *specifically* so
+   SQLite could use `idx_edges_from`/`idx_edges_to`, and the rewrite retires
+   both — every graph read would have degraded to a full table scan with no
+   test noticing. Added `idx_edges_src`, `idx_edges_dst`, `idx_edges_relation`
+   (mobile's names verbatim, `local_graph_schema.dart`) to `_SCHEMA` AND to the
+   migration, so a pre-existing database gets them too. Tests assert both the
+   index existence and, via `EXPLAIN QUERY PLAN`, that the query still
+   `SEARCH`es rather than `SCAN`s.
+
+### Two documented behaviour changes (asserted, not hidden)
+
+1. **A dangling endpoint id answers differently.** The old existence guard
+   matched `to_id`, an integer the edge row still carries after its node row is
+   gone; the new one must resolve that id to a uuid and a deleted node has
+   none, so the answer flips True → False. Unreachable from all six call sites
+   (each passes an id it just obtained from `ensure_entity` /
+   `ensure_user_hub` / a node it created). Pinned by
+   `test_edge_exists_disagrees_only_for_an_endpoint_id_that_no_longer_exists`
+   rather than buried inside a passing loop.
+2. **`recall._graph_relation_lines` now has a declared order.** Neither query
+   ever had an `ORDER BY`, so row order was the planner's; the rewrite's
+   OR-index plan emits a different one, and the list is truncated at
+   `max_rel=8` before the user sees it — so the truncation would have silently
+   started keeping different lines. Pinned to `ORDER BY e.id` (insertion
+   order). The equivalence test compares content as sets and the ordering
+   claim gets its own test.
+
+### Test fixtures that modelled an impossible state
+
+Four "idempotency" tests and two `same_day_neighbors` tests failed on the
+first GREEN run. Cause: test helpers in `test_linkers.py`,
+`test_recall_store.py` and `test_similar_to_edges.py` raw-`INSERT`ed nodes and
+edges without `uuid`/`src_uuid`, a row shape production has been unable to
+produce since task 5.14. Nothing read the columns, so the fixtures got away
+with it. The helpers were routed through `store.add_node`/`store.add_edge`
+(or given an explicit uuid where they pin an explicit `id`), which is
+strictly stronger than patching the assertion — but the underlying point is
+that only PR8's `uuid NOT NULL` constraint makes that fixture route
+*impossible* rather than merely wrong. No test was deleted or weakened.
+
+### Zero-regression proof (dual tree state)
+
+All 59 test files referencing `add_node|axi.store|from axi import store`, run
+with `-p no:randomly` against both tree states; failure sets diffed with
+`comm`.
+
+| Tree state | Passed | Failed | Total |
+|---|---|---|---|
+| HEAD `6bbb6ad7` (pre-PR6a, git worktree) | 842 | 24 | 866 |
+| PR6a | 870 | 23 | 893 |
+
++27 tests, all new and all passing. Failure-set diff: **zero failures new to
+PR6a**. The single difference is `test_memory.py::test_clear_wipes_history_returns_count`,
+which failed at baseline and passed here — the pre-existing daemon-thread /
+`DB_PATH` TOCTOU flake documented at `conftest.py:21` and in the Phase 5
+coordinator review. The 23 shared failures are the pre-existing
+`test_domain_bridge*` (19) and `test_mcp_tools` (4) sets.
+
+### Metrics
+
+| | Added | Deleted | Total |
+|---|---|---|---|
+| Production (`axi/src`) | 165 | 55 | **220** |
+| Tests (`axi/tests`) | 820 | 22 | 842 |
+
+Production is comfortably under the 400-line budget and under the forecast's
+own 260–340 estimate — largely because six copies of the identity existence
+guard collapsed into one `identity._edge_exists`. Tests are well over the
+forecast's 150–200: task 6a.1–6a.5 each require "identical results to the
+pre-rewrite version on a seeded fixture DB", which means carrying the literal
+pre-rewrite query as an oracle in five files plus a shared fixture that
+exercises self-edges, duplicate pairs, tombstoned and dangling endpoints.
+**Recommend `size:exception` on the combined 1,062-line diff**; the production
+half is what carries the risk and it is 220 lines of mechanical join rewrites.
+
+### Rollback boundary
+
+Revert the five `axi/src` files. `from_id`/`to_id`/`kind` are untouched and
+still dual-written by PR5, so the old readers work unchanged; the three new
+indexes are additive and harmless if left behind. Test-side revert: the PR6a
+blocks appended to `test_store.py`, `test_forget.py`, `test_recall.py`,
+`test_linkers.py`, `test_identity.py`, `test_store_migration.py`, the
+`pr6a_graph` fixture in `conftest.py`, and the three fixture-helper rewrites.
+
+### Status
+
+7/7 tasks complete (6a.1–6a.7). PR6b (`dashboard.py`, tasks 6b.1–6b.4) NOT
+started, per scope.
+
+### Coordinator verification of Phase 6a (independent, post-apply)
+
+**Both of the apply agent's headline claims verified by direct measurement,
+not accepted on report.**
+
+Indexes: `PRAGMA index_list(edges)` on a fresh DB shows `idx_edges_src`,
+`idx_edges_dst`, `idx_edges_relation`, and `EXPLAIN QUERY PLAN` on each of
+the three rewritten predicates reports `SEARCH ... USING INDEX`, not `SCAN`.
+This was the agent's most valuable find: `same_day_neighbors` is written as
+a UNION *specifically* so SQLite could use `idx_edges_from`/`idx_edges_to`,
+and the rewrite retires both. Without the new indexes every graph read
+would have silently degraded to a full table scan — no test failing, no
+error, just a slower and slower memory graph. The design called Phase 6
+"mechanical join/name rewrites" and named no index work. That is the one
+thing the design got wrong, and it took running the query planner to see.
+
+Backfill predicate: confirmed `WHERE e.src_uuid IS NULL OR e.dst_uuid IS
+NULL` with `COALESCE` on `updated_at`. The old single-sided predicate left
+an edge with a real `src_uuid` and a NULL `dst_uuid` permanently
+unrepairable — reachable pre-5.14 from an old node to a newly created one,
+and invisible to every `dst_uuid` read from PR6a onward.
+
+**One defect found and fixed here (task 6a.8): the guard shouted, but said
+nothing.** Both raise branches of `verify_edge_endpoint_convergence()`
+interpolated raw sqlite Row objects. Triggered against a real DB, the
+message was:
+
+    ... 1 edge(s) have drifted ...: [<sqlcipher3.dbapi2.Row object at 0x7d7e...>]
+
+No edge id, no uuid, no indication of which side was NULL. Fixed to:
+
+    ... id=1 src_uuid='c4b45e52-...' expected='c4b45e52-...'
+        dst_uuid=None expected='4270099a-...'
+
+This matters because of what the rest of this phase is for. PR6a chose
+option (a) — NULL endpoints are impossible by construction, and the
+residual case is made loud rather than tolerated. That choice is only worth
+anything if the loud case is ACTIONABLE. A check that fires and names
+nothing sends you to a debugger against a production database you may not
+be able to reproduce, which in practice is not far from failing silently.
+The LifeOS rule is that a check which cannot run must fail loudly; a check
+that fails unreadably satisfies its letter and not its purpose.
+
+Predates PR6a — the defect shipped in PR5's original guard. Caught now
+because PR6a is the phase that made the guard load-bearing.
+
+**Zero-regression, re-measured including the 6a.8 change.** 57
+store-dependent test files, `-p no:randomly`, failure sets diffed with
+`comm` against the PR5 tip (`6bbb6ad7`).
+
+| Tree state | Passed | Failed |
+|---|---|---|
+| PR5 tip `6bbb6ad7` | 842 | 24 |
+| PR6a + 6a.8 | 872 | 23 |
+
+Zero failures new to PR6a. The single set difference is
+`test_memory::test_clear_wipes_history_returns_count` — the known
+daemon-thread/DB_PATH TOCTOU flake — failing at baseline and passing here,
+which is the flake behaving like a flake.
+
+**Agreed with, not overridden:** the agent's decision to route
+raw-`INSERT`ing test helpers through `store.add_node`/`store.add_edge`
+rather than weakening assertions, and its note that only `uuid NOT NULL`
+(PR8) makes that fixture route impossible instead of merely wrong. Also
+agreed: `ORDER BY e.id` on `recall._graph_relation_lines`. An unordered
+query whose results are truncated has a plan-dependent contract, and the
+rewrite changes the plan — without the explicit order the user would have
+silently started seeing different relations.

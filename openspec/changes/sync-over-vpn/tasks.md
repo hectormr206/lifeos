@@ -114,13 +114,14 @@ Confirmed here: split by file group so each PR stays well under the 400-line
 production budget without splitting a single file's join logic across two PRs
 (splitting mid-file raises reviewability risk higher than the line count does).
 
-- [ ] 6a.1 RED: `test_store.py` — every `store.py` read site that joins/selects via `from_id`/`to_id`/`e.kind` (store.py ~1281, 1321, 1382-1416, 2973-2978, plus any sites 5.1-5.12 did not already touch) is rewritten to `src_uuid`/`dst_uuid`/`e.relation` and returns identical results to the pre-rewrite version on a seeded fixture DB
-- [ ] 6a.2 RED: `test_forget.py` — `forget.py:211-212` read sites rewritten to `src_uuid`/`dst_uuid`/`relation`, identical results on the seeded fixture
-- [ ] 6a.3 RED: `test_recall.py` — `recall.py:271-273` read sites rewritten, identical results
-- [ ] 6a.4 RED: `test_linkers.py` — `linkers.py:44-64` read sites rewritten, identical results
-- [ ] 6a.5 RED: `test_identity.py` — `identity.py:392,453,501,555-557,596,628,690` read sites rewritten (endpoint-rewrite site 354-355 already dual-writes since PR5; this task is the READ side), identical results
-- [ ] 6a.6 GREEN: implement 6a.1-6a.5 (PR6a — `store.py`, `forget.py`, `recall.py`, `linkers.py`, `identity.py`)
-- [ ] 6a.7 RED: full pre-existing axi test suite green after PR6a (old `from_id`/`to_id`/`kind` columns still exist and are maintained by PR5's dual-write, so this PR reverts cleanly)
+- [x] 6a.1 RED: `test_store.py` — every `store.py` read site that joins/selects via `from_id`/`to_id`/`e.kind` (store.py ~1281, 1321, 1382-1416, 2973-2978, plus any sites 5.1-5.12 did not already touch) is rewritten to `src_uuid`/`dst_uuid`/`e.relation` and returns identical results to the pre-rewrite version on a seeded fixture DB
+- [x] 6a.2 RED: `test_forget.py` — `forget.py:211-212` read sites rewritten to `src_uuid`/`dst_uuid`/`relation`, identical results on the seeded fixture
+- [x] 6a.3 RED: `test_recall.py` — `recall.py:271-273` read sites rewritten, identical results
+- [x] 6a.4 RED: `test_linkers.py` — `linkers.py:44-64` read sites rewritten, identical results
+- [x] 6a.5 RED: `test_identity.py` — `identity.py:392,453,501,555-557,596,628,690` read sites rewritten (endpoint-rewrite site 354-355 already dual-writes since PR5; this task is the READ side), identical results
+- [x] 6a.6 GREEN: implement 6a.1-6a.5 (PR6a — `store.py`, `forget.py`, `recall.py`, `linkers.py`, `identity.py`)
+- [x] 6a.7 RED: full pre-existing axi test suite green after PR6a (old `from_id`/`to_id`/`kind` columns still exist and are maintained by PR5's dual-write, so this PR reverts cleanly)
+- [x] 6a.8 (coordinator correction, added post-apply) RED+GREEN: `verify_edge_endpoint_convergence()` names the offending edge in its failure message. Both raise branches interpolated raw sqlite Row objects, so a real production failure read `[<sqlcipher3.dbapi2.Row object at 0x7f...>]` — no edge id, no uuid, no indication of which side was NULL. The guard fired but said nothing, which sends you to a debugger against a database you may not be able to reproduce. Failing loudly is only half the contract; the shout has to be actionable. Two tests assert the message contains `id=<edge id>` and never the substring `Row object`
 - [ ] 6b.1 RED: `test_dashboard.py` — `dashboard.py:2252-2263,2526-2538,2719-2733,2951-2980` read sites rewritten to `src_uuid`/`dst_uuid`/`relation`, identical results on the seeded fixture
 - [ ] 6b.2 GREEN: implement 6b.1 (PR6b — `dashboard.py` only, isolated because it alone was estimated to push PR6 over 400 lines)
 - [ ] 6b.3 RED: full pre-existing axi test suite green after PR6b

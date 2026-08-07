@@ -369,3 +369,200 @@ def test_extract_structured_domain_facts_still_skipped(monkeypatch):
     assert saved == 0
     c = store._connect()
     assert c.execute("SELECT 1 FROM nodes WHERE kind='fact'").fetchone() is None
+
+
+# ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
+#
+# Every read site listed in task 6a.5 is a "does this edge already exist?"
+# guard or an endpoint resolution. Each test below desyncs the OLD integer
+# endpoint from the NEW uuid endpoint on an already-stored edge, so the
+# function's answer names which column it actually followed. A guard still
+# reading `from_id` fails to recognise an edge it wrote itself and inserts a
+# duplicate on every pass.
+
+def _desynced_edge(from_id: int, to_id: int, kind: str, decoy: int) -> int:
+    """Store a real `from_id -> to_id` edge, then point its integer source at
+    *decoy* while leaving `src_uuid` naming the real source."""
+    from axi import store
+
+    eid = store.add_edge(from_id, to_id, kind)
+    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+    return eid
+
+
+def _edge_count() -> int:
+    from axi import store
+
+    return store._connect().execute("SELECT COUNT(*) FROM edges").fetchone()[0]
+
+
+def test_add_relation_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:408 — the hub--relation-->entity duplicate guard."""
+    from axi import store  # noqa: F401
+
+    hub = identity.ensure_user_hub()
+    ent = identity.ensure_entity("Ana Ríos", "person")
+    _desynced_edge(hub, ent, "esposa", decoy=ent)
+    before = _edge_count()
+
+    identity.add_relation("esposa", "Ana Ríos", "person")
+
+    assert _edge_count() == before
+
+
+def test_add_entity_relation_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:469 — the entity--relation-->entity duplicate guard."""
+    subj = identity.ensure_entity("hipertensión", "condition")
+    obj = identity.ensure_entity("losartán", "medication")
+    _desynced_edge(subj, obj, "tratada_con", decoy=obj)
+    before = _edge_count()
+
+    identity.add_entity_relation(
+        "hipertensión", "tratada_con", "losartán",
+        subject_kind="condition", object_kind="medication",
+    )
+
+    assert _edge_count() == before
+
+
+def test_link_fact_to_entities_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:517 — the fact--mentions-->entity duplicate guard."""
+    from axi import store
+
+    ent = identity.ensure_entity("losartán", "medication")
+    fact = store.add_node("fact", "toma losartán por la mañana")
+    _desynced_edge(fact, ent, "mentions", decoy=ent)
+    before = _edge_count()
+
+    identity.link_fact_to_entities(fact, "toma losartán por la mañana")
+
+    assert _edge_count() == before
+
+
+def test_link_fact_to_involved_person_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:612 — the fact--involves-->person duplicate guard."""
+    from axi import store
+
+    identity.add_relation("esposa", "Ana Ríos", "person")
+    person = identity.ensure_entity("Ana Ríos", "person")
+    fact = store.add_node("fact", "cumple años en marzo")
+    _desynced_edge(fact, person, "involves", decoy=person)
+    before = _edge_count()
+
+    identity.link_fact_to_involved_person(fact, "esposa")
+
+    assert _edge_count() == before
+
+
+def test_link_fact_to_user_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:644 — the hub--about-->fact duplicate guard."""
+    from axi import store
+
+    hub = identity.ensure_user_hub()
+    fact = store.add_node("fact", "usa CachyOS")
+    _desynced_edge(hub, fact, "about", decoy=fact)
+    before = _edge_count()
+
+    identity.link_fact_to_user(fact)
+
+    assert _edge_count() == before
+
+
+def test_backfill_subject_person_links_dedupe_resolves_through_endpoint_uuids():
+    """identity.py:706 — the repair pass's own duplicate guard. Re-linking an
+    already-linked fact is the one thing this deliberately-run repair must
+    never do."""
+    from axi import store
+
+    identity.add_relation("esposa", "Ana Ríos", "person")
+    person = identity.ensure_entity("Ana Ríos", "person")
+    fact = store.add_node("fact", "cumple años en marzo", {"subject": "esposa"})
+    _desynced_edge(fact, person, "involves", decoy=person)
+
+    assert identity.backfill_subject_person_links() == 0
+
+
+def test_resolve_relation_person_resolves_through_endpoint_uuids():
+    """identity.py:571-577 — resolving "esposa" to the person node walks the
+    hub's outgoing edges, so it must walk them by uuid.
+
+    Here the edge's integer `to_id` is pointed at a decoy person while
+    `dst_uuid` still names Ana. Following `to_id` links the user's fact to the
+    WRONG person — a wrong answer in their own memory, not a missing one.
+    """
+    from axi import store
+
+    hub = identity.ensure_user_hub()
+    ana = identity.ensure_entity("Ana Ríos", "person")
+    decoy = identity.ensure_entity("Dra Tere", "person")
+    eid = store.add_edge(hub, ana, "esposa")
+    c = store._connect()
+    c.execute("UPDATE edges SET to_id=? WHERE id=?", (decoy, eid))
+
+    assert identity._resolve_relation_person("esposa", hub, c) == ana
+
+
+def test_identity_read_sites_identical_to_pre_rewrite_queries(pr6a_graph):
+    """6a.5's "identical results on the seeded fixture": the shared existence
+    guard and the relation resolver, compared against the literal pre-rewrite
+    SQL over a graph containing a self-edge, a duplicate-kind pair, a
+    tombstoned endpoint and a dangling one."""
+    from axi import store
+
+    c = store._connect()
+    # The ghost is excluded on purpose and asserted separately below: it is
+    # the ONE input on which the rewrite genuinely does not agree with the old
+    # query, and hiding that inside a passing loop would be the dishonest way
+    # to report it.
+    ids = [i for k, i in pr6a_graph.items() if k != "ghost"]
+    for a in ids:
+        for b in ids:
+            for kind in ("about", "mentions", "involves", "esposa", "same-day"):
+                old = c.execute(
+                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+                    (a, b, kind),
+                ).fetchone() is not None
+                assert identity._edge_exists(c, a, b, kind) is old, (
+                    f"identity._edge_exists({a}, {b}, {kind!r}) diverged"
+                )
+
+    for hub in ids:
+        old_rows = c.execute(
+            "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
+            "JOIN nodes n ON n.id = e.to_id "
+            "WHERE e.from_id = ? AND n.kind = 'person'",
+            (hub,),
+        ).fetchall()
+        expected = None
+        for r in old_rows:
+            if identity._norm(r["rel"] or "").replace(" ", "_") in \
+                    identity._relation_terms("esposa"):
+                expected = r["to_id"]
+                break
+        assert identity._resolve_relation_person("esposa", hub, c) == expected
+
+
+def test_edge_exists_disagrees_only_for_an_endpoint_id_that_no_longer_exists(pr6a_graph):
+    """The single documented behaviour change of 6a.5, pinned rather than hidden.
+
+    The old guard matched on `to_id`, an integer the edge row still carries
+    after its node row is gone. The new guard has to resolve that id to a
+    `uuid` first, and a deleted node has no uuid to resolve to — so the answer
+    flips from True to False for a dangling endpoint.
+
+    It is unreachable from every caller: all six call sites pass ids they just
+    obtained from `ensure_entity`/`ensure_user_hub`/a node they created, so a
+    caller cannot hold the id of a row that no longer exists. It is asserted
+    here so the difference is a stated property of the rewrite instead of a
+    surprise for whoever writes PR7's tombstone filters on top of it.
+    """
+    from axi import store
+
+    c = store._connect()
+    hub, ghost = pr6a_graph["hub"], pr6a_graph["ghost"]
+
+    assert c.execute(
+        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='about' LIMIT 1",
+        (hub, ghost),
+    ).fetchone() is not None
+    assert identity._edge_exists(c, hub, ghost, "about") is False

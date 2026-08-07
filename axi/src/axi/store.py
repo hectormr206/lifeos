@@ -250,6 +250,16 @@ CREATE INDEX IF NOT EXISTS idx_edges_from ON edges(from_id);
 CREATE INDEX IF NOT EXISTS idx_edges_to   ON edges(to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid);
+-- PR6 (the reader rewrite) moves every edge read off from_id/to_id/kind and
+-- onto src_uuid/dst_uuid/relation. idx_edges_from/to/kind index the columns
+-- the reads just left, so without these three every graph read degrades to a
+-- full table scan — same_day_neighbors is written as a UNION specifically so
+-- SQLite could use idx_edges_from/idx_edges_to, and the rewrite retires both.
+-- Names are mobile's, verbatim (local_graph_schema.dart), so the contract PR
+-- has nothing left to reconcile.
+CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid);
+CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid);
+CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
 
 -- ─────────────────────── conversation history ───────────────────────
 
@@ -1419,18 +1429,29 @@ def get_node(node_id: int) -> sqlite3.Row | None:
 
 
 def neighbors(node_id: int, edge_kind: str | None = None, depth: int = 1) -> list[sqlite3.Row]:
-    """Return nodes connected by outgoing edges; depth=1 for now (V2: recursive CTE)."""
+    """Return nodes connected by outgoing edges; depth=1 for now (V2: recursive CTE).
+
+    Edges are resolved through `src_uuid`/`dst_uuid`, the sync-stable endpoint
+    references mobile uses, not through the local `from_id`/`to_id` rowids
+    (PR6 — design-schema.md Decision 2 step 2). Rowid 42 on the laptop is not
+    rowid 42 on the phone; the uuid is the same on both. The old columns are
+    still written and still authoritative until the contract PR, so this is a
+    behaviour-preserving change on any converged database — and a NULL
+    endpoint uuid, the one state where it would not be, is made impossible by
+    the insert paths and loud by `verify_edge_endpoint_convergence()`.
+    """
     c = _connect()
     if edge_kind:
         rows = c.execute(
-            "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id "
-            "WHERE e.from_id = ? AND e.kind = ?",
+            "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
+            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.relation = ?",
             (node_id, edge_kind),
         )
     else:
         rows = c.execute(
-            "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id "
-            "WHERE e.from_id = ?",
+            "SELECT n.* FROM nodes n JOIN edges e ON e.dst_uuid = n.uuid "
+            "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?)",
             (node_id,),
         )
     return list(rows)
@@ -1440,8 +1461,13 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
     """Return all nodes connected to node_id via a 'same-day' edge in EITHER direction.
 
     Uses a UNION of two direction-specific queries so SQLite can use the
-    dedicated idx_edges_from and idx_edges_to indexes instead of a full
+    dedicated idx_edges_src and idx_edges_dst indexes instead of a full
     OR-scan.  Self (n.id = node_id) is excluded in both arms.
+
+    Endpoints resolve through `src_uuid`/`dst_uuid` (PR6). The two indexes
+    named above replace idx_edges_from/idx_edges_to, which this rewrite
+    retires — without them this query would silently become a full scan,
+    which is the whole reason it was written as a UNION in the first place.
 
     Returns a list of node dicts (id, kind, label, domain, created_at,
     occurred_at).  Returns [] on any error.
@@ -1452,12 +1478,14 @@ def same_day_neighbors(node_id: int, conn=None) -> list[dict[str, Any]]:
             """
             SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
             FROM nodes n
-            JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
+            JOIN edges e ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?)
+                        AND e.dst_uuid = n.uuid AND e.relation = 'same-day'
             WHERE n.id != ?
             UNION
             SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
             FROM nodes n
-            JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
+            JOIN edges e ON e.dst_uuid = (SELECT uuid FROM nodes WHERE id = ?)
+                        AND e.src_uuid = n.uuid AND e.relation = 'same-day'
             WHERE n.id != ?
             """,
             (node_id, node_id, node_id, node_id),
@@ -2823,17 +2851,33 @@ def migrate_edge_endpoint_uuids() -> None:
     if "occurred_at" not in existing_nodes:
         c.execute("ALTER TABLE nodes ADD COLUMN occurred_at REAL")
 
-    # Backfill only edges still missing src_uuid — resumable/idempotent.
+    # Indexes on the columns PR6's rewritten reads join and filter on. Created
+    # here too (not only in _SCHEMA) so a pre-existing DB that reaches the new
+    # readers via ALTER TABLE gets them as well — otherwise every graph read on
+    # the owner's real database becomes a full scan the moment PR6 lands.
+    c.execute("CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation)")
+
+    # Backfill every edge still missing EITHER endpoint uuid — resumable and
+    # idempotent. `src_uuid IS NULL` alone was not enough: before task 5.14 an
+    # edge from an already-uuid'd node to a node created after the last restart
+    # dual-wrote a real src_uuid and a NULL dst_uuid, which that predicate
+    # skipped forever. From PR6 on, such a row is invisible to every read that
+    # resolves through dst_uuid.
     rows = c.execute(
         "SELECT e.id, n1.uuid, n2.uuid, e.created_at "
         "FROM edges e "
         "JOIN nodes n1 ON n1.id = e.from_id "
         "JOIN nodes n2 ON n2.id = e.to_id "
-        "WHERE e.src_uuid IS NULL"
+        "WHERE e.src_uuid IS NULL OR e.dst_uuid IS NULL"
     ).fetchall()
     for edge_id, src_uuid, dst_uuid, created_at in rows:
         c.execute(
-            "UPDATE edges SET src_uuid = ?, dst_uuid = ?, updated_at = ? WHERE id = ?",
+            # COALESCE: a half-backfilled row may already carry a real
+            # updated_at, and this repair must not rewind it to created_at.
+            "UPDATE edges SET src_uuid = ?, dst_uuid = ?, "
+            "updated_at = COALESCE(updated_at, ?) WHERE id = ?",
             (src_uuid, dst_uuid, created_at, edge_id),
         )
 
@@ -2853,6 +2897,19 @@ def verify_edge_endpoint_convergence() -> None:
     real drift. A check that quietly no-ops because its table vanished
     would be indistinguishable from "everything converged".
 
+    RAISES ALSO on a NULL endpoint uuid, even when the node's own uuid is
+    NULL too. That case used to read as "converged", because the equality
+    is NULL IS NOT NULL — false — so the guard was blind to exactly the
+    state it exists to catch. Harmless while nothing read the column; from
+    PR6 (the reader rewrite) on, a NULL endpoint does not match the join
+    and the edge simply vanishes from the result with no error and no log:
+    a link missing from the user's own memory graph, indistinguishable
+    from lost data. Nothing can produce that state any more (`add_node`
+    assigns a uuid at insert, all three edge-insert paths copy it in the
+    same transaction, and `migrate_edge_endpoint_uuids` backfills either
+    endpoint), which is precisely why reaching it must be loud rather than
+    tolerated in the readers.
+
     Available standalone (not just from `migrate_edge_endpoint_uuids`) for
     CI/regression use.
     """
@@ -2865,17 +2922,40 @@ def verify_edge_endpoint_convergence() -> None:
             "JOIN nodes n2 ON n2.id = e.to_id "
             "WHERE e.src_uuid IS NOT n1.uuid OR e.dst_uuid IS NOT n2.uuid"
         ).fetchall()
+        null_endpoints = c.execute(
+            "SELECT id, src_uuid, dst_uuid FROM edges "
+            "WHERE src_uuid IS NULL OR dst_uuid IS NULL"
+        ).fetchall()
     except Exception as exc:  # noqa: BLE001 — deliberately broad: ANY failure
         # to execute the check must raise, not be swallowed.
         raise RuntimeError(
             f"verify_edge_endpoint_convergence: could not execute the "
             f"convergence check (table/column missing mid-migration?): {exc}"
         ) from exc
+    # Rows are formatted by hand rather than interpolated. A sqlite Row's repr
+    # is `<sqlcipher3.dbapi2.Row object at 0x...>`, so the raw f-string made
+    # every one of these failures unactionable: it told you something broke and
+    # nothing about what. A check that fires without naming the offending row
+    # is only half a check.
     if mismatches:
+        detail = "; ".join(
+            f"id={r[0]} src_uuid={r[1]!r} expected={r[2]!r} "
+            f"dst_uuid={r[3]!r} expected={r[4]!r}"
+            for r in mismatches[:5]
+        )
         raise RuntimeError(
             f"verify_edge_endpoint_convergence: {len(mismatches)} edge(s) "
-            f"have drifted src_uuid/dst_uuid from from_id/to_id: "
-            f"{mismatches[:5]}"
+            f"have drifted src_uuid/dst_uuid from from_id/to_id: {detail}"
+        )
+    if null_endpoints:
+        detail = "; ".join(
+            f"id={r[0]} src_uuid={r[1]!r} dst_uuid={r[2]!r}"
+            for r in null_endpoints[:5]
+        )
+        raise RuntimeError(
+            f"verify_edge_endpoint_convergence: {len(null_endpoints)} edge(s) "
+            f"carry a NULL endpoint uuid and are therefore invisible to every "
+            f"read that resolves edges through src_uuid/dst_uuid: {detail}"
         )
 
 
@@ -3129,8 +3209,14 @@ def check_and_create_similar_to_edges(
             continue
         try:
             with _tx() as c:
+                # Resolved through the endpoint uuids (PR6) — the same columns
+                # the INSERT below writes, so the guard recognises an edge it
+                # wrote itself instead of adding a second one on every pass.
                 exists = c.execute(
-                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='similar-to' LIMIT 1",
+                    "SELECT 1 FROM edges WHERE "
+                    "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+                    "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+                    "relation = 'similar-to' LIMIT 1",
                     (node_id, neighbor_id),
                 ).fetchone()
                 if exists is None:

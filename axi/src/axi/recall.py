@@ -266,11 +266,31 @@ def _graph_relation_lines(matched_ids: set, conn, *, max_rel: int = 8) -> list[s
     try:
         ids = list(matched_ids)
         ph = ",".join("?" for _ in ids)
+        # Endpoints resolved through src_uuid/dst_uuid (PR6 — the reader
+        # rewrite). These lines are quoted back to the user as things their
+        # graph asserts, so following the wrong column would state a relation
+        # the graph does not actually hold.
+        #
+        # The selection stays ON THE EDGE COLUMNS (translating the caller's
+        # local ids to uuids in a subquery) rather than moving to `nf.id IN
+        # (…)` after the join. Measured, not assumed: the post-join form plans
+        # as `SCAN e` — a full pass over every edge on the recall hot path —
+        # while this one keeps the pre-rewrite `MULTI-INDEX OR` over
+        # idx_edges_src/idx_edges_dst.
         rows = conn.execute(
-            "SELECT nf.label AS f, e.kind AS k, nt.label AS t "
-            "FROM edges e JOIN nodes nf ON e.from_id = nf.id "
-            "JOIN nodes nt ON e.to_id = nt.id "
-            f"WHERE e.from_id IN ({ph}) OR e.to_id IN ({ph})",
+            "SELECT nf.label AS f, e.relation AS k, nt.label AS t "
+            "FROM edges e JOIN nodes nf ON nf.uuid = e.src_uuid "
+            "JOIN nodes nt ON nt.uuid = e.dst_uuid "
+            f"WHERE e.src_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph})) "
+            f"OR e.dst_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph}))"
+            # ORDER BY is new. This list is truncated at max_rel, so its order
+            # decides WHICH relations the user is shown — and neither this
+            # query nor the pre-rewrite one ever stated one, leaving it to the
+            # planner. The OR-index plan the rewrite produces emits rows in a
+            # different order than the old one did, so the truncation would
+            # have silently started keeping different lines. Pinned to
+            # insertion order, which is the graph as it was built.
+            " ORDER BY e.id",
             ids + ids,
         ).fetchall()
     except Exception:  # noqa: BLE001

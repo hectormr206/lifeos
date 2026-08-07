@@ -497,3 +497,69 @@ def test_full_suite_behavior_unaffected_by_slice_3a_migration():
     node = store.get_node(n1)
     assert node is not None
     assert node["label"] == "Node A"
+
+
+# ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
+
+def test_backfill_repairs_an_edge_missing_only_dst_uuid():
+    """PR5's backfill only touched rows `WHERE src_uuid IS NULL`, so an edge
+    with a written `src_uuid` and a NULL `dst_uuid` was unreachable by it
+    forever.
+
+    That row is reachable in practice: before task 5.14, a node created after
+    the last restart had `uuid IS NULL`, so an edge from an older node to a
+    newer one dual-wrote a real `src_uuid` and a NULL `dst_uuid`. The next
+    start backfilled the node's uuid but skipped the edge — and from PR6a on,
+    that edge is invisible to every read that resolves through `dst_uuid`.
+
+    The backfill must therefore converge on EITHER endpoint being NULL.
+    """
+    c = store._connect()
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    eid = store.add_edge(src, dst, "owns")
+    c.execute("UPDATE edges SET dst_uuid=NULL WHERE id=?", (eid,))
+
+    store.migrate_edge_endpoint_uuids()
+
+    row = c.execute("SELECT src_uuid, dst_uuid FROM edges WHERE id=?", (eid,)).fetchone()
+    dst_uuid = c.execute("SELECT uuid FROM nodes WHERE id=?", (dst,)).fetchone()[0]
+    assert row["dst_uuid"] == dst_uuid
+
+
+def test_endpoint_uuid_indexes_exist_for_mobile_parity():
+    """The rewritten reads join on `src_uuid`/`dst_uuid` and filter on
+    `relation`. Without indexes on those columns every graph read becomes a
+    full table scan — `same_day_neighbors` in particular is a UNION written
+    specifically so SQLite could use `idx_edges_from`/`idx_edges_to`, and the
+    rewrite retires both.
+
+    The three index names are mobile's, verbatim
+    (`mobile/lib/core/graph/local_graph_schema.dart`), so the contract PR has
+    nothing left to reconcile here.
+    """
+    c = store._connect()
+    names = {r[1] for r in c.execute("PRAGMA index_list(edges)").fetchall()}
+    assert {"idx_edges_src", "idx_edges_dst", "idx_edges_relation"} <= names
+
+
+def test_same_day_neighbors_uses_an_index_not_a_full_scan():
+    """The performance half of the claim above, measured rather than assumed:
+    the query plan must still name an index on the edges table."""
+    c = store._connect()
+    a = store.add_node("fact", "nota A")
+    plan = " ".join(
+        str(tuple(r)) for r in c.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT n.id FROM nodes n JOIN edges e "
+            "ON e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+            "AND e.dst_uuid = n.uuid AND e.relation = 'same-day' "
+            "WHERE n.id != ?",
+            (a, a),
+        ).fetchall()
+    )
+    # Which of the three the planner picks depends on table statistics; the
+    # claim under test is that it has one to pick at all and does not fall
+    # back to scanning the whole edges table.
+    assert "SEARCH e USING INDEX idx_edges_" in plan, plan
+    assert "SCAN e" not in plan, plan

@@ -19,14 +19,23 @@ import pytest
 
 
 def _insert_node(conn, kind="fact", label="test", domain="health", ts=None, data=None) -> int:
+    """Insert a node through the production writer, then move its timestamps.
+
+    This used to be a raw INSERT that omitted `uuid`. Nothing read that column,
+    so the fixture got away with building a row shape production cannot
+    produce (`store.add_node` has assigned a uuid at insert since task 5.14,
+    and it is the only INSERT INTO nodes in the codebase). From PR6a on, an
+    edge is resolved through its endpoints' uuids, so a uuid-less node makes
+    every edge touching it invisible — which is how a fixture that models an
+    impossible state turns into four "idempotency" failures.
+    """
+    import axi.store as _store
+
     now = ts or time.time()
-    cur = conn.execute(
-        "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at) "
-        "VALUES (?, ?, ?, ?, ?, ?)",
-        (kind, label, json.dumps(data or {}), domain, now, now),
-    )
+    nid = _store.add_node(kind=kind, label=label, data=data or {}, domain=domain)
+    conn.execute("UPDATE nodes SET created_at=?, updated_at=? WHERE id=?", (now, now, nid))
     conn.commit()
-    return cur.lastrowid
+    return nid
 
 
 def _insert_meeting(conn, start_time: float, title="Test meeting") -> int:
@@ -641,3 +650,52 @@ def test_safe_insert_edge_dual_writes_src_dst_uuid():
     assert row["src_uuid"] == src_uuid
     assert row["dst_uuid"] == dst_uuid
     assert src_uuid is not None and dst_uuid is not None
+
+
+# ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
+
+def test_edge_exists_guard_resolves_through_endpoint_uuids():
+    """RED for 6a.4: `linkers._edge_exists` is the duplicate guard in front of
+    every auto-linker insert, so it must recognise an edge by the same
+    endpoints the insert wrote — `src_uuid`/`dst_uuid`.
+
+    The stored edge's integer `from_id` is pointed at a decoy while its
+    `src_uuid` still names the real source. A guard reading `from_id` fails to
+    see its own edge and the linker writes a second one on every pass, so the
+    graph grows a duplicate per run.
+    """
+    from axi import linkers, store
+
+    src = store.add_node("fact", "nota A")
+    dst = store.add_node("fact", "nota B")
+    decoy = store.add_node("fact", "señuelo")
+    eid = store.add_edge(src, dst, "same-day")
+    c = store._connect()
+    c.execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+
+    assert linkers._edge_exists(c, src, dst, "same-day") is True
+    assert linkers._safe_insert_edge(c, src, dst, "same-day") is False
+    assert c.execute("SELECT COUNT(*) FROM edges").fetchone()[0] == 1
+
+
+def test_edge_exists_identical_to_pre_rewrite_query(pr6a_graph):
+    """6a.4's "identical results" on the seeded fixture: every ordered pair
+    and kind, compared against the literal pre-rewrite guard."""
+    from axi import linkers, store
+
+    c = store._connect()
+    # The ghost endpoint is excluded and pinned separately in
+    # test_identity.py::test_edge_exists_disagrees_only_for_an_endpoint_id_that_no_longer_exists
+    # — it is the one input where the rewrite deliberately does not agree.
+    ids = [i for k, i in pr6a_graph.items() if k != "ghost"]
+    for a in ids:
+        for b in ids:
+            for kind in ("about", "mentions", "involves", "esposa", "same-day"):
+                old = c.execute(
+                    "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+                    (a, b, kind),
+                ).fetchone() is not None
+                assert linkers._edge_exists(c, a, b, kind) is old, (
+                    f"_edge_exists({a}, {b}, {kind!r}) diverged from the "
+                    f"pre-rewrite guard"
+                )

@@ -17,13 +17,16 @@ import pytest
 # ---------------------------------------------------------------------------
 
 def _insert_node(conn, label: str, *, occurred_at: float | None = None) -> int:
-    """Insert a minimal node and return its id."""
-    now = time.time()
-    cur = conn.execute(
-        "INSERT INTO nodes(kind, label, domain, created_at, updated_at) VALUES (?,?,?,?,?)",
-        ("fact", label, "health", now, now),
-    )
-    node_id = cur.lastrowid
+    """Insert a minimal node through the production writer and return its id.
+
+    Goes through `store.add_node` rather than a raw INSERT so the row carries
+    a `uuid`: from PR6a on, edges resolve through their endpoints' uuids, and a
+    uuid-less node is invisible to every edge read. See the same note in
+    test_linkers.py.
+    """
+    from axi import store as _store
+
+    node_id = _store.add_node(kind="fact", label=label, domain="health")
     if occurred_at is not None:
         conn.execute("UPDATE nodes SET occurred_at=? WHERE id=?", (occurred_at, node_id))
     conn.commit()
@@ -197,12 +200,16 @@ def test_semantic_search_nodes_passes_timeout_to_embed_text(monkeypatch):
 # ---------------------------------------------------------------------------
 
 def _insert_same_day_edge(conn, from_id: int, to_id: int) -> None:
-    """Insert a same-day edge between two nodes for test setup."""
-    import time as _time
-    conn.execute(
-        "INSERT INTO edges(from_id, to_id, kind, data, created_at) VALUES (?,?,?,?,?)",
-        (from_id, to_id, "same-day", "{}", _time.time()),
-    )
+    """Insert a same-day edge between two nodes through the production writer.
+
+    Goes through `store.add_edge` rather than a raw INSERT so the row carries
+    `src_uuid`/`dst_uuid`. Every production edge-insert path dual-writes them,
+    and from PR6a on the readers resolve edges through those columns — a raw
+    INSERT that omits them produces an edge no read can see.
+    """
+    from axi import store as _store
+
+    _store.add_edge(from_id, to_id, "same-day")
     conn.commit()
 
 

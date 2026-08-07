@@ -42,9 +42,18 @@ MAX_SAME_DAY_PAIRS_PER_DAY: int = 50
 
 
 def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
-    """Return True if an edge of *kind* from *from_id* to *to_id* already exists."""
+    """Return True if an edge of *kind* from *from_id* to *to_id* already exists.
+
+    Resolved through `src_uuid`/`dst_uuid` (PR6 — the reader rewrite), the same
+    columns `_safe_insert_edge` writes below. This is the duplicate guard in
+    front of every auto-linker insert: read the wrong column and the linker
+    stops recognising its own edges and appends a fresh copy on every pass.
+    """
     row = conn.execute(
-        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
+        "SELECT 1 FROM edges WHERE "
+        "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "relation = ? LIMIT 1",
         (from_id, to_id, kind),
     ).fetchone()
     return row is not None

@@ -511,3 +511,226 @@ def test_new_thread_can_query_vec_nodes():
     assert not errors, (
         f"New thread could not query vec_nodes (sqlite-vec not loaded per thread): {errors}"
     )
+
+
+# ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
+#
+# Every test below pins ONE of the two claims PR6a makes:
+#
+#   1. the read now resolves an edge through its sync-stable endpoint uuids,
+#      not through the local integer rowids (proven by desyncing the two and
+#      showing which one the reader follows), and
+#   2. on a clean graph it returns EXACTLY what the pre-rewrite SQL returned
+#      (proven against the literal old query kept here as an oracle, not by
+#      the weaker "the suite still passes").
+
+_OLD_NEIGHBORS_KIND_SQL = (
+    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id "
+    "WHERE e.from_id = ? AND e.kind = ?"
+)
+_OLD_NEIGHBORS_ANY_SQL = (
+    "SELECT n.* FROM nodes n JOIN edges e ON e.to_id = n.id WHERE e.from_id = ?"
+)
+_OLD_SAME_DAY_SQL = """
+    SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
+    FROM nodes n
+    JOIN edges e ON e.from_id = ? AND e.to_id = n.id AND e.kind = 'same-day'
+    WHERE n.id != ?
+    UNION
+    SELECT n.id, n.kind, n.label, n.domain, n.data, n.created_at, n.occurred_at
+    FROM nodes n
+    JOIN edges e ON e.to_id = ? AND e.from_id = n.id AND e.kind = 'same-day'
+    WHERE n.id != ?
+"""
+
+
+def _rows(cursor) -> list[dict]:
+    """Order-insensitive comparable form — a uuid join may pick a different
+    query plan than a rowid join, and row ORDER was never part of the
+    contract; row CONTENT and multiplicity are."""
+    return sorted((dict(r) for r in cursor), key=lambda d: sorted(d.items(), key=str))
+
+
+def test_neighbors_resolves_edges_through_src_uuid_not_from_id():
+    """RED for 6a.1: `neighbors` must follow the endpoint uuids.
+
+    The edge's old integer `from_id` is pointed at a decoy node while its
+    `src_uuid` still names the real source. A reader on `from_id` answers
+    "decoy"; a reader on `src_uuid` answers "source". Only one of those is
+    the shape mobile syncs against, so only one can pass.
+    """
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    decoy = store.add_node("person", "no es el origen")
+    eid = store.add_edge(src, dst, "owns")
+    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+
+    assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [dst]
+    assert store.neighbors(decoy, edge_kind="owns") == []
+
+
+def test_neighbors_resolves_destination_through_dst_uuid_not_to_id():
+    """RED for 6a.1: the destination side of the same claim."""
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    decoy = store.add_node("fact", "no es el destino")
+    eid = store.add_edge(src, dst, "owns")
+    store._connect().execute("UPDATE edges SET to_id=? WHERE id=?", (decoy, eid))
+
+    assert [r["id"] for r in store.neighbors(src, edge_kind="owns")] == [dst]
+
+
+def test_neighbors_identical_to_pre_rewrite_query_on_pr6a_graph(pr6a_graph):
+    """6a.1's "identical results on a seeded fixture DB", taken literally:
+    the pre-rewrite SQL is executed here as the oracle and compared row for
+    row, including the self-edge, the duplicate-kind pair and the dangling
+    endpoint."""
+    c = store._connect()
+    for node_id in pr6a_graph.values():
+        for kind in ("about", "mentions", "involves", "esposa", "same-day"):
+            assert _rows(store.neighbors(node_id, edge_kind=kind)) == _rows(
+                c.execute(_OLD_NEIGHBORS_KIND_SQL, (node_id, kind))
+            ), f"neighbors({node_id}, {kind!r}) diverged from the pre-rewrite query"
+        assert _rows(store.neighbors(node_id)) == _rows(
+            c.execute(_OLD_NEIGHBORS_ANY_SQL, (node_id,))
+        ), f"neighbors({node_id}) diverged from the pre-rewrite query"
+
+
+def test_same_day_neighbors_resolves_through_endpoint_uuids():
+    """RED for 6a.1: `same_day_neighbors` reads BOTH directions, so both
+    arms of its UNION have to move to the uuid endpoints."""
+    a = store.add_node("fact", "nota A")
+    b = store.add_node("fact", "nota B")
+    decoy = store.add_node("fact", "señuelo")
+    eid = store.add_edge(a, b, "same-day")
+    store._connect().execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+
+    assert [n["id"] for n in store.same_day_neighbors(a)] == [b]
+    assert [n["id"] for n in store.same_day_neighbors(b)] == [a]
+    assert store.same_day_neighbors(decoy) == []
+
+
+def test_same_day_neighbors_identical_to_pre_rewrite_query(pr6a_graph):
+    c = store._connect()
+    for node_id in pr6a_graph.values():
+        old = _rows(c.execute(_OLD_SAME_DAY_SQL, (node_id,) * 4))
+        assert _rows(store.same_day_neighbors(node_id)) == old, (
+            f"same_day_neighbors({node_id}) diverged from the pre-rewrite query"
+        )
+
+
+def test_similar_to_dedupe_resolves_through_endpoint_uuids():
+    """RED for 6a.1: the `similar-to` duplicate guard (store.py:3133) is a
+    read, so it moves too. If it kept matching on `from_id` it would fail to
+    recognise an edge it had already written and insert a second one."""
+    dim = 512
+    now = time.time()
+    vec = [1.0] + [0.0] * (dim - 1)
+    blob = struct.pack(f"{dim}f", *vec)
+
+    c = store._connect()
+    for nid, label in ((101, "node A"), (102, "node B"), (103, "decoy")):
+        c.execute(
+            "INSERT INTO nodes(id, kind, label, data, domain, created_at, "
+            "updated_at, embedding, embedding_model, embedding_dim, uuid) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (nid, "fact", label, "{}", "test", now, now, blob, "test-model",
+             dim, f"uuid-{nid}"),
+        )
+        c.execute(
+            "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
+            (nid, blob),
+        )
+    # An already-written similar-to edge whose integer endpoint drifted.
+    c.execute(
+        "INSERT INTO edges(from_id, to_id, kind, data, created_at, "
+        "src_uuid, dst_uuid, updated_at) "
+        "VALUES (103, 102, 'similar-to', '{}', ?, 'uuid-101', 'uuid-102', ?)",
+        (now, now),
+    )
+
+    def mock_knn_with_distance(conn, *, vector, k=10):
+        return [(102, 0.0)]
+
+    with patch("axi.store.knn_nodes_with_distance", side_effect=mock_knn_with_distance):
+        created = store.check_and_create_similar_to_edges(101, c, threshold=0.85)
+
+    assert created == 0, "the dedupe guard did not recognise the existing edge"
+    assert c.execute(
+        "SELECT COUNT(*) FROM edges WHERE kind='similar-to'"
+    ).fetchone()[0] == 1
+
+
+def test_edge_with_null_endpoint_uuid_is_detected_loudly_not_silently_dropped():
+    """The central hazard of PR6a, pinned so it cannot regress silently.
+
+    Before the rewrite, reads joined `from_id`/`to_id`: NOT NULL integers.
+    After it, they join `src_uuid`/`dst_uuid`: nullable TEXT. An edge whose
+    endpoint uuid is NULL does not match the join — it disappears from the
+    result with no error and no log, which is a link missing from the user's
+    own memory graph.
+
+    Of the two available answers this PR takes (a): NULL endpoints are
+    impossible by construction — `add_node` assigns a uuid at insert (task
+    5.14), all three edge-insert paths copy it inside the same transaction,
+    and `init_db()` backfills both tables on every start — and the residual
+    case is made LOUD instead of tolerated. Tolerating it in the read (option
+    b) would hide exactly the defect the guard exists to surface.
+
+    So both halves are asserted together: the read genuinely does drop the
+    row (stated, not hidden), and therefore the convergence guard MUST raise
+    on that same database. Weaken the guard and this test fails.
+    """
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    store.add_edge(src, dst, "owns")
+
+    c = store._connect()
+    # The only reachable route to this state is a node that never got a uuid,
+    # so it is reproduced rather than assumed away.
+    c.execute("UPDATE edges SET src_uuid=NULL WHERE from_id=?", (src,))
+    c.execute("UPDATE nodes SET uuid=NULL WHERE id=?", (src,))
+
+    assert store.neighbors(src, edge_kind="owns") == []  # the silent failure…
+
+    with pytest.raises(RuntimeError, match="NULL"):
+        store.verify_edge_endpoint_convergence()        # …made loud
+
+
+def test_convergence_failure_names_the_broken_edge_not_a_row_repr():
+    """Failing loudly is only half of it — the shout has to say what broke.
+
+    The guard interpolated raw sqlite Row objects, so a real production
+    failure read `[<sqlcipher3.dbapi2.Row object at 0x7f...>]`: no edge id, no
+    uuid, no indication of which side was NULL. That is a check that fires and
+    tells you nothing, which in practice sends you to a debugger against a
+    database you may not be able to reproduce.
+    """
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    eid = store.add_edge(src, dst, "owns")
+    store._connect().execute("UPDATE edges SET dst_uuid=NULL WHERE id=?", (eid,))
+
+    with pytest.raises(RuntimeError) as excinfo:
+        store.verify_edge_endpoint_convergence()
+
+    message = str(excinfo.value)
+    assert "Row object" not in message, "the diagnostic leaked a repr instead of values"
+    assert f"id={eid}" in message, "the failure does not name the offending edge"
+
+
+def test_drift_failure_also_names_the_edge():
+    """Same contract for the drift branch, which shares the defect."""
+    src = store.add_node("person", "Héctor")
+    dst = store.add_node("fact", "usa CachyOS")
+    eid = store.add_edge(src, dst, "owns")
+    store._connect().execute(
+        "UPDATE edges SET dst_uuid='not-the-node-uuid' WHERE id=?", (eid,)
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        store.verify_edge_endpoint_convergence()
+
+    message = str(excinfo.value)
+    assert "Row object" not in message
+    assert f"id={eid}" in message

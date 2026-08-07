@@ -22,6 +22,28 @@ log = logging.getLogger("axi.identity")
 _DEFAULT_HUB_LABEL = "Yo"
 
 
+def _edge_exists(conn, from_id: int, to_id: int, kind: str) -> bool:
+    """Return True if an edge of *kind* from *from_id* to *to_id* already exists.
+
+    Every ``add_*``/``link_*`` helper below is idempotent by asking this first,
+    and each used to carry its own copy of the same SQL. PR6 (the reader
+    rewrite) moves them onto `src_uuid`/`dst_uuid`/`relation` — the sync-stable
+    endpoint references mobile uses — so the six copies became one: six chances
+    to miss a site during a wide mechanical rewrite is exactly the risk the
+    design flags as PR6's main one.
+
+    Missing an edge that exists means writing a duplicate on every pass, not
+    just a wrong read.
+    """
+    return conn.execute(
+        "SELECT 1 FROM edges WHERE "
+        "src_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "dst_uuid = (SELECT uuid FROM nodes WHERE id = ?) AND "
+        "relation = ? LIMIT 1",
+        (from_id, to_id, kind),
+    ).fetchone() is not None
+
+
 def user_name() -> str:
     """The configured display name, or '' when not set yet (fresh install)."""
     return (config.get("user_name", "") or "").strip()
@@ -404,11 +426,7 @@ def add_relation(relation: str, entity_name: str, kind: str = "person", conn=Non
         if not hub or not ent or hub == ent:
             return
         c = conn or store._connect()  # noqa: SLF001
-        exists = c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
-            (hub, ent, relation),
-        ).fetchone()
-        if not exists:
+        if not _edge_exists(c, hub, ent, relation):
             store.add_edge(hub, ent, relation)
     except Exception as e:  # noqa: BLE001
         log.debug("add_relation failed: %s", e)
@@ -465,11 +483,7 @@ def add_entity_relation(
         if not subj_id or not obj_id or subj_id == obj_id:
             return
         c = conn or store._connect()  # noqa: SLF001
-        exists = c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind=? LIMIT 1",
-            (subj_id, obj_id, relation),
-        ).fetchone()
-        if not exists:
+        if not _edge_exists(c, subj_id, obj_id, relation):
             store.add_edge(subj_id, obj_id, relation)
     except Exception as e:  # noqa: BLE001
         log.debug("add_entity_relation failed: %s", e)
@@ -513,11 +527,7 @@ def link_fact_to_entities(fact_id: int, text: str, conn=None) -> None:
                 if len(nm) <= 2:
                     continue
                 if re.search(r"\b" + re.escape(nm) + r"\b", text, re.IGNORECASE):
-                    exists = c.execute(
-                        "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='mentions' LIMIT 1",
-                        (fact_id, r["id"]),
-                    ).fetchone()
-                    if not exists:
+                    if not _edge_exists(c, fact_id, r["id"], "mentions"):
                         store.add_edge(fact_id, r["id"], "mentions")
                     break  # one 'mentions' edge per entity is enough
     except Exception as e:  # noqa: BLE001
@@ -568,9 +578,14 @@ def _resolve_relation_person(relation: str, hub: int, conn) -> int | None:
     """
     terms = _relation_terms(relation)
     for r in conn.execute(
-        "SELECT e.kind AS rel, e.to_id AS to_id FROM edges e "
-        "JOIN nodes n ON n.id = e.to_id "
-        "WHERE e.from_id = ? AND n.kind = 'person'",
+        # Endpoints resolved through src_uuid/dst_uuid (PR6 — the reader
+        # rewrite). This resolves "esposa" to an actual person node, so
+        # following the wrong column links the user's fact to the WRONG
+        # person: a wrong answer in their own memory, not a missing one.
+        "SELECT e.relation AS rel, n.id AS to_id FROM edges e "
+        "JOIN nodes n ON n.uuid = e.dst_uuid "
+        "WHERE e.src_uuid = (SELECT uuid FROM nodes WHERE id = ?) "
+        "AND n.kind = 'person'",
         (hub,),
     ).fetchall():
         if _norm(r["rel"] or "").replace(" ", "_") in terms:
@@ -608,11 +623,7 @@ def link_fact_to_involved_person(fact_id: int, relation: str, conn=None) -> None
                 "data-only (queryable via node data)", relation,
             )
             return
-        exists = c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='involves' LIMIT 1",
-            (fact_id, person_id),
-        ).fetchone()
-        if not exists:
+        if not _edge_exists(c, fact_id, person_id, "involves"):
             store.add_edge(fact_id, person_id, "involves")
     except Exception as e:  # noqa: BLE001
         log.debug("link_fact_to_involved_person failed: %s", e)
@@ -640,11 +651,7 @@ def link_fact_to_user(fact_id: int, conn=None) -> None:
         if not hub or hub == fact_id:
             return
         c = conn or store._connect()  # noqa: SLF001
-        exists = c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='about' LIMIT 1",
-            (hub, fact_id),
-        ).fetchone()
-        if not exists:
+        if not _edge_exists(c, hub, fact_id, "about"):
             store.add_edge(hub, fact_id, "about")
     except Exception as e:  # noqa: BLE001
         log.debug("link_fact_to_user failed: %s", e)
@@ -702,11 +709,7 @@ def backfill_subject_person_links(*, limit: int | None = None, dry_run: bool = F
         person_id = _resolve_relation_person(subject.strip(), hub, c)
         if person_id is None or person_id == fact_id:
             continue
-        exists = c.execute(
-            "SELECT 1 FROM edges WHERE from_id=? AND to_id=? AND kind='involves' LIMIT 1",
-            (fact_id, person_id),
-        ).fetchone()
-        if exists:
+        if _edge_exists(c, fact_id, person_id, "involves"):
             continue
         linked += 1
         if not dry_run:

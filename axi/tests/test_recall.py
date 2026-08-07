@@ -586,3 +586,145 @@ def test_graph_relation_lines_formats_dedups_and_skips_structural():
 def test_graph_relation_lines_empty_when_no_matches():
     from axi.recall import _graph_relation_lines
     assert _graph_relation_lines(set(), None) == []
+
+
+# ─────────── PR6a: reader rewrite to src_uuid/dst_uuid/relation ───────────
+
+_OLD_GRAPH_RELATION_SQL = (
+    "SELECT nf.label AS f, e.kind AS k, nt.label AS t "
+    "FROM edges e JOIN nodes nf ON e.from_id = nf.id "
+    "JOIN nodes nt ON e.to_id = nt.id "
+    "WHERE e.from_id IN ({ph}) OR e.to_id IN ({ph})"
+)
+
+
+def _old_graph_relation_lines(conn, matched_ids, *, max_rel: int = 8) -> list[str]:
+    """The pre-rewrite implementation of `recall._graph_relation_lines`, kept
+    verbatim as the equivalence oracle for 6a.3."""
+    from axi import recall
+
+    ids = list(matched_ids)
+    if not ids:
+        return []
+    ph = ",".join("?" for _ in ids)
+    rows = conn.execute(
+        _OLD_GRAPH_RELATION_SQL.format(ph=ph), ids + ids
+    ).fetchall()
+    seen: set[str] = set()
+    out: list[str] = []
+    for r in rows:
+        k = (r["k"] or "").strip()
+        if not k or k in recall._STRUCTURAL_EDGE_KINDS:
+            continue
+        f = (r["f"] or "").strip()
+        t = (r["t"] or "").strip()
+        if not f or not t:
+            continue
+        line = f"{f} {k.replace('_', ' ')} {t}"
+        if line in seen:
+            continue
+        seen.add(line)
+        out.append(line)
+        if len(out) >= max_rel:
+            break
+    return out
+
+
+def test_graph_relation_lines_resolves_through_endpoint_uuids():
+    """RED for 6a.3: the recall block quotes graph relations back to the user
+    ("hipertensión diagnosticada por Dra. López"), so both endpoint labels
+    must come from the sync-stable uuid endpoints.
+
+    The integer `from_id` is pointed at a decoy while `src_uuid` still names
+    the real source. Following the wrong column puts a sentence in the user's
+    recall context that their graph does not actually assert.
+    """
+    from axi import recall, store
+
+    src = store.add_node("condition", "hipertensión")
+    dst = store.add_node("person", "Dra. López")
+    decoy = store.add_node("person", "Dra Tere")
+    eid = store.add_edge(src, dst, "diagnosticada_por")
+    c = store._connect()
+    c.execute("UPDATE edges SET from_id=? WHERE id=?", (decoy, eid))
+
+    lines = recall._graph_relation_lines({src}, c)
+    assert lines == ["hipertensión diagnosticada por Dra. López"]
+    assert recall._graph_relation_lines({decoy}, c) == []
+
+
+def test_graph_relation_lines_identical_to_pre_rewrite_query(pr6a_graph):
+    """6a.3's "identical results" on the seeded fixture, against the oracle.
+
+    Compared as SETS, deliberately. Neither the old query nor the new one ever
+    declared an ORDER BY, so row order was whatever the planner produced, and
+    the rewrite's OR-index plan produces a different one — which matters,
+    because the list is truncated at `max_rel` before the user sees it. The
+    production query now pins `ORDER BY e.id`; the pre-rewrite oracle has no
+    stable order to compare against, so equality of CONTENT is the honest
+    assertion here and the ordering claim is made by
+    `test_graph_relation_lines_are_returned_in_insertion_order` instead.
+    """
+    from axi import recall, store
+
+    c = store._connect()
+    ids = list(pr6a_graph.values())
+    for subset in ([ids[0]], ids[:3], ids):
+        assert sorted(recall._graph_relation_lines(set(subset), c)) == \
+            sorted(_old_graph_relation_lines(c, set(subset))), (
+                f"_graph_relation_lines diverged for {subset}"
+            )
+
+
+def test_graph_relation_lines_are_returned_in_insertion_order(pr6a_graph):
+    """The ordering half of the claim above: the truncated list is stable and
+    follows the order the edges were created in, rather than the query plan."""
+    from axi import recall, store
+
+    c = store._connect()
+    ids = set(pr6a_graph.values())
+    lines = recall._graph_relation_lines(ids, c)
+    # Built straight from the edge table in id order, independent of both the
+    # production query and the oracle.
+    expected = []
+    for r in c.execute(
+        "SELECT nf.label AS f, e.relation AS k, nt.label AS t FROM edges e "
+        "JOIN nodes nf ON nf.uuid = e.src_uuid JOIN nodes nt ON nt.uuid = e.dst_uuid "
+        "ORDER BY e.id"
+    ).fetchall():
+        k = (r["k"] or "").strip()
+        if not k or k in recall._STRUCTURAL_EDGE_KINDS:
+            continue
+        line = f"{r['f']} {k.replace('_', ' ')} {r['t']}"
+        if line not in expected:
+            expected.append(line)
+    assert lines == expected[:8]
+
+
+def test_graph_relation_lines_still_uses_an_edge_index(pr6a_graph):
+    """The rewrite must not turn the recall hot path into a full table scan.
+
+    Written after measuring: resolving the endpoints by joining first and
+    filtering on `nf.id`/`nt.id` afterwards plans as `SCAN e`, a full pass
+    over every edge in the graph on every recall. Selecting on the edge
+    columns themselves keeps the pre-rewrite `MULTI-INDEX OR` over
+    idx_edges_src/idx_edges_dst.
+    """
+    from axi import store
+
+    c = store._connect()
+    ids = list(pr6a_graph.values())[:2]
+    ph = ",".join("?" for _ in ids)
+    plan = " ".join(
+        str(tuple(r)) for r in c.execute(
+            "EXPLAIN QUERY PLAN "
+            "SELECT nf.label AS f, e.relation AS k, nt.label AS t "
+            "FROM edges e JOIN nodes nf ON nf.uuid = e.src_uuid "
+            "JOIN nodes nt ON nt.uuid = e.dst_uuid "
+            f"WHERE e.src_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph})) "
+            f"OR e.dst_uuid IN (SELECT uuid FROM nodes WHERE id IN ({ph}))",
+            ids + ids,
+        ).fetchall()
+    )
+    assert "SCAN e" not in plan, plan
+    assert "idx_edges_src" in plan and "idx_edges_dst" in plan, plan

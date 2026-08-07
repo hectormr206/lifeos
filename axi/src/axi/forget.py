@@ -202,14 +202,18 @@ def _find(target: str, limit: int, conn) -> list[dict]:
             where = []
             params: list[str] = []
             for w in words:
-                where.append("(LOWER(nf.label) LIKE ? OR LOWER(nt.label) LIKE ? OR LOWER(e.kind) LIKE ?)")
+                where.append("(LOWER(nf.label) LIKE ? OR LOWER(nt.label) LIKE ? OR LOWER(e.relation) LIKE ?)")
                 like = f"%{w}%"
                 params.extend([like, like, like])
+            # Endpoints resolved through src_uuid/dst_uuid (PR6 — the reader
+            # rewrite). This lane puts BOTH endpoint labels in front of the
+            # user as a deletion candidate, so reading the wrong column would
+            # describe the deletion with the wrong endpoint.
             sql = (
-                "SELECT e.id AS eid, e.kind AS k, nf.label AS f, nt.label AS t "
+                "SELECT e.id AS eid, e.relation AS k, nf.label AS f, nt.label AS t "
                 "FROM edges e "
-                "JOIN nodes nf ON e.from_id = nf.id "
-                "JOIN nodes nt ON e.to_id = nt.id "
+                "JOIN nodes nf ON nf.uuid = e.src_uuid "
+                "JOIN nodes nt ON nt.uuid = e.dst_uuid "
                 f"WHERE ({' OR '.join(where)}) "
                 "LIMIT ?"
             )

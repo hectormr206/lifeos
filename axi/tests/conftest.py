@@ -455,3 +455,61 @@ def fresh_db(tmp_path, monkeypatch):
     # (monkeypatch restores CONFIG_PATH; the next read reloads from the real file).
     from axi import config as _config
     _config._cache = None
+
+
+@pytest.fixture
+def pr6a_graph():
+    """A small graph carrying the shapes a uuid-join rewrite can get wrong.
+
+    PR6a rewrites every edge read from the integer `from_id`/`to_id` join to
+    the sync-stable `src_uuid`/`dst_uuid` join. That is claimed to be a
+    behaviour-preserving refactor, so the equivalence tests need a fixture
+    that actually exercises the cases where join cardinality or NULL handling
+    could change the answer:
+
+      * a self-edge (both endpoints the same node),
+      * two edges of the SAME kind between the same pair (duplicate rows must
+        stay duplicated — a uuid join must not collapse them),
+      * two edges of DIFFERENT kinds between the same pair,
+      * a node with no edges at all,
+      * an edge whose endpoint node carries a `deleted_at` tombstone (PR6a
+        does NOT filter tombstones — that is PR7 — so it must still read),
+      * a dangling edge whose endpoint node row is gone entirely (legal in
+        mobile's model, where an edge may sync before its node arrives).
+
+    Returns the node ids keyed by role.
+    """
+    import time as _t
+
+    from axi import store as _store
+
+    ids = {
+        "hub": _store.add_node("person", "Héctor", {"role": "user"}),
+        "ana": _store.add_node("person", "Ana Ríos"),
+        "fact_bp": _store.add_node("fact", "hipertensión diagnosticada"),
+        "fact_os": _store.add_node("fact", "usa CachyOS"),
+        "orphan": _store.add_node("fact", "sin relaciones"),
+        "tombstoned": _store.add_node("fact", "nodo con lápida"),
+        "ghost": _store.add_node("fact", "nodo que desaparece"),
+    }
+
+    _store.add_edge(ids["hub"], ids["ana"], "esposa")
+    _store.add_edge(ids["hub"], ids["fact_bp"], "about")
+    _store.add_edge(ids["fact_bp"], ids["ana"], "mentions")
+    _store.add_edge(ids["fact_bp"], ids["ana"], "involves")   # same pair, other kind
+    _store.add_edge(ids["fact_bp"], ids["ana"], "mentions")   # same pair, SAME kind
+    _store.add_edge(ids["fact_os"], ids["fact_os"], "same-day")  # self-edge
+    _store.add_edge(ids["fact_bp"], ids["fact_os"], "same-day")
+    _store.add_edge(ids["hub"], ids["tombstoned"], "about")
+    _store.add_edge(ids["hub"], ids["ghost"], "about")
+
+    c = _store._connect()  # noqa: SLF001
+    c.execute("UPDATE nodes SET deleted_at=? WHERE id=?", (_t.time(), ids["tombstoned"]))
+    # Remove the ghost node's row while keeping its edge. The FK would cascade
+    # the edge away, which is exactly what this case must NOT do, so it is
+    # disabled for this one statement.
+    c.execute("PRAGMA foreign_keys=OFF")
+    c.execute("DELETE FROM nodes WHERE id=?", (ids["ghost"],))
+    c.execute("DELETE FROM nodes_fts WHERE rowid=?", (ids["ghost"],))
+    c.execute("PRAGMA foreign_keys=ON")
+    return ids

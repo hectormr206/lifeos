@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import struct
 import time
+import uuid as _uuid
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -36,11 +37,16 @@ def _insert_node_with_embedding(
     """Insert a node with an embedding into both nodes and vec_nodes tables."""
     now = time.time()
     blob = _float32_blob(vector[:512])
+    # `uuid` is written here because production writes one on every insert
+    # (store.add_node, task 5.14) and PR6a resolves edges through endpoint
+    # uuids — a uuid-less node has no readable edges at all. This helper pins
+    # an explicit `id`, so it cannot go through add_node.
     conn.execute(
         "INSERT INTO nodes(id, kind, label, data, domain, created_at, updated_at, "
-        "embedding, embedding_model, embedding_dim) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (nid, "fact", label, "{}", domain, now, now, blob, "test-model", 512),
+        "embedding, embedding_model, embedding_dim, uuid) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (nid, "fact", label, "{}", domain, now, now, blob, "test-model", 512,
+         str(_uuid.uuid4())),
     )
     conn.execute(
         "INSERT OR REPLACE INTO vec_nodes(node_id, embedding) VALUES (?, ?)",
