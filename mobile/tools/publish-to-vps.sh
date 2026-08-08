@@ -79,7 +79,13 @@ PY
 
 # ── Upload + repoint current.apk on the VPS ─────────────────────────────────
 # shellcheck source=tools/ota-volume.sh
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-volume.sh"
+# $MOBILE_DIR, not $BASH_SOURCE. Line 13 already `cd`-ed into mobile/, and
+# $0 stays the path the caller typed — so `dirname "$BASH_SOURCE"` resolved to
+# a RELATIVE "mobile/tools" against the new working directory and failed with
+# "No such file or directory". The APK built fine and then simply was not
+# published: exit code 0, a green-looking run, and the manifest still serving
+# the previous build. publish-linux-to-vps.sh already uses this absolute form.
+source "$MOBILE_DIR/tools/ota-volume.sh"
 if [[ "$VPS_SSH" == "local" ]] || ota_volume_present; then
   # On the VPS: into the Coolify-managed volume, never a host directory.
   ota_require_volume
