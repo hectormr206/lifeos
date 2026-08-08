@@ -27,6 +27,11 @@ class FakeAppUpdatePreferences implements AppUpdatePreferences {
   String? notifiedDay;
   int recordNotifiedCalls = 0;
 
+  /// Banner snooze, kept as a VERSION + a calendar day (never a bare boolean)
+  /// so "a newer build re-shows it" is expressible at all.
+  int? dismissedCode;
+  String? dismissedDayValue;
+
   @override
   Future<AppUpdateSettings> load() async => _settings;
   @override
@@ -45,6 +50,16 @@ class FakeAppUpdatePreferences implements AppUpdatePreferences {
     recordNotifiedCalls++;
     notifiedCode = versionCode;
     notifiedDay = day;
+  }
+
+  @override
+  Future<int?> dismissedBannerVersionCode() async => dismissedCode;
+  @override
+  Future<String?> dismissedBannerDay() async => dismissedDayValue;
+  @override
+  Future<void> recordBannerDismissed(int versionCode, String day) async {
+    dismissedCode = versionCode;
+    dismissedDayValue = day;
   }
 }
 

@@ -15,6 +15,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/desktop_update_trigger.dart';
+import 'package:lifeos/features/app_update/domain/desktop_update_watcher.dart';
+import 'package:lifeos/features/app_update/domain/installed_release.dart';
+import 'package:lifeos/features/app_update/domain/update_initiator.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_notifier.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
@@ -28,6 +31,23 @@ class _RecordingTrigger implements DesktopUpdateTrigger {
     calls++;
     if (throws != null) throw throws!;
   }
+
+  @override
+  Future<bool> isRequestPending() async => false;
+}
+
+/// The outcome watcher, stubbed. These tests are about the REQUEST half of the
+/// flow (which platform takes which route); what the app then observes on disk
+/// has its own suite in app_update_desktop_outcome_test.dart.
+class _StubWatcher implements DesktopUpdateWatcher {
+  @override
+  Future<DesktopUpdateOutcome> awaitOutcome(InstalledRelease? baseline) async =>
+      DesktopUpdateOutcome.notApplied(baseline);
+}
+
+class _NoInstallReader implements InstalledReleaseReader {
+  @override
+  Future<InstalledRelease?> read() async => null;
 }
 
 const _manifest = AppManifest(
@@ -44,6 +64,11 @@ ProviderContainer _container(String os, _RecordingTrigger trigger) {
   final container = ProviderContainer(overrides: [
     hostOperatingSystemProvider.overrideWithValue(os),
     desktopUpdateTriggerProvider.overrideWithValue(trigger),
+    // Never let a unit test poll the developer's real /opt/lifeos, or wait out
+    // a five-minute wall-clock timeout doing it.
+    desktopUpdateWatcherProvider.overrideWithValue(_StubWatcher()),
+    installedReleaseReaderProvider.overrideWithValue(_NoInstallReader()),
+    appRestarterProvider.overrideWithValue(null),
     appUpdateInitialStatusProvider
         .overrideWithValue(const UpdateAvailable(manifest: _manifest)),
   ]);
@@ -57,7 +82,7 @@ void main() {
     final trigger = _RecordingTrigger();
     final container = _container('linux', trigger);
 
-    await container.read(appUpdateNotifierProvider.notifier).startUpdate();
+    await container.read(appUpdateNotifierProvider.notifier).startUpdate(initiator: UpdateInitiator.user);
 
     expect(trigger.calls, 1);
     final state = container.read(appUpdateNotifierProvider);
@@ -73,7 +98,7 @@ void main() {
     final trigger = _RecordingTrigger();
     final container = _container('linux', trigger);
 
-    await container.read(appUpdateNotifierProvider.notifier).startUpdate();
+    await container.read(appUpdateNotifierProvider.notifier).startUpdate(initiator: UpdateInitiator.user);
 
     expect(container.read(appUpdateNotifierProvider).desktopUpdateRequested,
         isTrue);
@@ -86,7 +111,7 @@ void main() {
           'El actualizador del sistema no está instalado.');
     final container = _container('linux', trigger);
 
-    await container.read(appUpdateNotifierProvider.notifier).startUpdate();
+    await container.read(appUpdateNotifierProvider.notifier).startUpdate(initiator: UpdateInitiator.user);
 
     final state = container.read(appUpdateNotifierProvider);
     expect(state.error, contains('actualizador'));
@@ -99,7 +124,7 @@ void main() {
     final trigger = _RecordingTrigger();
     final container = _container('android', trigger);
 
-    await container.read(appUpdateNotifierProvider.notifier).startUpdate();
+    await container.read(appUpdateNotifierProvider.notifier).startUpdate(initiator: UpdateInitiator.user);
 
     expect(trigger.calls, 0);
   });

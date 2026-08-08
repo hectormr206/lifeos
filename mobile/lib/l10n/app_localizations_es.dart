@@ -189,6 +189,39 @@ class AppLocalizationsEs extends AppLocalizations {
   String get updatesNavSubtitle => 'Buscar e instalar nuevas versiones';
 
   @override
+  String get updateBannerDismissTooltip => 'Recordármelo mañana';
+
+  @override
+  String get desktopUpdateWaiting =>
+      'Instalando la actualización… puede tardar unos minutos.';
+
+  @override
+  String desktopUpdateApplied(String version) {
+    return 'LifeOS $version se instaló correctamente.';
+  }
+
+  @override
+  String get desktopUpdateAppliedUnnamed =>
+      'La actualización se instaló correctamente.';
+
+  @override
+  String get desktopUpdateRestarting =>
+      'Reiniciando LifeOS con la nueva versión…';
+
+  @override
+  String get desktopUpdateNotWatched =>
+      'El actualizador del sistema no respondió: la solicitud sigue pendiente y nadie la recogió. Reinstala con install-linux.sh para habilitar las actualizaciones automáticas.';
+
+  @override
+  String desktopUpdateNotConfirmed(String version) {
+    return 'No pude confirmar que la actualización se aplicara. Sigues en la versión $version. Vuelve a intentarlo, o ejecuta install-linux.sh desde una terminal para ver por qué falló.';
+  }
+
+  @override
+  String get desktopUpdateNotConfirmedUnnamed =>
+      'No pude confirmar que la actualización se aplicara. Vuelve a intentarlo, o ejecuta install-linux.sh desde una terminal para ver por qué falló.';
+
+  @override
   String get notificationsNavTitle => 'Notificaciones';
 
   @override

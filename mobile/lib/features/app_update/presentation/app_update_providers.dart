@@ -1,12 +1,18 @@
 import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
+import '../../../core/tray/tray_platform.dart' show runningUnderFlutterTest;
 import '../data/apk_download_service.dart';
 import '../data/app_update_service.dart';
 import '../domain/apk_installer.dart';
+import '../domain/app_restarter.dart';
 import '../domain/desktop_update_trigger.dart';
+import '../domain/desktop_update_watcher.dart';
 import '../domain/app_update_preferences.dart';
 import '../domain/app_version_info.dart';
+import '../domain/installed_release.dart';
 import '../domain/update_notifications.dart';
 import '../domain/update_source_config.dart';
 import '../domain/update_status.dart';
@@ -51,6 +57,47 @@ final apkDownloadServiceProvider = Provider<ApkDownloadService>((ref) {
 /// (the APK installer path applies instead). Faked in tests.
 final desktopUpdateTriggerProvider =
     Provider<DesktopUpdateTrigger>((ref) => const SystemdPathUpdateTrigger());
+
+/// What is really installed in `/opt/lifeos` right now. Read BEFORE a desktop
+/// update is requested and polled after, so the app reports what happened
+/// instead of what it asked for. Faked in tests.
+final installedReleaseReaderProvider = Provider<InstalledReleaseReader>(
+    (ref) => const OptLifeosInstalledReleaseReader());
+
+/// Watches for the outcome of a requested desktop update.
+///
+/// Built from the two ports above rather than overridden wholesale in
+/// production; tests override this one provider to return a scripted outcome
+/// without a disk, a systemd or a five-minute wait.
+final desktopUpdateWatcherProvider = Provider<DesktopUpdateWatcher>(
+  (ref) => PollingDesktopUpdateWatcher(
+    reader: ref.watch(installedReleaseReaderProvider),
+    trigger: ref.watch(desktopUpdateTriggerProvider),
+  ),
+);
+
+/// Relaunches LifeOS into the version that was just installed, or `null` where
+/// that is not a thing this platform allows.
+///
+/// Null on the phones (the OS owns app lifecycle there — killing our own
+/// process would be a crash, not a restart) and null under `flutter test`,
+/// which runs on a real Linux box: without that guard a suite that exercised
+/// the applied-update path would spawn `/opt/lifeos/current/bundle/lifeos` on
+/// the machine running the tests and then call `exit(0)` on the test runner.
+/// A test that wants the behaviour injects a fake, exactly as the tray and
+/// login-autostart ports do.
+final appRestarterProvider = Provider<AppRestarter?>((ref) {
+  if (!isDesktopPlatform(ref.watch(hostOperatingSystemProvider))) return null;
+  if (runningUnderFlutterTest()) return null;
+  return const DetachedProcessAppRestarter();
+});
+
+/// How long the "Reiniciando LifeOS…" state stays on screen before the process
+/// really goes. Not cosmetic padding: without it the window vanishes with no
+/// explanation, which reads as a crash rather than as the restart the user
+/// asked for. Overridden to zero in tests.
+final desktopRestartGraceProvider =
+    Provider<Duration>((ref) => const Duration(milliseconds: 900));
 
 /// Test seam: an initial [UpdateStatus] the notifier starts from (default
 /// null → `UpdateUnknown`). Lets widget tests render a specific state (e.g.

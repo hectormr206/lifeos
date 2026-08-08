@@ -62,6 +62,20 @@ abstract class AppUpdatePreferences {
 
   /// Record that we just notified about [versionCode] on [day].
   Future<void> recordNotified(int versionCode, String day);
+
+  /// versionCode of the update whose in-app banner the user last closed (or
+  /// null).
+  ///
+  /// Stored as a VERSION, never as a bare boolean: dismissing 0.9.21 is not
+  /// consent to never hear about 0.9.22, and a boolean could not express that.
+  Future<int?> dismissedBannerVersionCode();
+
+  /// Calendar day (`yyyy-mm-dd`) the banner was last closed (or null). The
+  /// reminder returns on the next day while the update is still not installed.
+  Future<String?> dismissedBannerDay();
+
+  /// Record that the user closed the banner for [versionCode] on [day].
+  Future<void> recordBannerDismissed(int versionCode, String day);
 }
 
 /// [AppUpdatePreferences] backed by `shared_preferences`.
@@ -73,6 +87,8 @@ class SharedPrefsAppUpdatePreferences implements AppUpdatePreferences {
   static const String autoDownloadKey = 'app_update_auto_download';
   static const String lastNotifiedCodeKey = 'app_update_last_notified_code';
   static const String lastNotifiedDayKey = 'app_update_last_notified_day';
+  static const String dismissedBannerCodeKey = 'app_update_banner_dismissed_code';
+  static const String dismissedBannerDayKey = 'app_update_banner_dismissed_day';
 
   SharedPreferences? _prefs;
 
@@ -109,5 +125,20 @@ class SharedPrefsAppUpdatePreferences implements AppUpdatePreferences {
     final p = await _instance;
     await p.setInt(lastNotifiedCodeKey, versionCode);
     await p.setString(lastNotifiedDayKey, day);
+  }
+
+  @override
+  Future<int?> dismissedBannerVersionCode() async =>
+      (await _instance).getInt(dismissedBannerCodeKey);
+
+  @override
+  Future<String?> dismissedBannerDay() async =>
+      (await _instance).getString(dismissedBannerDayKey);
+
+  @override
+  Future<void> recordBannerDismissed(int versionCode, String day) async {
+    final p = await _instance;
+    await p.setInt(dismissedBannerCodeKey, versionCode);
+    await p.setString(dismissedBannerDayKey, day);
   }
 }

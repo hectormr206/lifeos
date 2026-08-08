@@ -440,6 +440,54 @@ abstract class AppLocalizations {
   /// **'Check for and install new versions'**
   String get updatesNavSubtitle;
 
+  /// Close button on the in-app update reminder. Dismissing is a snooze until the next calendar day, not a mute, and the label says so.
+  ///
+  /// In en, this message translates to:
+  /// **'Remind me tomorrow'**
+  String get updateBannerDismissTooltip;
+
+  /// Shown while the app polls /opt/lifeos to find out whether the root updater actually installed the new release.
+  ///
+  /// In en, this message translates to:
+  /// **'Installing the update… this can take a few minutes.'**
+  String get desktopUpdateWaiting;
+
+  /// Only ever shown after the installed version really changed on disk.
+  ///
+  /// In en, this message translates to:
+  /// **'LifeOS {version} installed successfully.'**
+  String desktopUpdateApplied(String version);
+
+  /// Same confirmation when only the version code could be read (the manifest was unreadable and the release symlink carries no name).
+  ///
+  /// In en, this message translates to:
+  /// **'The update was installed successfully.'**
+  String get desktopUpdateAppliedUnnamed;
+
+  /// Brief visible state before the process relaunches, so the window disappearing reads as a restart rather than a crash.
+  ///
+  /// In en, this message translates to:
+  /// **'Restarting LifeOS with the new version…'**
+  String get desktopUpdateRestarting;
+
+  /// The trigger file was never consumed, so the lifeos-updater systemd units are not installed or not running.
+  ///
+  /// In en, this message translates to:
+  /// **'The system updater did not respond: the update request is still pending and nothing picked it up. Reinstall with install-linux.sh to enable automatic updates.'**
+  String get desktopUpdateNotWatched;
+
+  /// The honest timeout message. The app runs unprivileged and cannot read the root journal, so the reason is deliberately not claimed.
+  ///
+  /// In en, this message translates to:
+  /// **'I could not confirm that the update was applied. You are still on version {version}. Try again, or run install-linux.sh from a terminal to see why it failed.'**
+  String desktopUpdateNotConfirmed(String version);
+
+  /// Same as desktopUpdateNotConfirmed when the installed version could not be read at all.
+  ///
+  /// In en, this message translates to:
+  /// **'I could not confirm that the update was applied. Try again, or run install-linux.sh from a terminal to see why it failed.'**
+  String get desktopUpdateNotConfirmedUnnamed;
+
   /// No description provided for @notificationsNavTitle.
   ///
   /// In en, this message translates to:

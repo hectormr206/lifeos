@@ -3,6 +3,8 @@ import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:timezone/data/latest.dart' as tzdata;
 import 'package:timezone/timezone.dart' as tz;
 
+import '../platform/app_platform.dart' show currentOperatingSystem;
+
 /// Single owner of the app's [FlutterLocalNotificationsPlugin].
 ///
 /// `FlutterLocalNotificationsPlugin` is a process-wide singleton and its
@@ -17,16 +19,103 @@ import 'package:timezone/timezone.dart' as tz;
 /// registry of per-payload handlers. Every feature registers its handler +
 /// shows its notifications through here, so the handlers coexist and neither
 /// clobbers the other.
+/// EVERY PLATFORM THE APP SHIPS ON IS INITIALIZED HERE, and that sentence is a
+/// bug fix, not a description.
+///
+/// `initialize()` used to be handed `InitializationSettings(android: …)` and
+/// nothing else. `flutter_local_notifications` initializes exactly the
+/// platforms it is given, so on Linux nothing was configured at all: `show()`
+/// posted nothing, the failure was swallowed by the catch-all below, and the
+/// desktop was silently notification-less while the Pixel notified normally.
+/// The user found it the way these things are always found — his laptop said
+/// nothing about an update his phone had already told him about.
+///
+/// LINUX TAP HANDLING, precisely. The Linux backend delivers a click on the
+/// bubble as the notification server's DEFAULT ACTION, which arrives at
+/// `onDidReceiveNotificationResponse` carrying our payload — so [dispatch] and
+/// the deep link to the updates screen work there exactly as on Android. What
+/// does NOT exist on Linux is `getNotificationAppLaunchDetails`: the platform
+/// implementation does not override it, so [launchedByTap] is always null and a
+/// notification can never cold-start the app into a route. That gap is covered
+/// by the in-app banner, which is why the banner is not Android-only either.
 class AppNotifications {
-  AppNotifications([FlutterLocalNotificationsPlugin? plugin])
-      : _plugin = plugin ?? FlutterLocalNotificationsPlugin();
+  AppNotifications([FlutterLocalNotificationsPlugin? plugin, String? operatingSystem])
+      : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
+        _operatingSystem = operatingSystem ?? currentOperatingSystem();
 
   /// Process-wide default used by the production feature notifiers so they all
   /// share ONE plugin, ONE `initialize`, and ONE tap-handler registry.
   static final AppNotifications instance = AppNotifications();
 
   final FlutterLocalNotificationsPlugin _plugin;
+  final String _operatingSystem;
   bool _initialized = false;
+
+  /// The label the desktop notification server shows for "clicking the
+  /// notification". Most servers never display it; it must simply exist, or
+  /// the default action is not registered and a click delivers nothing.
+  static const String linuxDefaultActionName = 'Abrir LifeOS';
+
+  /// The init settings for [operatingSystem].
+  ///
+  /// Pure and exposed so the platform coverage is provable in CI, where there
+  /// is no notification daemon and no Android runtime to ask.
+  @visibleForTesting
+  static InitializationSettings initializationSettingsFor(String operatingSystem) {
+    switch (operatingSystem) {
+      case 'linux':
+        return const InitializationSettings(
+          linux: LinuxInitializationSettings(
+            defaultActionName: linuxDefaultActionName,
+          ),
+        );
+      default:
+        // Android today. iOS/macOS/Windows land here too and are simply not
+        // initialized — the app has no runner for them yet, and a wrong
+        // settings object would be a claim we cannot back.
+        return const InitializationSettings(
+          android: AndroidInitializationSettings('@mipmap/ic_launcher'),
+        );
+    }
+  }
+
+  /// The per-notification details for [operatingSystem].
+  ///
+  /// Android's channel trio has no Linux equivalent — the desktop has no
+  /// channels — so the INTENT (be noticed, do not be filed away silently) is
+  /// carried by `Importance.high`/`Priority.high` on one side and
+  /// `LinuxNotificationUrgency.normal` on the other. No `category` is set: the
+  /// freedesktop category list has no entry for "your app has an update", and
+  /// tagging it `device` or `transfer` to fill the field in would mislead
+  /// notification servers that filter on it.
+  @visibleForTesting
+  static NotificationDetails detailsFor({
+    required String operatingSystem,
+    required String channelId,
+    required String channelName,
+    required String channelDescription,
+  }) {
+    switch (operatingSystem) {
+      case 'linux':
+        return const NotificationDetails(
+          linux: LinuxNotificationDetails(
+            urgency: LinuxNotificationUrgency.normal,
+          ),
+        );
+      default:
+        return NotificationDetails(
+          android: AndroidNotificationDetails(
+            channelId,
+            channelName,
+            channelDescription: channelDescription,
+            // HIGH importance + priority so Android shows a floating heads-up
+            // (slide-down) notification, not just a status-bar icon.
+            importance: Importance.high,
+            priority: Priority.high,
+          ),
+        );
+    }
+  }
 
   /// payload → tap handler. One entry per notification kind
   /// (`'app_update'`, `'morning_briefing'`, …).
@@ -34,9 +123,7 @@ class AppNotifications {
 
   Future<void> _ensureInitialized() async {
     if (_initialized) return;
-    const settings = InitializationSettings(
-      android: AndroidInitializationSettings('@mipmap/ic_launcher'),
-    );
+    final settings = initializationSettingsFor(_operatingSystem);
     await _plugin.initialize(
       settings: settings,
       onDidReceiveNotificationResponse: (response) => dispatch(response.payload),
@@ -95,16 +182,11 @@ class AppNotifications {
   }) async {
     try {
       await _ensureInitialized();
-      final details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          channelId,
-          channelName,
-          channelDescription: channelDescription,
-          // HIGH importance + priority so Android shows a floating heads-up
-          // (slide-down) notification, not just a status-bar icon.
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
+      final details = detailsFor(
+        operatingSystem: _operatingSystem,
+        channelId: channelId,
+        channelName: channelName,
+        channelDescription: channelDescription,
       );
       await _plugin.show(
         id: id,
@@ -183,14 +265,11 @@ class AppNotifications {
       if (!repeatDailyAtTime && !when.isAfter(tz.TZDateTime.now(zone))) {
         return;
       }
-      final details = NotificationDetails(
-        android: AndroidNotificationDetails(
-          channelId,
-          channelName,
-          channelDescription: channelDescription,
-          importance: Importance.high,
-          priority: Priority.high,
-        ),
+      final details = detailsFor(
+        operatingSystem: _operatingSystem,
+        channelId: channelId,
+        channelName: channelName,
+        channelDescription: channelDescription,
       );
       await _plugin.zonedSchedule(
         id: id,

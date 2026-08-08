@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../domain/update_initiator.dart';
 import '../domain/update_status.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../../l10n/app_localizations.dart';
 import 'app_update_notifier.dart';
 
 /// "Actualizaciones de la app" screen (route `/settings/updates`, self-hosted
@@ -167,7 +169,8 @@ class _UpdateActions extends StatelessWidget {
         // Idle: a single button runs the whole flow (download → auto-install).
         if (!downloading && !ready && !state.installHintNeeded)
           FilledButton.icon(
-            onPressed: notifier.startUpdate,
+            onPressed: () =>
+                notifier.startUpdate(initiator: UpdateInitiator.user),
             icon: const Icon(Icons.system_update),
             label: const Text('Actualizar ahora'),
           ),
@@ -182,39 +185,87 @@ class _UpdateActions extends StatelessWidget {
     );
   }
 
-  /// Desktop: one button that asks the system updater to run, and an honest
-  /// account of what happened afterwards. The app cannot report progress —
-  /// the updater is a different process, running as root, and it replaces the
-  /// release this very app is executing from.
+  /// Desktop: one button that asks the system updater to run, and an HONEST
+  /// account of what happened afterwards.
+  ///
+  /// This used to print "Actualización solicitada… se aplica la próxima vez que
+  /// abras LifeOS" the instant the trigger file existed, and printed it
+  /// identically on the runs where the update really failed. Now every line
+  /// below corresponds to something the app actually observed on disk — see
+  /// `DesktopUpdateWatcher`, which explains what is observable and what is not.
   Widget _desktopActions(BuildContext context) {
-    if (state.desktopUpdateRequested) {
-      return Row(
-        children: [
-          Icon(Icons.check_circle, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 8),
-          const Expanded(
-            child: Text(
-              'Actualización solicitada. El sistema la instala en segundo '
-              'plano; se aplica la próxima vez que abras LifeOS.',
-            ),
+    final l10n = AppLocalizations.of(context);
+    final scheme = Theme.of(context).colorScheme;
+    final version = state.desktopUpdateVersionName;
+
+    switch (state.desktopUpdatePhase) {
+      case DesktopUpdatePhase.waiting:
+        return _statusRow(
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
           ),
+          l10n.desktopUpdateWaiting,
+        );
+      case DesktopUpdatePhase.applied:
+        return _statusRow(
+          Icon(Icons.check_circle, color: scheme.primary),
+          (version == null || version.isEmpty)
+              ? l10n.desktopUpdateAppliedUnnamed
+              : l10n.desktopUpdateApplied(version),
+        );
+      case DesktopUpdatePhase.restarting:
+        return _statusRow(
+          const SizedBox(
+            width: 20,
+            height: 20,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+          l10n.desktopUpdateRestarting,
+        );
+      case DesktopUpdatePhase.notWatched:
+        return _statusRow(
+          Icon(Icons.error_outline, color: scheme.error),
+          l10n.desktopUpdateNotWatched,
+          color: scheme.error,
+        );
+      case DesktopUpdatePhase.notApplied:
+        return _statusRow(
+          Icon(Icons.warning_amber, color: scheme.error),
+          (version == null || version.isEmpty)
+              ? l10n.desktopUpdateNotConfirmedUnnamed
+              : l10n.desktopUpdateNotConfirmed(version),
+          color: scheme.error,
+        );
+      case DesktopUpdatePhase.idle:
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            FilledButton.icon(
+              // Explicitly user-initiated: this is the one path allowed to
+              // relaunch the app into the new version once it is confirmed.
+              onPressed: () =>
+                  notifier.startUpdate(initiator: UpdateInitiator.user),
+              icon: const Icon(Icons.system_update),
+              label: const Text('Actualizar ahora'),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'LifeOS también se actualiza solo cada hora, sin abrir la terminal.',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        );
+    }
+  }
+
+  Widget _statusRow(Widget leading, String message, {Color? color}) => Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          leading,
+          const SizedBox(width: 8),
+          Expanded(child: Text(message, style: TextStyle(color: color))),
         ],
       );
-    }
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [
-        FilledButton.icon(
-          onPressed: notifier.startUpdate,
-          icon: const Icon(Icons.system_update),
-          label: const Text('Actualizar ahora'),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'LifeOS también se actualiza solo cada hora, sin abrir la terminal.',
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-      ],
-    );
-  }
 }

@@ -18,6 +18,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
+import 'package:lifeos/features/app_update/domain/update_initiator.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_notifier.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
@@ -109,7 +110,7 @@ void main() {
     final h = _harness();
     final notifier = h.container.read(appUpdateNotifierProvider.notifier);
 
-    await notifier.startUpdate(); // download in flight, install pending
+    await notifier.startUpdate(initiator: UpdateInitiator.user); // download in flight, install pending
     expect(h.installer.installCalls, 0);
 
     h.download.emitComplete();

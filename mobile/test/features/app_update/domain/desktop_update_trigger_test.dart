@@ -73,6 +73,22 @@ void main() {
     }
   });
 
+  test('a request still sitting there is reported as pending', () async {
+    // The `.path` unit DELETES this file when it fires. So "still here" is the
+    // app's only observable proof that nothing is watching at all — a
+    // different failure from "the update ran and failed", with a different fix.
+    final trigger =
+        SystemdPathUpdateTrigger(triggerPath: '${temp.path}/update-requested');
+
+    expect(await trigger.isRequestPending(), isFalse);
+    await trigger.requestUpdate();
+    expect(await trigger.isRequestPending(), isTrue);
+
+    File('${temp.path}/update-requested').deleteSync();
+    expect(await trigger.isRequestPending(), isFalse,
+        reason: 'consumed by the unit — something IS watching');
+  });
+
   test('the default path is the one the installed unit actually watches',
       () {
     // Contract shared with tools/systemd/lifeos-updater.path. If either side

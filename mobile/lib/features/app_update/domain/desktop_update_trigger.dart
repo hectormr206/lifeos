@@ -43,6 +43,16 @@ abstract class DesktopUpdateTrigger {
   /// once the update has finished; the updater runs as a separate root process
   /// and will restart the app's release out from under this one.
   Future<void> requestUpdate();
+
+  /// Whether a previously made request is STILL sitting there unconsumed.
+  ///
+  /// `lifeos-updater.path` deletes the file when it fires, so this is the app's
+  /// only unprivileged proof that something is — or is not — listening. Still
+  /// pending seconds after the request means the units are not installed or not
+  /// running, which is a different failure with a different fix than "the
+  /// update ran and failed". `DesktopUpdateWatcher` uses it to tell those two
+  /// apart instead of reporting one generic timeout for both.
+  Future<bool> isRequestPending();
 }
 
 /// The real trigger: creates the file `lifeos-updater.path` watches.
@@ -57,6 +67,18 @@ class SystemdPathUpdateTrigger implements DesktopUpdateTrigger {
       '/var/lib/lifeos/trigger/update-requested';
 
   final String _triggerPath;
+
+  @override
+  Future<bool> isRequestPending() async {
+    try {
+      return await File(_triggerPath).exists();
+    } catch (_) {
+      // Cannot tell. Answering "pending" would accuse systemd of not watching
+      // on no evidence, so the uncertain answer is the quiet one and the
+      // watcher's timeout still reports honestly.
+      return false;
+    }
+  }
 
   @override
   Future<void> requestUpdate() async {

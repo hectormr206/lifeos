@@ -3,17 +3,54 @@ import 'dart:io';
 
 import 'package:background_downloader/background_downloader.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:timezone/timezone.dart' as tz;
 
 import '../data/apk_download_service.dart';
+import '../../../core/clock/clock.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../../core/timezone/timezone_providers.dart';
 import '../domain/apk_installer.dart';
+import '../domain/app_restarter.dart';
 import '../domain/desktop_update_trigger.dart';
+import '../domain/desktop_update_watcher.dart';
 import '../domain/app_manifest.dart';
 import '../domain/app_update_preferences.dart';
+import '../domain/installed_release.dart';
+import '../domain/update_banner_policy.dart';
+import '../domain/update_initiator.dart';
 import '../domain/update_notification_policy.dart';
 import '../domain/update_status.dart';
 import 'app_update_providers.dart';
+
+/// Where a requested DESKTOP update currently stands, as far as the app can
+/// actually prove.
+///
+/// This enum replaces a single `desktopUpdateRequested` boolean whose only
+/// possible reading was "we asked" but which the screen rendered as
+/// "instalada". The states below are the ones the app can observe; there is
+/// deliberately no state for "failed because X", since the reason lives in the
+/// root journal and is out of reach.
+enum DesktopUpdatePhase {
+  /// Nothing asked for (or the request itself failed loudly).
+  idle,
+
+  /// Asked, and now WATCHING /opt/lifeos for the version to change.
+  waiting,
+
+  /// The installed versionCode really went up. Confirmed, not assumed.
+  applied,
+
+  /// Confirmed, user-initiated, and the app is about to relaunch into it.
+  restarting,
+
+  /// The trigger file was never consumed — nothing is watching it.
+  notWatched,
+
+  /// The wait ran out with the installed version unchanged. What went wrong is
+  /// NOT known and is not guessed at.
+  notApplied,
+}
 
 /// UI state for the app-update feature (self-hosted OTA update).
 class AppUpdateUiState {
@@ -28,7 +65,9 @@ class AppUpdateUiState {
     this.downloadedApkKey,
     this.installHintNeeded = false,
     this.installPending = false,
-    this.desktopUpdateRequested = false,
+    this.desktopUpdatePhase = DesktopUpdatePhase.idle,
+    this.desktopUpdateVersionName,
+    this.updateBannerVisible = true,
     this.error,
   });
 
@@ -66,11 +105,23 @@ class AppUpdateUiState {
   /// can auto-continue the install without a second manual tap.
   final bool installPending;
 
-  /// The desktop updater has been ASKED to run (the systemd trigger file was
-  /// created). Not "the update finished": the updater runs as a separate root
-  /// process and replaces this release out from under the running app, so
-  /// there is nothing further this process can honestly report.
-  final bool desktopUpdateRequested;
+  /// Where the requested desktop update stands, as OBSERVED — never assumed.
+  final DesktopUpdatePhase desktopUpdatePhase;
+
+  /// The version the phase is about: the one that landed for
+  /// [DesktopUpdatePhase.applied]/[DesktopUpdatePhase.restarting], and the one
+  /// STILL installed for the two failure phases. Naming it is what turns "no
+  /// se pudo confirmar" from a shrug into something the user can act on.
+  final String? desktopUpdateVersionName;
+
+  /// Whether the in-app "nueva versión disponible" reminder may be shown.
+  /// False while the user's dismissal is still in effect for today.
+  final bool updateBannerVisible;
+
+  /// Kept as a derived reading for callers that only care whether the desktop
+  /// update flow has started at all.
+  bool get desktopUpdateRequested =>
+      desktopUpdatePhase != DesktopUpdatePhase.idle;
 
   /// A user-facing error (download/verify/install failure), or null.
   final String? error;
@@ -91,7 +142,9 @@ class AppUpdateUiState {
     bool? installHintNeeded,
     bool? installPending,
     bool clearInstallPending = false,
-    bool? desktopUpdateRequested,
+    DesktopUpdatePhase? desktopUpdatePhase,
+    String? desktopUpdateVersionName,
+    bool? updateBannerVisible,
     String? error,
     bool clearError = false,
   }) =>
@@ -111,7 +164,10 @@ class AppUpdateUiState {
             clearDownloadedApkPath ? null : (downloadedApkKey ?? this.downloadedApkKey),
         installHintNeeded: installHintNeeded ?? this.installHintNeeded,
         installPending: clearInstallPending ? false : (installPending ?? this.installPending),
-        desktopUpdateRequested: desktopUpdateRequested ?? this.desktopUpdateRequested,
+        desktopUpdatePhase: desktopUpdatePhase ?? this.desktopUpdatePhase,
+        desktopUpdateVersionName:
+            desktopUpdateVersionName ?? this.desktopUpdateVersionName,
+        updateBannerVisible: updateBannerVisible ?? this.updateBannerVisible,
         error: clearError ? null : (error ?? this.error),
       );
 }
@@ -129,12 +185,27 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   /// screen — leaving the screen no longer stops or restarts it.
   StreamSubscription<TaskUpdate>? _updatesSub;
 
+  Future<void>? _startup;
+
+  /// Lets tests (and anything needing a settled value) await the initial
+  /// preference load + banner decision deterministically, instead of pumping
+  /// until it happens to be done. Same affordance `LoginAutostartNotifier`
+  /// provides.
+  Future<void> get ready => _startup ?? Future<void>.value();
+
+  /// Set from `onDispose`, which under Riverpod 3 may NOT call `ref.read`.
+  /// The desktop update flow awaits a bounded watcher, so the container can
+  /// legitimately go away mid-wait; every write to `state` after an await
+  /// checks this first.
+  bool _disposed = false;
+
   @override
   AppUpdateUiState build() {
     final seed = ref.read(appUpdateInitialStatusProvider);
-    _hydrate();
+    _startup = _hydrate();
     _listenForDownloadUpdates();
     ref.onDispose(() {
+      _disposed = true;
       _updatesSub?.cancel();
       _updatesSub = null;
     });
@@ -255,6 +326,7 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
       final version = ref.read(appVersionInfoProvider);
       final name = await version.versionName();
       final code = await version.buildNumber();
+      if (_disposed) return;
       state = state.copyWith(
         settings: settings,
         currentVersionName: name,
@@ -263,6 +335,7 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     } catch (_) {
       // No platform channel in a widget test / first launch — keep defaults.
     }
+    await refreshUpdateBannerVisibility();
   }
 
   /// Auto-check entry point used on launch: only runs when the user's
@@ -284,6 +357,10 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   Future<void> onAppResumed() async {
     await _resumeInstallIfPending();
     await maybeAutoCheck();
+    // The reminder is a once-a-day thing, and the app can easily sit in the
+    // tray across midnight. Recomputing here is what makes "al día siguiente"
+    // true for a session that never restarted.
+    await refreshUpdateBannerVisibility();
   }
 
   Future<void> _resumeInstallIfPending() async {
@@ -304,14 +381,18 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
   /// APK with visible progress, then launches the system installer. If the
   /// "install unknown apps" grant is missing it requests it and leaves the flow
   /// pending so [onAppResumed] auto-continues once the user grants it.
-  Future<void> startUpdate() async {
+  ///
+  /// [initiator] is REQUIRED and carries real consequence on the desktop: only
+  /// a user-initiated update may relaunch the app into the new version. See
+  /// [UpdateInitiator].
+  Future<void> startUpdate({required UpdateInitiator initiator}) async {
     final status = state.status;
     if (status is! UpdateAvailable) return;
     // DESKTOP TAKES A DIFFERENT ROUTE ENTIRELY. There is no APK and no package
     // installer; the release is root-owned. Asking systemd is the only path
     // that needs no privilege from the app and no terminal from the user.
     if (isDesktopPlatform(ref.read(hostOperatingSystemProvider))) {
-      await _requestDesktopUpdate();
+      await _requestDesktopUpdate(initiator: initiator);
       return;
     }
     state = state.copyWith(installPending: true, clearError: true);
@@ -329,22 +410,185 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
     await downloadUpdate();
   }
 
-  /// Ask the system updater to run. The app never installs anything itself
-  /// here — it creates one file and systemd, already root, takes over.
-  Future<void> _requestDesktopUpdate() async {
+  /// Ask the system updater to run, then FIND OUT WHETHER IT DID.
+  ///
+  /// The app never installs anything itself here — it creates one file and
+  /// systemd, already root, takes over. What changed is everything after that
+  /// line: the release installed on disk is read BEFORE the request and polled
+  /// after it, so the screen reports an observed outcome instead of restating
+  /// the request as if it were a result.
+  Future<void> _requestDesktopUpdate({required UpdateInitiator initiator}) async {
     state = state.copyWith(clearError: true);
+
+    // Read the baseline BEFORE asking. Without it "the version changed" has
+    // nothing to be measured against, and the watcher correctly refuses to
+    // claim success rather than inventing one.
+    final baseline = await _readInstalledRelease();
+    if (_disposed) return;
+
     try {
       await ref.read(desktopUpdateTriggerProvider).requestUpdate();
-      state = state.copyWith(desktopUpdateRequested: true);
     } on DesktopUpdateUnavailableException catch (e) {
       // Fail loudly: a silent no-op here means the user waits forever for an
-      // update nobody is going to perform.
-      state = state.copyWith(error: e.message, desktopUpdateRequested: false);
+      // update nobody is going to perform. Nothing was requested, so nothing
+      // is watched and the phase stays idle.
+      if (_disposed) return;
+      state = state.copyWith(
+          error: e.message, desktopUpdatePhase: DesktopUpdatePhase.idle);
+      return;
     } catch (_) {
+      if (_disposed) return;
       state = state.copyWith(
         error: 'No se pudo pedir la actualización al sistema.',
-        desktopUpdateRequested: false,
+        desktopUpdatePhase: DesktopUpdatePhase.idle,
       );
+      return;
+    }
+
+    state = state.copyWith(
+      desktopUpdatePhase: DesktopUpdatePhase.waiting,
+      desktopUpdateVersionName: baseline?.versionName,
+    );
+
+    final outcome =
+        await ref.read(desktopUpdateWatcherProvider).awaitOutcome(baseline);
+    if (_disposed) return;
+
+    switch (outcome.kind) {
+      case DesktopUpdateOutcomeKind.applied:
+        state = state.copyWith(
+          desktopUpdatePhase: DesktopUpdatePhase.applied,
+          desktopUpdateVersionName: outcome.release?.versionName,
+        );
+        // ONLY when he pressed the button. A background check that happens to
+        // land an update must never take the window away from someone who is
+        // mid-sentence.
+        if (initiator == UpdateInitiator.user) await _restartIntoNewRelease();
+      case DesktopUpdateOutcomeKind.notWatched:
+        state = state.copyWith(
+          desktopUpdatePhase: DesktopUpdatePhase.notWatched,
+          desktopUpdateVersionName: outcome.release?.versionName,
+        );
+      case DesktopUpdateOutcomeKind.notApplied:
+        state = state.copyWith(
+          desktopUpdatePhase: DesktopUpdatePhase.notApplied,
+          desktopUpdateVersionName: outcome.release?.versionName,
+        );
+    }
+  }
+
+  Future<InstalledRelease?> _readInstalledRelease() async {
+    try {
+      return await ref.read(installedReleaseReaderProvider).read();
+    } catch (_) {
+      // Unknown, and reported as unknown downstream — never as version 0.
+      return null;
+    }
+  }
+
+  /// Relaunch into the version that was just confirmed installed.
+  ///
+  /// He pressed install; applying it is the thing he asked for. The grace
+  /// period is what makes the window disappearing read as a restart rather
+  /// than as a crash.
+  Future<void> _restartIntoNewRelease() async {
+    final restarter = ref.read(appRestarterProvider);
+    // No restarter on this platform (phones, or the test suite) is not a
+    // failure: there is simply nothing to relaunch, and the update itself
+    // already landed.
+    if (restarter == null) return;
+
+    final grace = ref.read(desktopRestartGraceProvider);
+    state = state.copyWith(desktopUpdatePhase: DesktopUpdatePhase.restarting);
+    if (grace > Duration.zero) await Future<void>.delayed(grace);
+    if (_disposed) return;
+    try {
+      await restarter.restart();
+    } on AppRestartException catch (e) {
+      // The UPDATE landed; only the relaunch did not. Say exactly that, and
+      // leave the running app alone.
+      state = state.copyWith(
+        desktopUpdatePhase: DesktopUpdatePhase.applied,
+        error: e.message,
+      );
+    } catch (e) {
+      state = state.copyWith(
+        desktopUpdatePhase: DesktopUpdatePhase.applied,
+        error: 'No se pudo reiniciar LifeOS con la nueva versión: $e',
+      );
+    }
+  }
+
+  /// Close the in-app update reminder for today.
+  ///
+  /// A SNOOZE, not a mute: it is recorded against this specific versionCode and
+  /// this calendar day, so the reminder returns tomorrow while the update is
+  /// still not installed, and a newer build brings it back immediately.
+  Future<void> dismissUpdateBanner() async {
+    final status = state.status;
+    if (status is! UpdateAvailable) return;
+    state = state.copyWith(updateBannerVisible: false);
+    try {
+      await ref
+          .read(appUpdatePreferencesProvider)
+          .recordBannerDismissed(status.versionCode, dayKey(_now()));
+    } catch (_) {
+      // Best-effort persistence; the banner is already hidden for this session
+      // and the worst case is that it reappears on the next launch.
+    }
+  }
+
+  /// Recompute whether the reminder may be on screen.
+  ///
+  /// Called at hydration, after every check, and on resume — that last one is
+  /// what makes the day boundary work for a laptop that stays open past
+  /// midnight in the tray.
+  Future<void> refreshUpdateBannerVisibility() async {
+    final status = state.status;
+    if (status is! UpdateAvailable) return;
+    bool visible;
+    try {
+      final prefs = ref.read(appUpdatePreferencesProvider);
+      visible = shouldShowUpdateBanner(
+        versionCode: status.versionCode,
+        now: _now(),
+        dismissedVersionCode: await prefs.dismissedBannerVersionCode(),
+        dismissedDay: await prefs.dismissedBannerDay(),
+      );
+    } catch (_) {
+      // Preferences unreadable: SHOW it. An update the user never hears about
+      // is the failure that matters; one extra banner is not.
+      visible = true;
+    }
+    if (_disposed) return;
+    state = state.copyWith(updateBannerVisible: visible);
+  }
+
+  /// "Now" for the calendar-day rules, in the user's EFFECTIVE zone.
+  ///
+  /// Never `DateTime.now()` inline: the clock is a seam
+  /// (`core/clock/clock.dart`) and the zone may be a manual override the user
+  /// pinned in Settings, in which case "the next day" has to mean the next day
+  /// where HE is, not where the device thinks it is.
+  ///
+  /// READ, NOT AWAITED, and that is deliberate. `effectiveTimezoneProvider` is
+  /// a FutureProvider crossing a platform channel; awaiting it here would make
+  /// deciding whether to draw a banner depend on a device call that can be slow
+  /// — or, with no binding at all, never complete. Reading the [AsyncValue]
+  /// STARTS that resolution and answers immediately with what is already known.
+  /// AUTOMATIC mode (the default, and the only mode that has ever shipped
+  /// enabled) means device-local either way, so the unresolved case and the
+  /// resolved case agree; a pinned override applies from the next recompute,
+  /// of which there is one on every check and every resume.
+  DateTime _now() {
+    final base = ref.read(clockProvider).now();
+    try {
+      final location =
+          ref.read(effectiveTimezoneProvider).value?.overrideLocation;
+      if (location == null) return base;
+      return tz.TZDateTime.from(base, location);
+    } catch (_) {
+      return base;
     }
   }
 
@@ -375,6 +619,10 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
         // Best effort — the cleared binding is what prevents the stale install.
       }
     }
+
+    // A NEWER build must bring the reminder back even if the previous one was
+    // dismissed — dismissing 0.9.21 was never consent about 0.9.22.
+    await refreshUpdateBannerVisibility();
 
     await _maybeNotify(result);
     if (state.settings.autoDownload) {

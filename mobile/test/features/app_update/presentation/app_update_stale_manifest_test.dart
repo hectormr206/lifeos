@@ -15,6 +15,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/app_update/data/app_update_service.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
+import 'package:lifeos/features/app_update/domain/update_initiator.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_notifier.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
@@ -122,7 +123,7 @@ void main() {
     h.service.result = const UpdateAvailable(manifest: _v13);
     await notifier.check();
 
-    await notifier.startUpdate();
+    await notifier.startUpdate(initiator: UpdateInitiator.user);
 
     expect(h.installer.installCalls, 0,
         reason: 'the stale v12 APK must not reach the installer as "v13"');
@@ -168,7 +169,7 @@ void main() {
   test('a completion that STILL cannot resolve a manifest surfaces an error', () async {
     final h = _harness();
     final notifier = h.container.read(appUpdateNotifierProvider.notifier);
-    await notifier.startUpdate(); // installPending = true
+    await notifier.startUpdate(initiator: UpdateInitiator.user); // installPending = true
 
     h.service.result = const UpdateUnknown();
     await notifier.check();

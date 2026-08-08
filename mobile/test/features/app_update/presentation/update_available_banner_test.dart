@@ -7,6 +7,7 @@ import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
 import 'package:lifeos/features/app_update/presentation/update_available_banner.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../support/fakes.dart';
 
@@ -28,7 +29,11 @@ Future<void> _pump(WidgetTester tester, UpdateStatus initial) async {
         appVersionInfoProvider.overrideWithValue(FakeAppVersionInfo()),
         appUpdatePreferencesProvider.overrideWithValue(FakeAppUpdatePreferences()),
       ],
-      child: const MaterialApp(home: Scaffold(body: UpdateAvailableBanner())),
+      child: const MaterialApp(
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: Scaffold(body: UpdateAvailableBanner()),
+      ),
     ),
   );
   await tester.pumpAndSettle();
