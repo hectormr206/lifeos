@@ -26,10 +26,18 @@ Future<bool> resolveInitialAppLockEnabled(AppLockPreferences prefs) async {
 }
 
 /// [arguments] are the desktop runner's entrypoint arguments (GTK passes them
-/// through `fl_dart_project_set_dart_entrypoint_arguments`; Android and web
-/// simply hand an empty list). They carry `--hidden` when the login autostart
-/// entry started us — see `core/launch/launch_options.dart`.
-Future<void> main(List<String> arguments) async {
+/// through `fl_dart_project_set_dart_entrypoint_arguments`). They carry
+/// `--hidden` when the login autostart entry started us — see
+/// `core/launch/launch_options.dart`.
+///
+/// THE PARAMETER IS OPTIONAL, AND THAT IS NOT STYLE. Android's embedder does
+/// NOT hand the entrypoint an empty list — `FlutterFragmentActivity`'s
+/// `getDartEntrypointArgs()` reads an intent extra that a normal launcher
+/// start never sets, so it returns null and `main` is invoked with NO
+/// arguments. A required positional parameter therefore fails to invoke and
+/// the app dies the instant it opens, on the phone only, while every desktop
+/// build and the entire test suite stay green. It shipped exactly that way.
+Future<void> main([List<String> arguments = const []]) async {
   final launchOptions = LaunchOptions.parse(arguments);
   // Resolve the optional biometric app-lock flag BEFORE the first frame so the
   // gate knows synchronously whether to lock — no splash, and a lock-enabled
