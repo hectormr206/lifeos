@@ -192,6 +192,37 @@ pm_install_cmd() {
   esac
 }
 
+# Install the named packages ourselves, non-interactively. Returns non-zero if
+# the package manager refuses; the caller re-checks the libraries rather than
+# trusting the exit code.
+#
+# WHY THIS EXISTS. This installer already runs as root (systemd's
+# lifeos-updater.service), already detects exactly which libraries are missing,
+# and already knows the package name for every distro it supports. It then
+# printed a command for a human to type. On the real laptop that meant the
+# hourly updater failed on a missing libayatana-appindicator for TWO DAYS while
+# the desktop app sat on an old build, and nobody knew: the failure lived in a
+# journal nobody reads. Updates are supposed to arrive on their own, the way
+# they do on the phone.
+#
+# ARCH SAFETY, deliberately: `-S --needed --noconfirm` and NEVER `-Sy pkg`.
+# Syncing the databases and installing a single package is a partial upgrade,
+# the documented way to break an Arch system. If the local database is too old
+# to resolve the package we fail loudly instead — a stale database is the
+# user's call, not something to "fix" behind their back during an update.
+pm_install_run() {
+  [ -n "${PM:-}" ] || return 1
+  case "$PM" in
+    pacman)       pacman -S --needed --noconfirm "$@" ;;
+    apt-get)      DEBIAN_FRONTEND=noninteractive apt-get install -y "$@" ;;
+    dnf)          dnf install -y "$@" ;;
+    zypper)       zypper --non-interactive install "$@" ;;
+    apk)          apk add "$@" ;;
+    xbps-install) xbps-install -y "$@" ;;
+    *)            return 1 ;;
+  esac
+}
+
 # Architecture. The published tarball is arch-specific, so this picks the path
 # on the update server rather than being cosmetic.
 case "$(uname -m)" in
@@ -321,6 +352,31 @@ check_deps() {
       warn "Missing required libraries (--skip-dep-check given):$missing_required"
       return 0
     fi
+
+    # Install them ourselves. We are root, we know the package names, and the
+    # alternative is an update that silently never happens.
+    if [ -n "${PM:-}" ]; then
+      step "Installing missing system libraries:$missing_required"
+      if pm_install_run $missing_required; then
+        # Re-check against the LOADER, not the package manager's exit code: a
+        # package can install and still not provide the soname we need.
+        missing_after=""
+        for lib in libgtk-3.so.0 libgstreamer-1.0.so.0 libgstapp-1.0.so.0 \
+                   libsecret-1.so.0 libayatana-appindicator3.so.1 \
+                   libkeybinder-3.0.so.0; do
+          have_lib "$lib" || missing_after="$missing_after $(pkg_for "$lib")"
+        done
+        if [ -z "$missing_after" ]; then
+          step "System libraries installed — continuing the update."
+          return 0
+        fi
+        missing_required="$missing_after"
+        warn "Installed, but these are still not loadable:$missing_required"
+      else
+        warn "The package manager refused to install:$missing_required"
+      fi
+    fi
+
     die "Missing system libraries LifeOS cannot start without:$missing_required" \
         "Detected: $DISTRO_NAME (package manager: ${PM:-none found})" \
         "" \
