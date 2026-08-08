@@ -202,6 +202,20 @@ PRAGMA foreign_keys=ON;
 -- migrate_rebuild_graph_tables(); a fresh one starts here.
 -- The three `embedding*` columns are axi-only LOCAL DERIVED STATE (mobile has
 -- no embedder), the same category as nodes_fts/vec_nodes, appended last.
+-- INDEXES ON MIGRATION-ADDED COLUMNS ARE NOT DECLARED HERE.
+-- `uuid`, `lamport`, `deleted_at`, `src_uuid`, `dst_uuid` and `relation` are
+-- added to a PRE-EXISTING database by the migrations below, not by this
+-- CREATE TABLE — which `IF NOT EXISTS` makes a no-op when the table is already
+-- there. Declaring their indexes in this script meant `executescript(_SCHEMA)`
+-- ran BEFORE those columns existed and died on `no such column: uuid`, on the
+-- very first statement of init_db(), against every database older than this
+-- chain. It failed safely (nothing migrated, graph untouched) and it failed
+-- every single time, so the daemon could never start.
+-- The migrations own these indexes and create them once the columns are real:
+--   idx_nodes_uuid / idx_edges_uuid   -> migrate_nodes_edges_sync_columns
+--   idx_edges_src / idx_edges_dst / idx_edges_relation -> migrate_edge_endpoint_uuids
+--   idx_nodes_deleted / idx_edges_deleted -> the tombstone migration
+-- and migrate_rebuild_graph_tables recreates them all after DROP/RENAME.
 CREATE TABLE IF NOT EXISTS nodes (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,   -- local rowid (per-device)
   uuid         TEXT    NOT NULL UNIQUE,             -- stable sync identity across replicas
@@ -223,11 +237,6 @@ CREATE TABLE IF NOT EXISTS nodes (
 CREATE INDEX IF NOT EXISTS idx_nodes_kind    ON nodes(kind);
 CREATE INDEX IF NOT EXISTS idx_nodes_domain  ON nodes(domain);
 CREATE INDEX IF NOT EXISTS idx_nodes_created ON nodes(created_at);
--- SQLite's ALTER TABLE ADD COLUMN cannot attach a UNIQUE constraint, so this
--- index (not a column constraint) is what enforces uuid uniqueness on both a
--- fresh DB (built via this CREATE TABLE) and a migrated pre-existing one
--- (migrate_nodes_edges_sync_columns creates the same index after backfill).
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
 -- PR7 (tombstones). Mobile's name, verbatim (local_graph_schema.dart), but
 -- PARTIAL — and that is not a detail, it is the whole point. Measured with
 -- EXPLAIN QUERY PLAN on the queries this PR touches: a FULL index on
@@ -241,8 +250,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_uuid ON nodes(uuid);
 -- actually wants it: "which rows are tombstoned" (the sync push).
 -- Also created by the migration, so a pre-existing database — which never runs
 -- this CREATE TABLE body — gets it too.
-CREATE INDEX IF NOT EXISTS idx_nodes_deleted ON nodes(deleted_at)
-  WHERE deleted_at IS NOT NULL;
 
 -- PR8: mobile's exact edges DDL. Endpoints are node UUIDs, not local rowids —
 -- rowid 42 on the laptop is not rowid 42 on the Pixel, so rowid endpoints
@@ -266,14 +273,8 @@ CREATE TABLE IF NOT EXISTS edges (
   lamport      INTEGER NOT NULL DEFAULT 0,          -- sync: logical clock
   deleted_at   REAL                                 -- sync: tombstone (NULL = live)
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_uuid ON edges(uuid);
 -- Names are mobile's, verbatim (local_graph_schema.dart), so there is nothing
 -- left to reconcile between the two schemas.
-CREATE INDEX IF NOT EXISTS idx_edges_src      ON edges(src_uuid);
-CREATE INDEX IF NOT EXISTS idx_edges_dst      ON edges(dst_uuid);
-CREATE INDEX IF NOT EXISTS idx_edges_relation ON edges(relation);
-CREATE INDEX IF NOT EXISTS idx_edges_deleted  ON edges(deleted_at)
-  WHERE deleted_at IS NOT NULL;  -- partial: see idx_nodes_deleted above
 
 -- ─────────────────────── conversation history ───────────────────────
 
