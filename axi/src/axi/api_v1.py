@@ -240,6 +240,81 @@ class PairRequest(BaseModel):
     pubkey_proof_payload: str | None = None
 
 
+#: How far the proof's signed `ts` may sit from the engine's clock, in either
+#: direction.
+#:
+#: Five minutes, matching the pairing code's own lifetime — a proof older than
+#: the code it proves is useless anyway, so nothing legitimate is lost, and the
+#: window bounds how long a captured proof could be worth replaying if the code
+#: ever stopped being single-use.
+#:
+#: SYMMETRIC, and generously sized, on purpose: a phone whose clock is a couple
+#: of minutes off is an ordinary phone, not an attacker, and a tighter window
+#: would turn pairing into a failure the user cannot explain or fix. This is
+#: the one place where the engine's clock and the device's clock have to agree
+#: at all — nothing else in pairing depends on the device's clock.
+_POP_MAX_CLOCK_SKEW_SECONDS = 300
+
+
+def _verify_proof_freshness(envelope: dict[str, Any]) -> None:
+    """Enforce the `ts`/`nonce` that `mesh_trust.build_signed_payload` embeds.
+
+    Those two fields exist inside the SIGNED bytes precisely so a verifier can
+    reject stale or replayed requests; `build_signed_payload`'s docstring says
+    enforcement is the caller's job. Signing a timestamp nobody reads is the
+    SHAPE of replay defence, not replay defence.
+
+    DEFENCE IN DEPTH, not a hole being closed: the pairing code this proof is
+    bound to is single-use and expires in five minutes, so a replayed proof
+    already has nothing to redeem. That is exactly why this is worth having —
+    it stops the guarantee from resting entirely on one property of a
+    different subsystem.
+
+    NO NONCE CACHE, deliberately. Rejecting a repeated nonce would require
+    per-process state whose only job is to refuse a request the burnt code
+    already refuses. What the nonce is validated FOR here is envelope shape: a
+    caller must not be able to opt out of the freshness fields by omitting
+    them, which is the classic downgrade.
+
+    Raises 400 (never 410) and is called BEFORE `pairing.redeem_code`, so a
+    device with a wrong clock does not silently burn the user's code.
+    """
+    import time
+
+    ts = envelope.get("ts")
+    if ts is None:
+        raise HTTPException(
+            status_code=400,
+            detail="proof of possession failed: payload is missing ts",
+        )
+    if isinstance(ts, bool) or not isinstance(ts, (int, float)):
+        raise HTTPException(
+            status_code=400,
+            detail="proof of possession failed: ts is not a timestamp",
+        )
+    if abs(time.time() - float(ts)) > _POP_MAX_CLOCK_SKEW_SECONDS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "proof of possession failed: stale or clock-skewed payload "
+                f"(ts must be within {_POP_MAX_CLOCK_SKEW_SECONDS}s of this "
+                "engine's clock — check the device's date and time)"
+            ),
+        )
+
+    nonce = envelope.get("nonce")
+    if nonce is None:
+        raise HTTPException(
+            status_code=400,
+            detail="proof of possession failed: payload is missing nonce",
+        )
+    if not isinstance(nonce, str) or not nonce.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="proof of possession failed: nonce is empty or not a string",
+        )
+
+
 def _verify_pubkey_proof(body: "PairRequest") -> None:
     """Enforce PoP for `device_pubkey` (spec `mesh-trust-hardening`,
     "Pairing requires proof of possession of device_pubkey").
@@ -272,6 +347,7 @@ def _verify_pubkey_proof(body: "PairRequest") -> None:
         raise HTTPException(
             status_code=400, detail="proof of possession failed: payload mismatch"
         )
+    _verify_proof_freshness(envelope)
     if not mesh_trust.verify_signature(body.device_pubkey, payload_bytes, body.pubkey_proof):
         raise HTTPException(status_code=400, detail="proof of possession failed")
 

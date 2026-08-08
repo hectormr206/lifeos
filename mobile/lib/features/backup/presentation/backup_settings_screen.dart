@@ -35,6 +35,7 @@ class BackupSettingsScreen extends ConsumerStatefulWidget {
     this._automaticSettingsStore,
     this._automaticStatusStore,
     this._automaticPassphraseStore,
+    this._automaticBackupWork,
   });
 
   final BackupHostConfigStore? _store;
@@ -42,6 +43,11 @@ class BackupSettingsScreen extends ConsumerStatefulWidget {
   final AutomaticBackupSettingsStore? _automaticSettingsStore;
   final AutomaticBackupStatusStore? _automaticStatusStore;
   final AutomaticBackupPassphraseStore? _automaticPassphraseStore;
+
+  /// The OS scheduler seam. Injected in tests because the WorkManager plugin
+  /// has no channel under `flutter_test` — and because whether registration
+  /// LANDED now changes what this screen does, so it must be drivable.
+  final WorkmanagerAutomaticBackupWork? _automaticBackupWork;
 
   @override
   ConsumerState<BackupSettingsScreen> createState() =>
@@ -58,6 +64,8 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
       widget._automaticStatusStore ?? AutomaticBackupStatusStore();
   late final AutomaticBackupPassphraseStore _automaticPassphraseStore =
       widget._automaticPassphraseStore ?? AutomaticBackupPassphraseStore();
+  late final WorkmanagerAutomaticBackupWork _automaticBackupWork =
+      widget._automaticBackupWork ?? WorkmanagerAutomaticBackupWork();
 
   final _addressController = TextEditingController();
   final _keyController = TextEditingController();
@@ -123,7 +131,17 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
         // delete failure here does not reopen the safety hole — it only
         // means secret hygiene, not correctness, is imperfect this time.
       }
-      await WorkmanagerAutomaticBackupWork().cancel();
+      final cancelled = await _automaticBackupWork.cancel();
+      if (!cancelled) {
+        // Far less dangerous than a failed registration — the runner reads
+        // the setting flipped above BEFORE anything else and records
+        // `skippedDisabled` — but an instruction the OS did not take is
+        // still said out loud rather than swallowed.
+        _say('Se desactivó el respaldo automático, pero el sistema no '
+            'confirmó la cancelación de la tarea programada. No se hará '
+            'ningún respaldo (la opción está apagada); si querés, reiniciá '
+            'la app para que quede limpio.');
+      }
       return;
     }
 
@@ -150,8 +168,27 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
       return;
     }
 
+    // The OS registration comes BEFORE the setting is stored, for the same
+    // reason the passphrase capture does: the switch must not move over a
+    // step that did not actually happen. WorkManager refusing the periodic
+    // task means the backup will never fire, and nothing else in the app
+    // would ever notice — the constraint-carrying registration IS the
+    // feature (see `workmanager_automatic_backup_work.dart`).
+    if (!await _automaticBackupWork.schedule()) {
+      // Roll the activation back completely, including the secret: "off"
+      // must not leave the sealing phrase in the keystore (same contract as
+      // turning the switch off by hand).
+      try {
+        await _automaticPassphraseStore.delete();
+      } catch (_) {
+        // Best-effort hygiene; the switch stays off regardless.
+      }
+      _say('No se pudo activar el respaldo automático: no se pudo programar '
+          'la tarea periódica en este dispositivo (el sistema la rechazó). '
+          'Seguí usando "Respaldar ahora" mientras tanto.');
+      return;
+    }
     await _automaticSettingsStore.setEnabled(true);
-    await WorkmanagerAutomaticBackupWork().schedule();
     if (!mounted) return;
     setState(() => _automaticEnabled = true);
   }

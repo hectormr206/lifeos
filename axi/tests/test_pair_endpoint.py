@@ -366,3 +366,217 @@ def test_pairing_urls_keep_concrete_host(monkeypatch):
     r = client.get("/api/setup/pairing_code")
     assert r.status_code == 200
     assert any("127.0.0.1" in u for u in r.json()["urls"])
+
+
+# ──────────────── PoP envelope freshness: `ts` and `nonce` ─────────────────
+#
+# `build_signed_payload` embeds a `ts` and a random `nonce` INSIDE the signed
+# bytes specifically so a verifier can reject stale or replayed requests, and
+# its docstring says enforcement is the caller's job. `_verify_pubkey_proof`
+# validated only `body` and ignored both — signing a timestamp nobody reads is
+# not replay defence, it is the shape of one. Bounded today by the single-use,
+# 5-minute pairing code, so these tests pin defence-in-depth, not a hole.
+
+
+def _pop_fields_with_envelope(
+    code: str, device_priv: str, device_pub: str, envelope: dict
+) -> dict:
+    """Sign an ARBITRARY envelope with the device key — the signature is
+    always valid, so what the endpoint rejects is the envelope's CONTENT and
+    nothing else."""
+    import json
+
+    from axi import mesh_trust
+
+    payload = json.dumps(
+        envelope, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")  # same canonical form `mesh_trust._canonical` produces
+    return {
+        "device_pubkey": device_pub,
+        "pubkey_proof": mesh_trust.sign_request(device_priv, payload),
+        "pubkey_proof_payload": base64.b64encode(payload).decode("ascii"),
+    }
+
+
+def test_pair_pop_with_a_stale_timestamp_is_refused(client):
+    """An hour-old proof is refused even though its signature is perfect."""
+    import time
+
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    fields = _pop_fields_with_envelope(
+        code,
+        device_priv,
+        device_pub,
+        {
+            "body": {"code": code, "device_pubkey": device_pub},
+            "ts": int(time.time()) - 3600,
+            "nonce": "a" * 32,
+        },
+    )
+
+    r = client.post(
+        "/api/v1/pair", json={"code": code, "device_name": "Stale", **fields}
+    )
+
+    assert r.status_code == 400
+    assert "stale" in r.json()["detail"].lower()
+    assert store.device_list() == []
+
+
+def test_pair_pop_from_far_in_the_future_is_refused(client):
+    """The window is symmetric: a clock an hour AHEAD is as unusable as one an
+    hour behind, and accepting it would let a proof be minted for later."""
+    import time
+
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    fields = _pop_fields_with_envelope(
+        code,
+        device_priv,
+        device_pub,
+        {
+            "body": {"code": code, "device_pubkey": device_pub},
+            "ts": int(time.time()) + 3600,
+            "nonce": "a" * 32,
+        },
+    )
+
+    r = client.post(
+        "/api/v1/pair", json={"code": code, "device_name": "Future", **fields}
+    )
+
+    assert r.status_code == 400
+    assert "stale" in r.json()["detail"].lower()
+    assert store.device_list() == []
+
+
+def test_pair_pop_tolerates_ordinary_phone_clock_skew(client):
+    """The other direction, and the reason the window is not tight: a phone
+    whose clock is a minute off is an ORDINARY phone, not an attacker. A check
+    that rejects it turns pairing into an unexplainable failure."""
+    import time
+
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    fields = _pop_fields_with_envelope(
+        code,
+        device_priv,
+        device_pub,
+        {
+            "body": {"code": code, "device_pubkey": device_pub},
+            "ts": int(time.time()) - 60,
+            "nonce": "a" * 32,
+        },
+    )
+
+    r = client.post(
+        "/api/v1/pair", json={"code": code, "device_name": "Skewed", **fields}
+    )
+
+    assert r.status_code == 200, r.json()
+
+
+def test_pair_pop_without_ts_or_nonce_is_refused(client):
+    """A `body`-only envelope is not the envelope this scheme signs. Accepting
+    it would let a caller opt OUT of the freshness fields simply by omitting
+    them — the classic downgrade."""
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+
+    import time as _time
+
+    for missing in ("ts", "nonce"):
+        code = _mint_code(client)
+        envelope = {
+            "body": {"code": code, "device_pubkey": device_pub},
+            "ts": int(_time.time()),
+            "nonce": "a" * 32,
+        }
+        del envelope[missing]
+        fields = _pop_fields_with_envelope(code, device_priv, device_pub, envelope)
+
+        r = client.post(
+            "/api/v1/pair", json={"code": code, "device_name": "Downgrade", **fields}
+        )
+
+        assert r.status_code == 400, f"missing {missing} was accepted"
+        assert missing in r.json()["detail"].lower()
+        assert store.device_list() == []
+
+
+def test_pair_pop_with_a_junk_nonce_is_refused(client):
+    """The nonce is what makes two proofs for the same code distinguishable —
+    an empty or non-string one is a malformed envelope, not a nonce."""
+    import time
+
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+
+    for junk in ("", 12345):
+        code = _mint_code(client)
+        fields = _pop_fields_with_envelope(
+            code,
+            device_priv,
+            device_pub,
+            {
+                "body": {"code": code, "device_pubkey": device_pub},
+                "ts": int(time.time()),
+                "nonce": junk,
+            },
+        )
+
+        r = client.post(
+            "/api/v1/pair", json={"code": code, "device_name": "Junk", **fields}
+        )
+
+        assert r.status_code == 400, f"nonce {junk!r} was accepted"
+        assert "nonce" in r.json()["detail"].lower()
+        assert store.device_list() == []
+
+
+def test_pair_stale_pop_does_not_burn_the_pairing_code(client):
+    """Same anti-code-burning contract the signature check already honours:
+    the new freshness check runs BEFORE redemption, so a user whose clock was
+    wrong can fix it and retry with the same code."""
+    import time
+
+    from axi import mesh_trust
+
+    device_priv, device_pub = mesh_trust.new_node_keypair()
+    code = _mint_code(client)
+    stale = _pop_fields_with_envelope(
+        code,
+        device_priv,
+        device_pub,
+        {
+            "body": {"code": code, "device_pubkey": device_pub},
+            "ts": int(time.time()) - 3600,
+            "nonce": "a" * 32,
+        },
+    )
+    assert (
+        client.post(
+            "/api/v1/pair", json={"code": code, "device_name": "Stale", **stale}
+        ).status_code
+        == 400
+    )
+
+    good = client.post(
+        "/api/v1/pair",
+        json={
+            "code": code,
+            "device_name": "Retry",
+            **_pop_fields(code, device_priv, device_pub),
+        },
+    )
+
+    assert good.status_code == 200, good.json()

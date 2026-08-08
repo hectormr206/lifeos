@@ -187,3 +187,122 @@ def test_default_backup_callable_is_the_verified_one(monkeypatch, pre_pr8_graph)
     )
     store.migrate_rebuild_graph_tables()
     assert seen == ["default"]
+
+
+def test_a_write_landing_during_the_snapshot_does_not_condemn_it(tmp_path):
+    """Measured on a real run, not imagined: the rebuild aborted under load.
+
+    `VACUUM INTO` snapshots the database as of when it starts. The parity
+    check then counted the LIVE table afterwards with no lock held, so any
+    write arriving in between made live > snapshot and the snapshot was
+    declared "missing data".
+
+    That is not a torn copy — it is a snapshot doing exactly its job. And in
+    production it is fatal: axi's daemon starts alongside the recorder,
+    wakeword and write-router threads, so `init_db()` would raise on startup,
+    the daemon would refuse to boot, and every restart would repeat it. The
+    user meets that as "axi is dead", forever, with a message about row counts.
+
+    A torn copy loses ARBITRARY rows; concurrent writes only ADD rows with
+    higher ids. Comparing within the snapshot's own id range separates them.
+    """
+    store.add_node("person", "Héctor")
+    store.add_node("fact", "una memoria previa")
+
+    real_vacuum = store._vacuum_into
+
+    def _snapshot_then_write(dest):
+        result = real_vacuum(dest)
+        # The concurrent writer, made deterministic: it lands AFTER the
+        # snapshot is taken and BEFORE parity is checked.
+        store.add_node("fact", "escrito mientras se respaldaba")
+        return result
+
+    store._vacuum_into = _snapshot_then_write
+    try:
+        snapshot = store.verified_pre_rebuild_backup()
+    finally:
+        store._vacuum_into = real_vacuum
+
+    assert Path(snapshot).exists(), "a good snapshot was rejected"
+
+
+def test_a_genuinely_torn_snapshot_is_still_rejected(tmp_path):
+    """The other half. Tolerating concurrent growth must not tolerate loss.
+
+    Without this, the fix above degrades into "never complain", which is the
+    silent-failure shape this codebase refuses — and on the one file that is
+    the entire rollback plan.
+    """
+    for i in range(6):
+        store.add_node("fact", f"memoria {i}")
+
+    real_vacuum = store._vacuum_into
+
+    def _lossy_snapshot(dest):
+        result = real_vacuum(dest)
+        # `_open_snapshot` loads sqlite-vec; a bare sqlcipher3.connect cannot
+        # even DELETE here, because the vec0 virtual table fails to attach.
+        snap = _open_snapshot(dest, store.load_key())
+        # Drop a row from the MIDDLE of the snapshot's own id range — exactly
+        # what a torn copy looks like, and invisible to a count that derives
+        # its range from the snapshot itself.
+        snap.execute("DELETE FROM nodes WHERE id = 3")
+        snap.close()
+        return result
+
+    store._vacuum_into = _lossy_snapshot
+    try:
+        with pytest.raises(store.MigrationBackupError, match="missing data"):
+            store.verified_pre_rebuild_backup()
+    finally:
+        store._vacuum_into = real_vacuum
+
+
+def test_a_full_disk_tells_the_user_what_to_do_about_it(monkeypatch):
+    """This failure reaches the user as "axi will not start".
+
+    init_db lets `MigrationBackupError` propagate on purpose — migrating with
+    no recovery path is worse than not starting — so the daemon really does
+    refuse to boot. That makes the MESSAGE the whole user experience, and
+    "database or disk is full" alone leaves them looking at a dead daemon
+    rather than at a disk.
+    """
+    _seed_graph()
+
+    def _full_disk(dest: Path) -> None:
+        raise sqlcipher3.OperationalError("database or disk is full")
+
+    monkeypatch.setattr(store, "_vacuum_into", _full_disk)
+    with pytest.raises(store.MigrationBackupError) as exc:
+        store.verified_pre_rebuild_backup()
+
+    message = str(exc.value)
+    assert "MB" in message, "the message does not say how much space is needed"
+    assert "free" in message.lower(), "the message does not say what to do"
+    assert "untouched" in message, (
+        "the message does not say the graph is safe, which is the first thing "
+        "the user needs to know when the daemon will not start"
+    )
+
+
+def test_a_broken_space_probe_never_hides_the_real_error(monkeypatch):
+    """The diagnostic must not become the failure.
+
+    Adding "how much space you need" means calling stat() and disk_usage() on
+    a filesystem that just failed a write. If either raises, the user must
+    still get the backup error, not a traceback about disk_usage.
+    """
+    _seed_graph()
+
+    def _full_disk(dest: Path) -> None:
+        raise sqlcipher3.OperationalError("database or disk is full")
+
+    def _broken_usage(_path):
+        raise OSError("cannot stat the filesystem either")
+
+    monkeypatch.setattr(store, "_vacuum_into", _full_disk)
+    monkeypatch.setattr(store.shutil, "disk_usage", _broken_usage)
+
+    with pytest.raises(store.MigrationBackupError, match="disk is full"):
+        store.verified_pre_rebuild_backup()

@@ -1159,8 +1159,12 @@ def init_db() -> None:
         # no-op there too, just for a different reason (nothing to backfill,
         # not "column already right"). `nodes.occurred_at` is handled by the
         # separate, pre-existing migrate_nodes_occurred_at() below.
-        # Dual-written by every edge-insert path from here on; from_id/
-        # to_id/kind stay fully authoritative until PR6 (the reader rewrite).
+        # Written by every edge-insert path from here on. The uuid endpoints
+        # are what the readers resolve through (PR6) and, after the rebuild
+        # eleven lines below, the ONLY endpoint representation there is: PR8
+        # drops the rowid columns this migration backfills FROM, so on an
+        # already-rebuilt database its backfill loop finds no `from_id` and
+        # correctly does nothing.
         migrate_edge_endpoint_uuids()
         # Event-date column: stores the real event timestamp (vs. insertion time).
         migrate_nodes_occurred_at()
@@ -1192,14 +1196,56 @@ def init_db() -> None:
         # reports link health. Losing the report is bad; losing the daemon
         # because the report broke is worse, so it is logged at ERROR and
         # startup continues.
+        # Summarised, not enumerated. Measured on a realistic graph (8k nodes,
+        # 20k edges): one line per finding produced 2226 ERROR lines at
+        # startup, which does not inform anyone — it buries every other error
+        # in the log. The count is the actionable part; a handful of examples
+        # is enough to start looking.
         try:
-            for _line in report_dangling_edges(c):
-                log.error("init_db: dangling edge — %s", _line)
+            _dangling = report_dangling_edges(c)
+            if _dangling:
+                log.error(
+                    "init_db: %d edge(s) point at a node that is missing or "
+                    "deleted. Legal per the sync design (an edge may arrive "
+                    "before its node), so startup continues — but an endpoint "
+                    "that never arrives is a permanently broken link. First %d: %s",
+                    len(_dangling), min(5, len(_dangling)), "; ".join(_dangling[:5]),
+                )
         except Exception as _dangling_exc:  # noqa: BLE001
             log.error(
                 "init_db: the dangling-edge report could not run (%s); startup "
                 "continues, but nothing is watching link integrity until this "
                 "is fixed", _dangling_exc,
+            )
+        # The pre-rebuild snapshot is never deleted automatically — it is the
+        # only rollback past PR8 — so the user has to be TOLD it is there and
+        # told when removing it is safe. Reported at every startup while the
+        # file exists: it is a standing cost (measured 2.7x on a realistic
+        # graph) and a decision only the owner can make. Same failure contract
+        # as the dangling-edge report above: loud, never fatal.
+        try:
+            for _snap in report_pre_rebuild_snapshots():
+                _snap_msg = (
+                    f"A pre-rebuild backup of your memory database is on disk: "
+                    f"{_snap['path']} ({_snap['bytes'] / 1_048_576:.1f} MB, next "
+                    f"to a live database of {_snap['live_db_bytes'] / 1_048_576:.1f} MB). "
+                    f"It was taken automatically before the sync-schema rebuild "
+                    f"and is the ONLY way back to the old schema. Keep it until "
+                    f"you have used the graph and confirmed your memories, "
+                    f"searches and timeline are all there; after that it is safe "
+                    f"to delete this file to reclaim the space. Nothing deletes "
+                    f"it for you."
+                )
+                log.warning("init_db: %s", _snap_msg)
+                try:
+                    _events.log_warning("store.migration", _snap_msg, dict(_snap))
+                except Exception:  # noqa: BLE001 — events must never abort startup
+                    pass
+        except Exception as _snap_exc:  # noqa: BLE001
+            log.error(
+                "init_db: the pre-rebuild snapshot report could not run (%s); "
+                "startup continues, but if a snapshot exists nothing is telling "
+                "you about the disk it is holding", _snap_exc,
             )
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
         migrate_conversations_source()
@@ -1336,10 +1382,12 @@ def add_node(
             # `uuid` is assigned HERE, not left to the startup backfill in
             # migrate_nodes_edges_sync_columns(). A node inserted without one
             # stays NULL until the next restart, and every edge created against
-            # it in the meantime dual-writes a NULL src_uuid — which
-            # verify_edge_endpoint_convergence() reports as converged, because
-            # NULL does equal NULL. Once PR6 resolves edges through src_uuid,
-            # that NULL is a link missing from the user's own memory.
+            # it in the meantime writes a NULL src_uuid. Every read resolves
+            # edges through src_uuid (PR6), so such a NULL is a link missing
+            # from the user's own memory graph — which is why the endpoint
+            # uuids are NOT NULL in the rebuilt table and why
+            # verify_edge_endpoint_convergence() raises on a NULL endpoint
+            # rather than reading it as "converged".
             "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at, uuid) "
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (kind, label, payload, domain, now, now, tz, occurred_at, str(uuid.uuid4())),
@@ -1562,11 +1610,14 @@ def neighbors(node_id: int, edge_kind: str | None = None, depth: int = 1) -> lis
     Edges are resolved through `src_uuid`/`dst_uuid`, the sync-stable endpoint
     references mobile uses, not through the local `from_id`/`to_id` rowids
     (PR6 — design-schema.md Decision 2 step 2). Rowid 42 on the laptop is not
-    rowid 42 on the phone; the uuid is the same on both. The old columns are
-    still written and still authoritative until the contract PR, so this is a
-    behaviour-preserving change on any converged database — and a NULL
-    endpoint uuid, the one state where it would not be, is made impossible by
-    the insert paths and loud by `verify_edge_endpoint_convergence()`.
+    rowid 42 on the phone; the uuid is the same on both. This was a
+    behaviour-preserving change on any converged database when it landed —
+    both representations still existed then — and PR8's rebuild has since
+    dropped the rowid columns entirely, so the uuid endpoints are now the
+    only ones. A NULL endpoint uuid, the one state where the rewrite would
+    have changed behaviour, is made impossible by the insert paths, by the
+    rebuilt table's NOT NULL, and loud by
+    `verify_edge_endpoint_convergence()`.
     """
     c = _connect()
     if edge_kind:
@@ -2944,9 +2995,16 @@ def migrate_edge_endpoint_uuids() -> None:
     exist) but it still RUNS, unconditionally, on every `init_db()` call
     (mirrors `migrate_nodes_edges_sync_columns`); its backfill loop is then
     a genuine no-op there for the ordinary reason (zero rows yet), not
-    because the call itself was skipped. PURELY ADDITIVE and reversible:
-    `from_id`/`to_id`/`kind` remain fully authoritative and nothing reads
-    the new columns yet — that is PR6, the reader rewrite.
+    because the call itself was skipped. This migration is itself PURELY
+    ADDITIVE and reversible — it only ever adds columns and fills them in.
+
+    WHAT CHANGED UNDER IT SINCE. PR6 rewrote the readers, so `src_uuid`/
+    `dst_uuid`/`relation` are what every graph read resolves through, and
+    PR8's `migrate_rebuild_graph_tables()` then DROPPED `from_id`/`to_id`/
+    `kind` outright. On a database that has been through the rebuild the
+    backfill loop below has nothing to read FROM and skips itself (see the
+    `if "from_id" in existing_edges` guard); the loop stays because a
+    database that has NOT been rebuilt yet still needs it.
 
     `nodes.occurred_at` already exists in production via the pre-existing
     `migrate_nodes_occurred_at()` migration (added independently, before
@@ -3036,11 +3094,20 @@ def migrate_edge_endpoint_uuids() -> None:
 
 
 def verify_edge_endpoint_convergence() -> None:
-    """Assert `edges.src_uuid`/`dst_uuid` still agree with `from_id`/`to_id`
-    (via `nodes.uuid`) for every live edge.
+    """Assert every live edge has usable uuid endpoints.
 
-    RAISES on the first mismatch — dual-write drift between the new sync
-    columns and the old authoritative ones must never pass silently.
+    WHAT THIS CHECKS DEPENDS ON WHETHER THE DATABASE HAS BEEN REBUILT — and
+    on a rebuilt one (every database, after the first startup on PR8) it is
+    the NULL-endpoint half ALONE:
+
+    * Before PR8's `migrate_rebuild_graph_tables()` there were two endpoint
+      representations, so this also compared `src_uuid`/`dst_uuid` against
+      `from_id`/`to_id` (via `nodes.uuid`) and RAISED on the first drift.
+    * After the rebuild those rowid columns do not exist. `src_uuid`/
+      `dst_uuid` ARE the endpoints, there is nothing to drift FROM, and the
+      comparison is skipped rather than allowed to raise "could not execute"
+      on every startup — which would take `init_db()` down with it. See the
+      `has_rowid_endpoints` guard in the body.
 
     RAISES ALSO if the check itself cannot execute (e.g. a table/column is
     missing mid-migration) — per the LifeOS silent-failure rule, a check
@@ -3182,6 +3249,68 @@ def report_dangling_edges(conn=None) -> list[str]:
     return out
 
 
+#: How a pre-rebuild snapshot is named on disk, as a glob.
+#:
+#: DUPLICATED, on purpose and with a test: `verified_pre_rebuild_backup()`
+#: builds the same name with an f-string. Sharing one constant would mean
+#: editing the writer, and the writer is the one function on this path that
+#: must not be touched casually. `test_pre_rebuild_snapshot_visibility.py`
+#: asserts the two still agree, so a rename cannot make this report go quietly
+#: blind — which is the only failure mode that would matter here.
+_PRE_REBUILD_SNAPSHOT_GLOB = ".pre-rebuild-*.db"
+
+
+def report_pre_rebuild_snapshots() -> list[dict[str, Any]]:
+    """List the pre-rebuild snapshots sitting beside the live database.
+
+    WHY THIS EXISTS. `migrate_rebuild_graph_tables()` writes
+    `memory.db.pre-rebuild-<epoch>.db` and NEVER deletes it. That is correct —
+    it is the only rollback there is, and a process that removed its own
+    rollback would be worse than one that leaves a file behind. But nothing
+    told the user the file existed, and the cost is not small: measured on a
+    realistic graph (8k nodes, 20k edges) the live database went from 20.6 MB
+    to 36.3 MB and the snapshot added 19.8 MB, so 20.6 MB of memory became
+    56.1 MB on disk — about 2.7x. Left unannounced that is either disk the
+    user pays for forever, or a mysterious `memory.db.*.db` they delete months
+    later without knowing it was the one copy that could have saved them.
+
+    Newest first: the most recent snapshot is the one that matches the current
+    database. Returns `path`, `bytes`, `modified_at` and the live database's
+    own `live_db_bytes`, because "there is a file" is not actionable and "it
+    costs you this much next to a database this size" is.
+
+    Read-only and side-effect free. Raises on an unreadable directory rather
+    than reporting "no snapshots" — a check that cannot run must not look like
+    a check that ran and found nothing. The startup caller is what decides
+    that this particular report is not worth failing to boot over.
+    """
+    live_bytes = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    found = [
+        {
+            "path": str(p),
+            "bytes": p.stat().st_size,
+            "modified_at": p.stat().st_mtime,
+            "taken_at": _pre_rebuild_snapshot_epoch(p),
+            "live_db_bytes": live_bytes,
+        }
+        for p in DB_PATH.parent.glob(DB_PATH.name + _PRE_REBUILD_SNAPSHOT_GLOB)
+        if p.is_file()
+    ]
+    # By the epoch the snapshot NAMES, not by mtime: a copy or a restore
+    # rewrites mtime, and the stamp is what identifies which rebuild it
+    # belongs to. mtime is the fallback for a name that cannot be parsed.
+    found.sort(key=lambda f: (f["taken_at"] or f["modified_at"]), reverse=True)
+    return found
+
+
+def _pre_rebuild_snapshot_epoch(path: Path) -> int | None:
+    """The `<epoch>` out of `memory.db.pre-rebuild-<epoch>.db`, or None."""
+    stem = path.name.removesuffix(".db").rsplit(".pre-rebuild-", 1)
+    if len(stem) != 2 or not stem[1].isdigit():
+        return None
+    return int(stem[1])
+
+
 # ─────────────────── PR8: the pre-rebuild backup gate ───────────────────────
 #
 # PR8 rebuilds `nodes`/`edges` and drops `from_id`/`to_id`/`kind`. There is no
@@ -3220,7 +3349,7 @@ def _vacuum_into(dest: Path) -> None:
     _connect().execute("VACUUM INTO ?", (str(dest),))
 
 
-def _verify_snapshot(dest: Path) -> None:
+def _verify_snapshot(dest: Path, reference: dict | None = None) -> None:
     """Prove the snapshot at *dest* is restorable. Raises on any doubt.
 
     Three checks, in order, per design-schema.md Decision 5:
@@ -3228,6 +3357,11 @@ def _verify_snapshot(dest: Path) -> None:
       2. `PRAGMA integrity_check` says `ok` — structurally sound,
       3. row-count parity plus a sampled `(id, uuid)` spot-check — a truncated
          database passes `integrity_check` perfectly well.
+
+    *reference* maps table -> (row_count, max_rowid) as measured on the LIVE
+    database immediately BEFORE the snapshot was taken. Parity is judged
+    against it rather than against live-right-now, because this runs holding no
+    lock and live keeps moving.
 
     Raises `MigrationBackupError` if any check fails OR if any check cannot be
     executed at all. A verification that quietly no-ops because the file would
@@ -3265,36 +3399,83 @@ def _verify_snapshot(dest: Path) -> None:
                 f"({result[0] if result else 'no result'}) — it was written but "
                 "cannot be restored"
             )
+        # Parity is checked WITHIN THE SNAPSHOT'S OWN ID RANGE, not against the
+        # live table as a whole. `VACUUM INTO` captures the database as of when
+        # it starts, and this verification runs afterwards holding no lock, so
+        # a plain COUNT comparison measures the snapshot against a moving
+        # target: any write arriving in between made live > snapshot and
+        # condemned a perfectly good backup.
+        #
+        # That is not theoretical. Running the rebuild under four concurrent
+        # writers aborted the migration with "`nodes` has 3039 rows, the live
+        # database has 3051". In production axi starts alongside the recorder,
+        # the wakeword loop and the write-router, so this would raise inside
+        # init_db(), the daemon would refuse to boot, and every restart would
+        # repeat it — the user meets that as "axi is dead", not as a backup
+        # problem.
+        #
+        # The two cases separate cleanly: a TORN copy loses arbitrary rows,
+        # while concurrent writes only ADD rows with higher ids. So compare the
+        # snapshot against the live rows it could possibly have contained.
         for table in _BACKUP_PARITY_TABLES:
+            ref_n, ref_max = reference.get(table, (None, None))
             try:
-                live_n = live.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-                snap_n = snap.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+                # nodes_fts is a virtual FTS5 table whose rowid is the node id;
+                # `MAX(rowid)` works for both shapes.
+                snap_n = snap.execute(
+                    f"SELECT COUNT(*) FROM {table} WHERE rowid <= ?", (ref_max,)
+                ).fetchone()[0] if ref_max is not None else snap.execute(
+                    f"SELECT COUNT(*) FROM {table}"
+                ).fetchone()[0]
             except Exception as exc:  # noqa: BLE001
                 raise MigrationBackupError(
                     f"pre-rebuild snapshot {dest}: row-count parity for "
                     f"`{table}` could not be checked: {exc}"
                 ) from exc
-            if live_n != snap_n:
+            # Compared against the reference taken just BEFORE the vacuum, not
+            # against live now. Live is a moving target — this verification
+            # holds no lock — so a plain comparison condemned a good snapshot
+            # the instant any other thread wrote. A snapshot may hold MORE than
+            # the reference (a write landing between the count and the vacuum's
+            # start); it may never hold LESS, which is loss.
+            if ref_n is not None and snap_n < ref_n:
                 raise MigrationBackupError(
-                    f"pre-rebuild snapshot {dest}: `{table}` has {snap_n} rows, "
-                    f"the live database has {live_n} — the snapshot is missing "
-                    "data and must not be relied on"
+                    f"pre-rebuild snapshot {dest}: `{table}` has {snap_n} rows "
+                    f"up to id {ref_max}, the live database had {ref_n} when the "
+                    "snapshot was taken — the snapshot is missing data and must "
+                    "not be relied on"
                 )
+        # Sampled FROM THE SNAPSHOT, checked against live — not the reverse.
+        # Sampling live and looking rows up in the snapshot fails the moment a
+        # concurrent write lands, for the same reason the count did: live holds
+        # rows the snapshot legitimately predates. Every row the snapshot DOES
+        # hold must match live exactly; rows added afterwards are none of this
+        # check's business.
+        #
+        # Head AND tail. The original took `ORDER BY id LIMIT 25` — the 25
+        # OLDEST rows — but a torn copy loses the TAIL, which is precisely the
+        # half that sampling never looked at. Row-count parity catches a
+        # missing tail; value-level corruption in it went uninspected.
+        half = max(1, _BACKUP_SAMPLE_SIZE // 2)
         for table in ("nodes", "edges"):
-            sample = live.execute(
-                f"SELECT id, uuid FROM {table} ORDER BY id LIMIT ?",
-                (_BACKUP_SAMPLE_SIZE,),
+            sample = snap.execute(
+                f"SELECT id, uuid FROM (SELECT id, uuid FROM {table} "
+                f"                      ORDER BY id LIMIT ?) "
+                f"UNION "
+                f"SELECT id, uuid FROM (SELECT id, uuid FROM {table} "
+                f"                      ORDER BY id DESC LIMIT ?)",
+                (half, half),
             ).fetchall()
             for row_id, row_uuid in sample:
-                got = snap.execute(
+                got = live.execute(
                     f"SELECT uuid FROM {table} WHERE id = ?", (row_id,)
                 ).fetchone()
                 if got is None or got[0] != row_uuid:
                     raise MigrationBackupError(
-                        f"pre-rebuild snapshot {dest}: `{table}` id={row_id} has "
-                        f"uuid={None if got is None else got[0]!r}, the live "
-                        f"database has {row_uuid!r} — the snapshot does not hold "
-                        "the same rows"
+                        f"pre-rebuild snapshot {dest}: `{table}` id={row_id} holds "
+                        f"uuid={row_uuid!r}, the live database has "
+                        f"{None if got is None else got[0]!r} — the snapshot does "
+                        "not hold the same rows"
                     )
     finally:
         snap.close()
@@ -3311,13 +3492,49 @@ def verified_pre_rebuild_backup() -> str:
     dest = DB_PATH.parent / f"{DB_PATH.name}.pre-rebuild-{int(time.time())}.db"
     if dest.exists():
         dest.unlink()
+    # Anchor the parity check to what live held BEFORE the snapshot. Verifying
+    # against live afterwards compares the snapshot to a moving target: under
+    # concurrent writers — which is every real axi startup, alongside the
+    # recorder and write-router threads — that condemned a perfectly good
+    # backup and left the daemon refusing to boot on every restart.
+    reference: dict[str, tuple[int, int | None]] = {}
+    try:
+        _ref_conn = _connect()
+        for _t in _BACKUP_PARITY_TABLES:
+            _n = _ref_conn.execute(f"SELECT COUNT(*) FROM {_t}").fetchone()[0]
+            _m = _ref_conn.execute(f"SELECT MAX(rowid) FROM {_t}").fetchone()[0]
+            reference[_t] = (_n, _m)
+    except Exception as exc:  # noqa: BLE001
+        # Fail loudly: without the reference the parity check has nothing
+        # trustworthy to compare against, and guessing is how a torn backup
+        # gets blessed.
+        raise MigrationBackupError(
+            f"pre-rebuild snapshot: could not measure the live database before "
+            f"snapshotting, so the snapshot cannot be verified: {exc}"
+        ) from exc
     try:
         _vacuum_into(dest)
     except Exception as exc:  # noqa: BLE001
+        # The numbers matter more than the cause. This failure surfaces to the
+        # user as "axi will not start" — init_db lets it propagate on purpose,
+        # because migrating without a recovery path is the one thing worse than
+        # not starting. So the message has to say what to DO. Measured: the
+        # snapshot needs roughly the size of the live database.
+        try:
+            _needed = DB_PATH.stat().st_size
+            _free = shutil.disk_usage(DB_PATH.parent).free
+            _space = (
+                f" The snapshot needs about {_needed / 1e6:.0f} MB "
+                f"({_free / 1e6:.0f} MB free on that filesystem); free some "
+                f"space and start axi again."
+            )
+        except Exception:  # noqa: BLE001 — never let diagnostics hide the error
+            _space = ""
         raise MigrationBackupError(
-            f"pre-rebuild snapshot could not be written to {dest}: {exc}"
+            f"pre-rebuild snapshot could not be written to {dest}: {exc}."
+            f"{_space} Nothing was migrated and your graph is untouched."
         ) from exc
-    _verify_snapshot(dest)
+    _verify_snapshot(dest, reference)
     log.warning(
         "verified_pre_rebuild_backup: verified snapshot at %s — this file is "
         "the ONLY recovery path for the graph table rebuild", dest,

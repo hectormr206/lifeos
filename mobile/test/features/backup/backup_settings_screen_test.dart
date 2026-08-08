@@ -13,9 +13,11 @@ import 'package:lifeos/features/backup/presentation/passphrase_dialog.dart';
 import 'package:lifeos/features/backups/data/automatic_backup_passphrase_store.dart';
 import 'package:lifeos/features/backups/data/automatic_backup_settings_store.dart';
 import 'package:lifeos/features/backups/data/automatic_backup_status_store.dart';
+import 'package:lifeos/features/backups/data/workmanager_automatic_backup_work.dart';
 import 'package:lifeos/features/backups/domain/automatic_backup_outcome.dart';
 import 'package:lifeos/features/backups/domain/automatic_backup_status.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:workmanager/workmanager.dart';
 
 /// Simulates a Linux box with no gnome-keyring/kwallet running — every write
 /// throws, exactly like the real Linux Secret Service backend does when no
@@ -39,6 +41,49 @@ class _NoKeyringStorage extends FlutterSecureStorage {
         message: 'no Secret Service provider is running',
       );
 }
+
+/// A WorkManager that accepts everything (the default in these tests: the
+/// real plugin has no channel under `flutter_test` and would refuse) or
+/// refuses everything, for the registration-failure case.
+class _FakeWorkmanager implements Workmanager {
+  _FakeWorkmanager({this.refuse = false});
+
+  final bool refuse;
+
+  @override
+  Future<void> registerPeriodicTask(
+    String uniqueName,
+    String taskName, {
+    Duration? frequency,
+    Duration? flexInterval,
+    Map<String, dynamic>? inputData,
+    Duration? initialDelay,
+    Constraints? constraints,
+    ExistingPeriodicWorkPolicy? existingWorkPolicy,
+    BackoffPolicy? backoffPolicy,
+    Duration? backoffPolicyDelay,
+    String? tag,
+  }) async {
+    if (refuse) throw PlatformException(code: 'workmanager_refused');
+  }
+
+  @override
+  Future<void> cancelByUniqueName(String uniqueName) async {
+    if (refuse) throw PlatformException(code: 'workmanager_refused');
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) =>
+      super.noSuchMethod(invocation);
+}
+
+WorkmanagerAutomaticBackupWork _failingBackupWork() =>
+    WorkmanagerAutomaticBackupWork(
+      workmanager: _FakeWorkmanager(refuse: true),
+      // Swallow the console noise only — the SCREEN's reaction is what these
+      // tests assert.
+      reportError: (_, __) {},
+    );
 
 class _FakeAdapter implements HttpClientAdapter {
   _FakeAdapter(this.handler);
@@ -64,6 +109,7 @@ Future<
   AutomaticBackupStatus? automaticStatus,
   bool automaticEnabled = false,
   FlutterSecureStorage? passphraseStorage,
+  WorkmanagerAutomaticBackupWork? automaticBackupWork,
 }) async {
   SharedPreferences.setMockInitialValues({});
   // The package's own in-memory mock, as the rest of the suite uses.
@@ -88,6 +134,8 @@ Future<
       automaticSettingsStore: automaticSettings,
       automaticStatusStore: automaticStatusStore,
       automaticPassphraseStore: automaticPassphraseStore,
+      automaticBackupWork: automaticBackupWork ??
+          WorkmanagerAutomaticBackupWork(workmanager: _FakeWorkmanager()),
     ),
   ));
   await tester.pumpAndSettle();
@@ -292,6 +340,42 @@ void main() {
     expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
     expect(await stores.settings.isEnabled(), isFalse);
     expect(await stores.passphrase.load(), isNull);
+  });
+
+  testWidgets(
+      'WorkManager refusing the registration keeps the switch OFF and says '
+      'so — an "on" switch nothing is scheduled behind is a lie',
+      (tester) async {
+    // The registration IS the feature: without it the periodic task never
+    // fires and nothing else in the app would ever notice. Before this the
+    // failure was swallowed by `catch (_) {}` and the switch turned on
+    // anyway.
+    final stores = await _pump(
+      tester,
+      respond: (_) => ResponseBody.fromString('{}', 200),
+      automaticBackupWork: _failingBackupWork(),
+    );
+
+    await _tapToggle(tester);
+    final fields = find.descendant(
+      of: find.byType(PassphraseDialog),
+      matching: find.byType(TextField),
+    );
+    await tester.enterText(fields.first, 'correct horse battery staple');
+    await tester.enterText(fields.last, 'correct horse battery staple');
+    await tester.tap(find.text('Activar'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('no se pudo programar'), findsOneWidget);
+    // Never the secret itself, in any error path.
+    expect(find.textContaining('correct horse battery staple'), findsNothing);
+
+    final toggle = find.byType(SwitchListTile, skipOffstage: false);
+    expect(tester.widget<SwitchListTile>(toggle).value, isFalse);
+    expect(await stores.settings.isEnabled(), isFalse);
+    expect(await stores.passphrase.load(), isNull,
+        reason: 'a rolled-back activation must not leave the sealing phrase '
+            'in the keystore — same contract as turning OFF');
   });
 
   testWidgets(

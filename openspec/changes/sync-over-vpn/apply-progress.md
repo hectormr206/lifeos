@@ -2381,3 +2381,256 @@ WorkManager `Constraints`, and the registration has no test), W2/W3 (two
 vpn-gated-backups scenarios uncovered), W5/W6 (stale comments in `store.py`
 and an un-superseded `design.md`). None can lose or corrupt data; all are
 recorded in verify-report.md.
+
+### Post-verify corrections, round 2 (WARNING + SUGGESTION close-out)
+
+Closes W1, W2, W3, W5, W6, S2 and S3. C1/C2/C3 and W4 were already closed by
+the coordinator at `5403c34a` and were not touched. **S1 was withdrawn
+mid-task** by the coordinator: concurrent-writer testing found that
+`_verify_snapshot`'s row-count parity compares the snapshot against a moving
+target, and the fix (comparing within `MAX(id)` of the snapshot) subsumes the
+sampling concern. `_verify_snapshot` and `verified_pre_rebuild_backup` were
+left untouched by this batch — the only thing S3 reads from that path is the
+snapshot's FILENAME, and a test pins that the two spellings still agree.
+
+**W1 — the Wi-Fi-only rule's real enforcement point now has a test, and a
+failed registration is visible.**
+The rule was enforced entirely by `Constraints(networkType: unmetered)` in
+`WorkmanagerAutomaticBackupWork.schedule()`, and nothing asserted it: changing
+`unmetered` to `connected` left the whole suite green and shipped automatic
+backups over mobile data. There is now a `_RecordingWorkmanager` driving the
+class's existing `Workmanager?` seam and asserting the arguments the OS would
+actually receive — constraint, unique name, task name, frequency, and
+`ExistingPeriodicWorkPolicy.keep`. RED proven by mutation: flipping the
+constraint to `connected` fails two of them.
+
+The hardcoded `isOnUnmeteredNetwork: () async => true` in
+`background_tasks.dart` was genuinely dead — WorkManager holds the task until
+the constraint is met, so the runner's Wi-Fi branch cannot fire in production.
+It is not removed (the runner's branch and its tests still cover the case, and
+the spec has a `waitingForWifi` scenario) but it is no longer a lie: the
+closure is now `unmeteredGuaranteedByRegistration()`, DERIVED from the same
+`automaticBackupNetworkType` constant the registration uses. Flip the
+constraint and the claim stops being made, instead of continuing to be made
+falsely — and the failure mode of that drift is `waitingForWifi`, which is
+visible, rather than a backup over mobile data, which is not.
+
+`schedule()`/`cancel()` no longer `catch (_) {}`. They report through the same
+injectable-reporter pattern `core/tray/tray_service.dart` established
+(debugPrint + `FlutterError.reportError`) and return whether the operation
+landed. The settings screen uses that return: registration now happens BEFORE
+the setting is stored, and a refusal rolls the activation back completely —
+switch stays off, setting stays false, the captured passphrase is deleted, and
+the user is told. That is the same contract the keyring-failure path in the
+same method already had, and the same reason: this screen's own comment says a
+switch that reads "on" while nothing is being backed up is the worst outcome
+this feature can produce, and a registration WorkManager refused is exactly
+that state. A failed `cancel()` is said out loud but not rolled back — the
+runner checks the opt-out first and records `skippedDisabled`, so nothing runs
+either way.
+
+**W2/W3 — the two structurally-true scenarios are now guarded.**
+`mobile/test/features/backups/vpn_gated_backup_scenarios_test.dart` drives the
+whole production path (probe → `VpnGate` → `runAutomaticBackupTask`) against a
+fake adapter where EVERYTHING answers 200 except `10.66.66.*`. That asymmetry
+is the test: it is the network shape of both scenarios (home Wi-Fi with the
+LAN engine up; an unrelated commercial VPN carrying ordinary traffic), and any
+second opinion the gate ever consults will be answered by this adapter and
+break the assertions. It also pins that the only host contacted is
+`10.66.66.1`, and that `connectivity_plus`/`TRANSPORT_VPN` appear nowhere on
+the path or in `pubspec.yaml` — with a positive control, so a wrong path
+cannot make the "does not contain" assertions pass vacuously.
+
+RED proven by mutation: adding a LAN-engine fallback to `VpnGate.check` (the
+future edit W2 was worried about) fails three of the four.
+
+**W5 — the stale comments, and two more of the same shape the report missed.**
+Fixed `store.py:1162` (eleven lines above the call that drops the columns),
+the `migrate_edge_endpoint_uuids` docstring, and
+`verify_edge_endpoint_convergence`'s summary line, which now states what the
+function actually does after the rebuild (NULL-endpoint half only) instead of
+leaving the correction to an inline comment thirty lines below.
+
+The sweep found two more the verify report did not name:
+`neighbors()`'s docstring still said "the old columns are still written and
+still authoritative", and `add_node`'s inline comment still described PR6 as
+future work. Both corrected.
+
+The pin is `tests/test_dropped_column_comment_contract.py`, not five comment
+edits: it fails on any prose in `store.py` that puts "authoritative" in the
+same window as a dropped column name, and on any claim that the sync columns
+are still unread. It also asserts the premise (`_EDGES_REBUILT_DDL` really has
+no `from_id`/`to_id`), proves it can still catch the exact sentences that were
+there, and proves it leaves `briefing.py`'s legitimate use of the word alone —
+a check that flags everything gets suppressed, which is the same as no check.
+
+**W6 — `design.md` is marked, not rewritten.**
+A supersession header at the top says the schema half is history and points at
+`design-schema.md`, and names the three decisions that ARE still current so a
+reader knows what they can still trust. Four in-place annotations mark what is
+now false without deleting it: the slice 3a/3b/3c table and its inverted
+"Rejected: full table rebuild" line (PR8 did exactly that rebuild, with guard
+rails the table never had); the `is_revoked: … | None` signature, which would
+now raise `TypeError` (correction 1.14 made it required plus the
+`NO_REVOCATION_CHECK` sentinel); the Migration/Rollout paragraph; and — found
+here, not in the report — the probe path, documented as `/health` when the
+shipped probe uses `/v1/health` because `/health` answers 401.
+
+**S2 — the PoP envelope's `ts`/`nonce` are enforced.**
+`build_signed_payload` embeds both specifically so a verifier can reject stale
+or replayed requests, and its own docstring says enforcement is the caller's
+job; `_verify_pubkey_proof` validated only `body`. Signing a timestamp nobody
+reads is the shape of replay defence, not replay defence.
+
+`_verify_proof_freshness` now requires both fields and rejects a `ts` more
+than 300 s from the engine's clock in EITHER direction. The window is the
+pairing code's own lifetime, so nothing legitimate is lost — a proof older
+than the code it proves is useless anyway — and it is deliberately not tighter
+because a phone whose clock is a minute off is an ordinary phone, not an
+attacker, and a rejection there is a pairing failure the user cannot explain.
+There is a test for that tolerance, not just for the rejections. No nonce
+cache: refusing a repeated nonce would mean per-process state whose only job
+is to re-refuse a request the burnt single-use code already refuses. What the
+nonce is checked for is envelope SHAPE — a caller must not be able to opt out
+of the freshness fields by omitting them.
+
+Runs before `pairing.redeem_code`, so like the signature check it never burns
+the user's code; pinned by its own test. Worth recording for the risk
+assessment: no production client sends `device_pubkey` today (the mobile
+`PairRequest` sends only `code`/`device_name`), so this tightens a path that
+is exercised only by tests and future clients.
+
+**S3 — the snapshot is discoverable, and still never auto-deleted.**
+`report_pre_rebuild_snapshots()` (new, read-only, next to
+`report_dangling_edges` and deliberately NOT inside the backup gate) lists
+every `memory.db.pre-rebuild-*.db` beside the live database, newest first, with
+its size AND the live database's size. `init_db()` reports each one at every
+startup while it exists — to the log, and as a `warning` EVENT, which is the
+surface the dashboard already shows the user. Chose the event feed over a
+log-only line for the reason this repo already fixed once elsewhere: a warning
+that only exists in a log the owner never opens is not a warning. Chose
+`warning` over `error` because nothing is broken, and over `info` because it
+is disk the user is paying for and a decision only they can make.
+
+The message names the file, its cost, what it is for, and the one thing the
+user could not otherwise know: keep it until you have used the graph and
+confirmed your memories, searches and timeline are all there — after that it
+is safe to delete, and nothing will delete it for you. The cost figure comes
+from the coordinator's measurement on a realistic graph (8k nodes, 20k edges):
+20.6 MB of memory became 56.1 MB on disk, ~2.7x, because the rebuild also
+leaves freed pages unreclaimed in the live file.
+
+Same failure contract as the dangling-edge report: loud, never fatal — a
+report that cannot run must not take the daemon down, and that path has its
+own test.
+
+**Totals** (`-p no:randomly`; failure sets extracted with `grep ^FAILED` and
+diffed with `comm` in both directions):
+
+| Suite | Before (5403c34a) | After |
+|---|---|---|
+| axi, the 61-file store-dependent set, identical file list both runs | 979 / 23 | 984 / 23 |
+| axi, the two new test files (not in that list) | — | 12 / 0 |
+| mobile, full `flutter test` | 2055 / 0 | 2067 / 0 |
+
+The baseline was measured in a detached `git worktree` of `5403c34a` under
+`~/dev/gama/lifeos/lifeos-app-worktrees/` (never `/tmp`), removed afterwards,
+and it reproduced the coordinator's 979/23 exactly. `comm` is EMPTY in both
+directions — the same 23 pre-existing collection/environment failures,
+including the two known flakes.
+
+### Real-world testing (coordinator) — one severe defect every unit test missed
+
+The suites were green at 979/23 when this started. Running the migration the
+way it will actually run found a defect that no single-threaded test could
+reach.
+
+**The rebuild aborted under concurrent writers.** Four writer threads against
+a realistic legacy database, and:
+
+    MigrationBackupError: `nodes` has 3039 rows, the live database has 3051
+    — the snapshot is missing data and must not be relied on
+
+`_verify_snapshot` counted the LIVE table AFTER `VACUUM INTO` completed,
+holding no lock — comparing the snapshot against a moving target. Any write
+landing in between condemned a perfectly good backup.
+
+Consequence in production: axi's daemon starts alongside the recorder, the
+wakeword loop and the write-router. `init_db()` would raise on startup, the
+daemon would refuse to boot, and every restart would repeat it. Data stays
+safe — nothing migrated, integrity ok, all concurrent writes survived — but
+the user meets it as "axi is dead", permanently, over a message about row
+counts.
+
+**The first fix had a hole, and an existing test found it.** Comparing within
+the snapshot's own id range works until the snapshot loses its LAST row: then
+`MAX(id)` drops, the range shrinks, and the counts agree.
+`test_gate_aborts_on_row_count_mismatch` caught that — tail loss is exactly
+what S1 was worried about, from the other direction.
+
+The correct fix anchors parity to a REFERENCE (`COUNT` + `MAX(rowid)` per
+table) measured on the live database immediately BEFORE the vacuum. A
+snapshot may hold MORE than the reference — a write landing between the count
+and the vacuum's start — but never LESS, which is loss. Failure to measure
+the reference raises rather than proceeding, because guessing is how a torn
+backup gets blessed.
+
+Sampling was inverted at the same time: sample FROM the snapshot and check
+against live, not the reverse, since sampling live includes rows the snapshot
+legitimately predates. Head AND tail rather than `ORDER BY id LIMIT 25` — a
+torn copy loses the tail, precisely the half sampling never inspected. That
+subsumes verify finding S1, which is why S1 was withdrawn from the other
+agent's scope mid-task.
+
+**Verified on the real scenario after the fix:** migration completed in 0.7 s
+with four concurrent writers, zero errors, schema migrated, integrity ok, all
+74 concurrent writes present.
+
+**My own C3 fix had a defect, found by the same run.** Wiring
+`report_dangling_edges` into `init_db` logged one ERROR line per finding —
+2226 lines at startup on that graph. A log that prints every finding does not
+inform anyone; it buries every other error, which is the silent-failure shape
+from the opposite direction. Now one summary line: the count, plus five
+examples. Pinned by a test asserting exactly one record. (The 2226 findings
+are an artifact of the synthetic fixture, which tombstones nodes directly
+without tombstoning their edges — not a product defect.)
+
+**Full-scale rehearsal, all fixes applied** (8 000 nodes, 20 000 edges, 2 666
+embeddings, 470 tombstones, 20.7 MB):
+
+| | |
+|---|---|
+| rebuild | 2.1 s |
+| nodes / edges / fts / tombstones | identical |
+| `SUM(length(embedding))` | byte-identical (5 459 968) |
+| `foreign_key_check` / `integrity_check` | clean / ok |
+| post-migration FTS search | 9 ms |
+
+**Disk cost, measured rather than estimated:** live 20.7 MB → 36.3 MB PLUS a
+19.8 MB snapshot = 56.1 MB, about 2.7×. The live file grows because the
+rebuild leaves freed pages unreclaimed. Fed into S3's user-facing message.
+
+**Disk-full path** (simulated by raising from `_vacuum_into`): behaviour was
+already correct — nothing migrated, old schema intact, every row present,
+`user_version` 0, daemon refuses to start. But the message was only "database
+or disk is full". Since `init_db` lets this propagate on purpose, that message
+IS the entire user experience, so it now states how much space the snapshot
+needs, how much is free, what to do, and that the graph is untouched. A second
+test pins that a broken `disk_usage()` probe never hides the real error.
+
+**Real VPN endpoint**, measured from the VPS rather than a fake adapter:
+`http://10.66.66.1:8099/v1/health` → HTTP 200 in 1.4 ms; `/health` → 401,
+confirming PR2's endpoint correction. The off-VPN hang that W4's
+`connectTimeout` now bounds CANNOT be reproduced here — this host has no route
+to the address and fails instantly — so it still needs the Pixel (task 2.8).
+Stated rather than glossed.
+
+**Final suites, re-measured after both agents' work settled:**
+
+| Suite | Start of this pass | End |
+|---|---|---|
+| axi, 57 store-dependent files + 3 new contract files | 979 / 23 | 996 / 23 |
+| mobile | 2055 / 0 | 2067 / 0 |
+
+Failure sets `comm`-diffed against the PR8 baseline: empty in both
+directions.

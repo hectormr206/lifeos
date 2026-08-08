@@ -110,14 +110,14 @@ Future<bool> executeAutomaticBackupTask() async {
       operatingSystem: Platform.operatingSystem,
     ).check,
     loadConfig: BackupHostConfigStore().load,
-    // Guaranteed by the `NetworkType.unmetered` constraint this task is
-    // REGISTERED under (`WorkmanagerAutomaticBackupWork.schedule`) whenever
-    // `kHeavyDownloadsRequireWiFi` is true: WorkManager will not even fire
-    // this task off Wi-Fi in that case, so by the time this closure runs the
-    // condition already holds. Kept as an explicit dependency (rather than
-    // hardcoded into the runner) purely so `scheduler_test.dart` can drive
-    // both branches without a real OS constraint.
-    isOnUnmeteredNetwork: () async => true,
+    // NOT a network check — the registration constraint read back. WorkManager
+    // will not fire this task off Wi-Fi while it is registered under
+    // `NetworkType.unmetered`, so this closure restates a guarantee that
+    // already holds by the time the task body runs. It derives from the SAME
+    // constant the registration uses (`automaticBackupNetworkType`) instead of
+    // an `() async => true` that reads like a check and is not one; see that
+    // function's doc and `workmanager_automatic_backup_work_test.dart`.
+    isOnUnmeteredNetwork: unmeteredGuaranteedByRegistration,
     loadPassphrase: AutomaticBackupPassphraseStore().load,
     runBackup: (config, passphrase) async {
       final service = BackupService(

@@ -1302,10 +1302,10 @@ def test_init_db_actually_runs_the_dangling_edge_report(caplog):
     with caplog.at_level("ERROR"):
         store.init_db()
 
-    assert any("dangling edge" in r.message for r in caplog.records), (
+    assert any("point at a node" in r.getMessage() for r in caplog.records), (
         "init_db did not report the dangling edge; the check is unwired again"
     )
-    assert any(f"id={eid}" in r.getMessage() for r in caplog.records), (
+    assert any(f"id={eid} " in r.getMessage() for r in caplog.records), (
         "the report does not name the offending edge"
     )
 
@@ -1332,4 +1332,37 @@ def test_a_broken_dangling_report_does_not_stop_the_daemon_starting(caplog):
 
     assert any("could not run" in r.getMessage() for r in caplog.records), (
         "the broken report failed silently; it must still be loud"
+    )
+
+
+def test_the_dangling_report_summarises_instead_of_one_line_per_edge(caplog):
+    """Measured, not imagined: on a realistic graph the first wiring of this
+    report emitted 2226 ERROR lines at startup.
+
+    A log that prints one line per finding does not inform anyone — it buries
+    every other error in the file, which is the same silent-failure shape from
+    the other direction. The count is the actionable part.
+    """
+    hub = store.add_node("person", "Héctor")
+    for i in range(30):
+        other = store.add_node("fact", f"dato {i}")
+        eid = store.add_edge(hub, other, "about")
+        store._connect().execute(
+            "UPDATE edges SET dst_uuid=? WHERE id=?", (f"missing-{i}", eid)
+        )
+
+    with caplog.at_level("ERROR"):
+        store.init_db()
+
+    dangling = [r for r in caplog.records if "point at a node" in r.getMessage()]
+    assert len(dangling) == 1, (
+        f"expected ONE summary line, got {len(dangling)} — the report is "
+        "enumerating again"
+    )
+    message = dangling[0].getMessage()
+    assert "30 edge(s)" in message, "the summary does not carry the count"
+    # Counted by the per-finding phrase, not by "id=" — `dst_uuid=` ends in
+    # "id=" and double-counts every example.
+    assert message.count("points at no live node") <= 5, (
+        "the summary is inlining every finding"
     )
