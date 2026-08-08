@@ -1279,3 +1279,57 @@ def test_report_dangling_edges_raises_when_it_cannot_run():
     with pytest.raises(RuntimeError) as excinfo:
         store.report_dangling_edges(conn=_BrokenConn())
     assert "dangling-edge check could not run" in str(excinfo.value)
+
+
+def test_init_db_actually_runs_the_dangling_edge_report(caplog):
+    """7.14's check had no production caller — it passed its own tests and
+    never ran once.
+
+    After PR8 there is no ON DELETE CASCADE and no FK on the endpoints, so
+    this report is the only thing looking at link integrity. Asserting that
+    the FUNCTION works says nothing about whether anything calls it, which is
+    exactly how it sat unwired through two phases.
+    """
+    hub = store.add_node("person", "Héctor")
+    other = store.add_node("fact", "un dato")
+    eid = store.add_edge(hub, other, "about")
+    # An endpoint no live node answers to — legal per mobile's model (an edge
+    # may sync before its node), which is why it is reported and not raised.
+    store._connect().execute(
+        "UPDATE edges SET dst_uuid='no-node-has-this-uuid' WHERE id=?", (eid,)
+    )
+
+    with caplog.at_level("ERROR"):
+        store.init_db()
+
+    assert any("dangling edge" in r.message for r in caplog.records), (
+        "init_db did not report the dangling edge; the check is unwired again"
+    )
+    assert any(f"id={eid}" in r.getMessage() for r in caplog.records), (
+        "the report does not name the offending edge"
+    )
+
+
+def test_a_broken_dangling_report_does_not_stop_the_daemon_starting(caplog):
+    """The deliberate exception to this file's fail-loudly rule, pinned.
+
+    PR8 nearly shipped the opposite shape: a guard that raises on "cannot run"
+    is called from startup, so one stale join left the daemon refusing to boot
+    on a database with no code-level revert. That guard protects a corruption
+    invariant and keeps its teeth. This one reports link health — losing the
+    report is bad, losing the daemon because the report broke is worse.
+    """
+    def _explode(*_a, **_kw):
+        raise RuntimeError("simulated: the report cannot run")
+
+    real = store.report_dangling_edges
+    store.report_dangling_edges = _explode
+    try:
+        with caplog.at_level("ERROR"):
+            store.init_db()          # must NOT raise
+    finally:
+        store.report_dangling_edges = real
+
+    assert any("could not run" in r.getMessage() for r in caplog.records), (
+        "the broken report failed silently; it must still be loud"
+    )

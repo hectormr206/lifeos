@@ -69,6 +69,17 @@ class ReachabilityVpnProbe {
       await _dio.getUri<dynamic>(
         Uri.parse(uri),
         options: Options(
+          // connectTimeout is the one that actually bounds this probe, and it
+          // was missing. sendTimeout and receiveTimeout only start counting
+          // once a connection EXISTS — off the VPN, no connection ever does.
+          // The injected Dio() defaults connectTimeout to null, which dio
+          // documents as no limit, so the "~2s bounded" this class is
+          // described by everywhere was not true: on a network that routes
+          // 10/8 to the default gateway the probe blocks through the full SYN
+          // retransmit, minutes rather than seconds. The switch below already
+          // handles DioExceptionType.connectionTimeout — it was waiting for an
+          // exception that could not be raised.
+          connectTimeout: timeout,
           sendTimeout: timeout,
           receiveTimeout: timeout,
           validateStatus: (status) => status != null && status < 600,

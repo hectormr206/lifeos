@@ -1172,6 +1172,35 @@ def init_db() -> None:
         # after the first, and it refuses to begin without a snapshot it has
         # proven restorable — that snapshot is the only rollback there is.
         migrate_rebuild_graph_tables()
+        # Link-health report. After the rebuild there is no ON DELETE CASCADE
+        # and no FK on the endpoints: referential integrity is the
+        # application's job now, and this is the only thing that looks. It was
+        # written for task 7.14 and, until here, had no production caller at
+        # all — a check that satisfies its own tests and never runs.
+        #
+        # Findings NEVER block startup: a dangling endpoint is legal (an edge
+        # may sync before its node) and refusing to boot over one would turn
+        # normal sync ordering into an outage.
+        #
+        # Neither does a FAILING check, and that is the deliberate part. The
+        # rule elsewhere in this file is that a check which cannot run must
+        # raise — but PR8 nearly shipped exactly that shape here:
+        # verify_edge_endpoint_convergence raises on "cannot run" and is
+        # called from startup, so a stale join would have left the daemon
+        # refusing to start on a database with no way back. That guard
+        # protects a corruption invariant and is worth the risk. This one
+        # reports link health. Losing the report is bad; losing the daemon
+        # because the report broke is worse, so it is logged at ERROR and
+        # startup continues.
+        try:
+            for _line in report_dangling_edges(c):
+                log.error("init_db: dangling edge — %s", _line)
+        except Exception as _dangling_exc:  # noqa: BLE001
+            log.error(
+                "init_db: the dangling-edge report could not run (%s); startup "
+                "continues, but nothing is watching link integrity until this "
+                "is fixed", _dangling_exc,
+            )
         # Conversation source ('chat' | 'voice') so the chat view can hide voice.
         migrate_conversations_source()
         # Events live in their own DB (telemetry isolated from user memory).
@@ -3494,6 +3523,27 @@ def _rebuild_verify(tx) -> None:
         "WHERE n.uuid IS NOT o.uuid OR n.kind IS NOT o.kind "
         "   OR n.label IS NOT o.label OR n.data IS NOT o.data "
         "   OR n.created_at IS NOT o.created_at OR n.deleted_at IS NOT o.deleted_at "
+        # The embedding columns are checked HERE, not left to construction.
+        # axi's `nodes` carries them and mobile's does not, so the one edit
+        # this rebuild invites — "make the DDL match mobile exactly" — deletes
+        # every vector in the graph, taking recall and the whole RAG path with
+        # it, silently and with a green suite. Verifying them in-transaction
+        # turns that edit into a rollback instead of a loss. `domain`,
+        # `occurred_at`, `created_tz`, `updated_at`, `origin_node` and
+        # `lamport` are here for the same reason: a column that nothing
+        # compares is a column the copy may quietly drop.
+        "   OR n.embedding IS NOT o.embedding "
+        "   OR n.embedding_model IS NOT o.embedding_model "
+        "   OR n.embedding_dim IS NOT o.embedding_dim "
+        "   OR n.domain IS NOT o.domain OR n.occurred_at IS NOT o.occurred_at "
+        "   OR n.created_tz IS NOT o.created_tz OR n.updated_at IS NOT o.updated_at "
+        "   OR n.origin_node IS NOT o.origin_node "
+        # lamport is compared through the SAME COALESCE the copy applies. It is
+        # the one column deliberately TRANSFORMED rather than carried (task
+        # 8.12 tightens it to NOT NULL DEFAULT 0), so a raw comparison would
+        # read that intended NULL->0 as drift and roll back every migration
+        # with a legacy row in it.
+        "   OR n.lamport IS NOT COALESCE(o.lamport, 0) "
         "LIMIT 5"
     ).fetchall()
     if drift:

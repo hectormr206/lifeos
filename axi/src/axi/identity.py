@@ -415,9 +415,18 @@ def register_alias(canonical_name: str, alias: str, kind: str = "person", conn=N
                 # PR7 (task 7.7): the merged-away node becomes a TOMBSTONE.
                 # Its edges were re-pointed at the canonical node above, in
                 # this same transaction, so nothing is left referencing it.
+                # updated_at moves with deleted_at, exactly as the two edge
+                # rewrites above do: a tombstone is a write, and leaving it
+                # stale lets a peer that merely EDITED this duplicate outrank
+                # the merge under last-writer-wins, bringing the duplicate
+                # person back. `merged_at` rather than a second time.time():
+                # one transaction is one instant, and a merge that ordered its
+                # node against a different moment than its edges could split
+                # the two halves across a sync boundary.
                 tx.execute(
-                    "UPDATE nodes SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
-                    (time.time(), did),
+                    "UPDATE nodes SET deleted_at=?, updated_at=? "
+                    "WHERE id=? AND deleted_at IS NULL",
+                    (merged_at, merged_at, did),
                 )
                 # nodes_fts and vec_nodes stay HARD deletes: local derived
                 # state, never synced. Leaving the FTS row would keep offering

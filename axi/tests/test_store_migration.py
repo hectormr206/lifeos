@@ -934,6 +934,56 @@ def test_a_lost_row_makes_verification_raise_and_rolls_the_whole_thing_back(
     }
 
 
+def test_a_dropped_embedding_makes_verification_raise_and_rolls_back(pre_pr8_graph):
+    """The rebuild's most dangerous invited edit, turned into a rollback.
+
+    axi's `nodes` carries `embedding`/`embedding_model`/`embedding_dim`; mobile
+    has no embedder. Task 8.7 says "mobile's exact DDL", so the one change this
+    migration invites is to make the columns match — which deletes every vector
+    in the graph, taking recall and the whole RAG path with it. No error, no
+    failing test: the rows are all there, the ids all match, only the meaning
+    is gone.
+
+    Verification originally compared uuid/kind/label/data/created_at/deleted_at
+    and nothing else, so it could not have noticed. This simulates the loss the
+    way 8.9 simulates row loss — really drop the column's contents mid-copy —
+    and asserts on the DATABASE afterwards, not on a return value.
+    """
+    c = store._connect()
+    ids = pre_pr8_graph["nodes"]
+    before = c.execute(
+        "SELECT length(embedding), embedding_model FROM nodes WHERE id=?", (ids["fact"],)
+    ).fetchone()
+    assert before[0] and before[1], "fixture seeds no embedding; this test proves nothing"
+    real_copy = store._rebuild_copy_rows
+
+    def _embedding_losing_copy(tx):
+        real_copy(tx)
+        # Exactly what a verbatim mobile DDL produces: rows present, vectors gone.
+        tx.execute("UPDATE nodes_new SET embedding=NULL, embedding_model=NULL")
+
+    store._rebuild_copy_rows = _embedding_losing_copy
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            store.migrate_rebuild_graph_tables(backup=_ok_backup)
+    finally:
+        store._rebuild_copy_rows = real_copy
+    # Names the offending row, not just "something went wrong" — the same
+    # diagnostic-quality rule task 6a.8 applied to the convergence guard.
+    assert "node" in str(exc.value)
+    assert str(ids["fact"]) in str(exc.value), (
+        "the failure does not name the node whose embedding was lost"
+    )
+
+    assert "from_id" in _cols("edges"), "the OLD schema must survive intact"
+    after = c.execute(
+        "SELECT length(embedding), embedding_model FROM nodes WHERE id=?", (ids["fact"],)
+    ).fetchone()
+    assert after[0] == before[0], "the embedding did not survive the rollback"
+    assert after[1] == before[1]
+    assert c.execute("PRAGMA user_version").fetchone()[0] == 0
+
+
 def test_a_killed_process_mid_rebuild_leaves_the_old_schema_unmigrated(pre_pr8_graph):
     """8.14 — a kill between `BEGIN IMMEDIATE` and `COMMIT` (simulated with a
     raise, not by killing the interpreter) rolls back to the intact old schema,

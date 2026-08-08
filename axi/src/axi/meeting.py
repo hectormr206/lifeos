@@ -883,9 +883,16 @@ def bridge_meeting_node(meeting_id: int, summary: str) -> None:
             # design-schema.md Decision 3 — they carry no edges and no FTS row.
             # The FTS row stays a HARD delete: local derived state, never
             # synced, and the row that must not outlive the tombstone (7.11).
+            # updated_at moves with deleted_at: a tombstone is a write, and a
+            # stale updated_at lets a peer's ordinary edit outrank the delete
+            # under last-writer-wins. Harmless-looking here — an orphan carries
+            # nothing — but the rule holds at every tombstone or it holds at
+            # none, which is how the first two sites got missed.
+            _orphaned_at = time.time()
             txc.execute(
-                "UPDATE nodes SET deleted_at=? WHERE id=? AND deleted_at IS NULL",
-                (time.time(), nid),
+                "UPDATE nodes SET deleted_at=?, updated_at=? "
+                "WHERE id=? AND deleted_at IS NULL",
+                (_orphaned_at, _orphaned_at, nid),
             )
             txc.execute("DELETE FROM nodes_fts WHERE rowid=?", (nid,))
         return

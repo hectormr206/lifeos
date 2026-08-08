@@ -2274,3 +2274,110 @@ constraint weakened.
 **Still unowned, and now real:** tombstone purge/GC. Every delete grows the
 database forever. Flagged in PR7, unchanged here, and explicitly NOT part of
 this chain.
+
+### Post-verify corrections (coordinator, after sdd-verify at 510ca5fc)
+
+Verify returned 3 CRITICAL. All three closed; one of them was mine.
+
+**C1 — my own fix was applied at one call site and declared closed.**
+Task 7.16 bumped `updated_at` on the node tombstone in `store.delete_node`
+and I recorded the defect as fixed. It was not: `identity.py`'s alias merge
+and `meeting.py`'s orphan cleanup tombstone nodes too, and both still wrote
+`deleted_at` alone. The identity site is the sharpest instance — the comment
+directly above it reasons about the LWW-resurrection hazard FOR THE EDGES and
+bumps `updated_at` on both edge rewrites, then misses the node three lines
+down. Once the sync engine lands, a peer that merely edited the merged-away
+duplicate outranks the delete and the duplicate person comes back.
+
+Also corrected there: the node tombstone called `time.time()` a second time
+instead of reusing `merged_at`, so one transaction carried two instants and a
+merge could order its node against a different moment than its edges.
+
+The fix that matters is not the two edits. It is
+`tests/test_tombstone_write_contract.py`: a source-level contract asserting
+that EVERY `UPDATE nodes SET deleted_at` in the package also sets
+`updated_at`. Three more behavioural tests would have proven the three sites
+we know about and said nothing about the fourth someone adds next year. The
+contract file also pins itself in both directions — it proves it can still
+match a deliberately broken write, and that it is matching at least three
+real ones, because a pattern that silently stopped matching would report a
+clean package forever.
+
+**C2 — the rebuild preserved embeddings only by construction.**
+`_rebuild_verify` compared `uuid, kind, label, data, created_at, deleted_at`
+and nothing else, and the `pre_pr8_graph` fixture seeded no embedding at all.
+So the one edit this migration invites — "make the DDL match mobile exactly",
+which is what task 8.7 literally says — deletes every vector in the graph,
+taking recall and the whole RAG path, with a green suite and no error. I
+caught that by hand during the PR8 upgrade rehearsal; a rehearsal is not a
+regression test, and it does not run again.
+
+Now verified in-transaction: `embedding`, `embedding_model`, `embedding_dim`,
+`domain`, `occurred_at`, `created_tz`, `updated_at`, `origin_node`, `lamport`.
+The fixture seeds a real 512-float embedding, and
+`test_a_dropped_embedding_makes_verification_raise_and_rolls_back` drops the
+vectors mid-copy the way task 8.9 drops a row, then asserts on the DATABASE
+afterwards: old schema intact, embedding bytes and model recovered,
+`user_version` still 0.
+
+Worth recording: my first version of this check compared `lamport` raw and
+broke 14 tests. That was the CHECK being wrong, not the code — `lamport` is
+the one column deliberately TRANSFORMED rather than carried (`COALESCE(l, 0)`,
+because task 8.12 tightens it to `NOT NULL DEFAULT 0`), so a raw comparison
+reads an intended NULL→0 as drift and would roll back every migration with a
+legacy row in it. It is compared through the same COALESCE now.
+
+**C3 — `report_dangling_edges` had zero production callers.**
+Task 7.14 was ticked claiming dangling edges are "detected by a loud
+REPORT-ONLY check". The function was well-built, fully tested, and never ran.
+After PR8 there is no CASCADE and no FK on the endpoints — application-level
+integrity is the only integrity there is, and this was the thing that would
+have reported its breaches.
+
+Wired into `init_db()`, and the wiring is deliberately NOT this file's usual
+fail-loudly shape. A dangling endpoint is legal (an edge may sync before its
+node), so findings never block startup. Neither does a FAILING check — and
+that is the considered part: PR8 nearly shipped exactly the opposite, where
+`verify_edge_endpoint_convergence` raises on "cannot run" and is called from
+startup, so one stale join would have left the daemon refusing to boot on a
+database with no way back. That guard protects a corruption invariant and
+keeps its teeth. This one reports link health: losing the report is bad,
+losing the daemon because the report broke is worse. Logged at ERROR,
+startup continues. Both halves pinned by tests, including one asserting
+`init_db` actually emits the report — because asserting the FUNCTION works is
+what let it sit unwired through two phases.
+
+**W4 — the "~2 s bounded" probe was not bounded.**
+`reachability_vpn_probe.dart` set `sendTimeout` and `receiveTimeout` but not
+`connectTimeout`, and `background_tasks.dart` injects a bare `Dio()` whose
+default is null, which dio documents as no limit. send/receive only start
+counting once a connection EXISTS; off the VPN none ever does. On a network
+routing 10/8 to the default gateway the probe blocks through the full SYN
+retransmit — minutes, not seconds — while three code comments and design.md
+state the bound as fact. The `switch` already handled
+`DioExceptionType.connectionTimeout`: it was waiting for an exception that
+could not be raised.
+
+Verified before fixing that dio 5.10 honours a per-request `connectTimeout`
+(`Options.compose` at options.dart:353 resolves it over BaseOptions) rather
+than assuming it — a fix that looked applied but was ignored would be worse
+than the omission. New `reachability_vpn_probe_test.dart` asserts on the
+options dio actually COMPOSED, since composing is the step where a
+per-request timeout would be silently dropped.
+
+**Totals after these corrections** (`-p no:randomly`, failure sets diffed
+with `comm` against the PR8 tip):
+
+| Suite | Before | After |
+|---|---|---|
+| axi, 57 store-dependent files | 973 / 23 | 979 / 23 |
+| mobile | 2053 / 0 | 2055 / 0 |
+
+Failure sets identical in both directions — the 23 remain the same
+pre-existing collection and environment failures.
+
+**Left open on purpose:** W1 (the Wi-Fi-only rule is enforced by the
+WorkManager `Constraints`, and the registration has no test), W2/W3 (two
+vpn-gated-backups scenarios uncovered), W5/W6 (stale comments in `store.py`
+and an un-superseded `design.md`). None can lose or corrupt data; all are
+recorded in verify-report.md.

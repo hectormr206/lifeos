@@ -579,6 +579,20 @@ def pre_pr8_graph():
     # memory comes back on the next sync.
     c.execute("UPDATE nodes SET deleted_at=? WHERE id=?", (now, ids["gone"]))
 
+    # A real embedding, because the rebuild's single most dangerous invited
+    # edit is "make the DDL match mobile exactly" — and mobile has no embedder,
+    # so those three columns are exactly the ones a verbatim copy drops. With
+    # no embedded row in the fixture, the in-transaction check has nothing to
+    # compare and every vector in the graph could vanish with a green suite.
+    # 512 floats, the production dimension.
+    import struct as _struct
+
+    _blob = _struct.pack("512f", *([0.125] * 512))
+    c.execute(
+        "UPDATE nodes SET embedding=?, embedding_model=?, embedding_dim=? WHERE id=?",
+        (_blob, "bge-m3", 512, ids["fact"]),
+    )
+
     edges: dict[str, int] = {}
     for role, (src, dst, kind) in {
         "esposa": ("hub", "ana", "esposa"),
