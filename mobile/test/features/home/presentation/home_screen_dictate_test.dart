@@ -12,11 +12,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lifeos/core/api/api_providers.dart';
 import 'package:lifeos/core/auth/token_store.dart';
-import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/home/presentation/home_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../../support/fake_token_store.dart';
+import '../../../support/platform_matrix.dart';
 
 Widget _app({required String operatingSystem}) => ProviderScope(
       overrides: [
@@ -62,15 +62,15 @@ void main() {
     view.resetDevicePixelRatio();
   });
 
-  for (final os in ['android', 'linux']) {
-    testWidgets('$os shows the Dictar quick action', (tester) async {
+  testPerOperatingSystem('home screen dictation', (os) {
+    testWidgets('shows the Dictar quick action', (tester) async {
       await tester.pumpWidget(_app(operatingSystem: os));
       await tester.pumpAndSettle();
 
       expect(find.text('Dictar'), findsOneWidget);
     });
 
-    testWidgets('$os opens the dictation screen when tapped', (tester) async {
+    testWidgets('opens the dictation screen when tapped', (tester) async {
       await tester.pumpWidget(_app(operatingSystem: os));
       await tester.pumpAndSettle();
 
@@ -79,5 +79,26 @@ void main() {
 
       expect(find.text('DICTATE'), findsOneWidget);
     });
-  }
+  });
+
+  // THE OTHER SIDE OF THE BRANCH. Android and Linux both answer true to
+  // `supportsDictation`, so the two groups above — and the hand-rolled loop
+  // they replaced — only ever exercised the card being PRESENT. The `if` at
+  // home_screen.dart:170 had no test that could fail if the guard were
+  // deleted. `'web'` is the platform where the capability genuinely cannot
+  // exist (no `record` plugin, no sherpa-onnx model store), so it is the
+  // honest way to reach the false branch without inventing a fake OS name.
+  testPerOperatingSystem(
+    'home screen dictation',
+    (os) {
+      testWidgets('hides the Dictar quick action where it cannot work',
+          (tester) async {
+        await tester.pumpWidget(_app(operatingSystem: os));
+        await tester.pumpAndSettle();
+
+        expect(find.text('Dictar'), findsNothing);
+      });
+    },
+    operatingSystems: const ['web'],
+  );
 }
