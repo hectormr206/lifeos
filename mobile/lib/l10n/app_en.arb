@@ -195,6 +195,21 @@
     }
   },
   "appVersionLoading": "Version…",
+  "appVersionUnknown": "Version unknown",
+  "@appVersionUnknown": {
+    "description": "Shown when the installed build cannot be determined on this machine."
+  },
+  "installedVersionUnknown": "The installed version could not be determined.",
+  "@installedVersionUnknown": {
+    "description": "Updates screen: no readable installer manifest, so the app declines to state a version rather than showing a number it does not trust."
+  },
+  "installedVersionBuildOnly": "Build {build}",
+  "@installedVersionBuildOnly": {
+    "description": "Updates screen: only the build code is known (recovered from the release symlink), with no version name to show.",
+    "placeholders": {
+      "build": { "type": "int" }
+    }
+  },
   "appTagline": "Axi, always with you ⚡",
   "aboutSlogan": "Your life, your machine, not their cloud.",
   "aboutAuthor": "Created by Héctor Martínez",

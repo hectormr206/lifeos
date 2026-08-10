@@ -872,6 +872,24 @@ abstract class AppLocalizations {
   /// **'Version…'**
   String get appVersionLoading;
 
+  /// Shown when the installed build cannot be determined on this machine.
+  ///
+  /// In en, this message translates to:
+  /// **'Version unknown'**
+  String get appVersionUnknown;
+
+  /// Updates screen: no readable installer manifest, so the app declines to state a version rather than showing a number it does not trust.
+  ///
+  /// In en, this message translates to:
+  /// **'The installed version could not be determined.'**
+  String get installedVersionUnknown;
+
+  /// Updates screen: only the build code is known (recovered from the release symlink), with no version name to show.
+  ///
+  /// In en, this message translates to:
+  /// **'Build {build}'**
+  String installedVersionBuildOnly(int build);
+
   /// No description provided for @appTagline.
   ///
   /// In en, this message translates to:

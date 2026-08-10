@@ -58,7 +58,7 @@ class AppUpdateUiState {
     this.status = const UpdateUnknown(),
     this.settings = const AppUpdateSettings(),
     this.currentVersionName = '',
-    this.currentVersionCode = 0,
+    this.currentVersionCode,
     this.checking = false,
     this.downloadProgress,
     this.downloadedApkPath,
@@ -77,9 +77,14 @@ class AppUpdateUiState {
   /// Persisted preferences (auto-check / notify / auto-download).
   final AppUpdateSettings settings;
 
-  /// The running build's version name (for the "instalada" line).
+  /// The running build's version name (for the "instalada" line), or `''` when
+  /// it is not known.
   final String currentVersionName;
-  final int currentVersionCode;
+
+  /// The running build's code, or `null` when the app CANNOT TELL — a desktop
+  /// install with no readable `/opt/lifeos/manifest.json`, or a plugin-less
+  /// context. Never 0: see [AppVersionInfo.buildNumber].
+  final int? currentVersionCode;
 
   /// A check is in flight.
   final bool checking;
@@ -133,6 +138,7 @@ class AppUpdateUiState {
     AppUpdateSettings? settings,
     String? currentVersionName,
     int? currentVersionCode,
+    bool clearCurrentVersionCode = false,
     bool? checking,
     double? downloadProgress,
     bool clearDownloadProgress = false,
@@ -152,7 +158,11 @@ class AppUpdateUiState {
         status: status ?? this.status,
         settings: settings ?? this.settings,
         currentVersionName: currentVersionName ?? this.currentVersionName,
-        currentVersionCode: currentVersionCode ?? this.currentVersionCode,
+        // "Unknown" has to be expressible, so it needs its own flag: a plain
+        // `?? this` can only ever ADD a number, never take one away.
+        currentVersionCode: clearCurrentVersionCode
+            ? null
+            : (currentVersionCode ?? this.currentVersionCode),
         checking: checking ?? this.checking,
         downloadProgress:
             clearDownloadProgress ? null : (downloadProgress ?? this.downloadProgress),
@@ -331,6 +341,7 @@ class AppUpdateNotifier extends Notifier<AppUpdateUiState> {
         settings: settings,
         currentVersionName: name,
         currentVersionCode: code,
+        clearCurrentVersionCode: code == null,
       );
     } catch (_) {
       // No platform channel in a widget test / first launch — keep defaults.

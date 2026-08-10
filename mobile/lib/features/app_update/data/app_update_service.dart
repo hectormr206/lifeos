@@ -41,14 +41,23 @@ class AppUpdateService {
 
   /// GET the manifest and compare its `versionCode` against the running build.
   Future<UpdateStatus> checkForUpdate() async {
-    final int currentCode;
+    final int? code;
     final String currentName;
     try {
-      currentCode = await _versionInfo.buildNumber();
+      code = await _versionInfo.buildNumber();
       currentName = await _versionInfo.versionName();
     } catch (_) {
       return const UpdateUnknown('No se pudo leer la versión instalada.');
     }
+    // NO INSTALLED BUILD NUMBER, NO COMPARISON. Treating "unknown" as 0 would
+    // make every published release look strictly newer and would nag about an
+    // update the user may already be running — which is precisely the desktop
+    // defect this platform-dependent source exists to fix, and it must not come
+    // back through the door marked "sensible default".
+    if (code == null) {
+      return const UpdateUnknown('No se pudo determinar la versión instalada.');
+    }
+    final int currentCode = code;
 
     // Placeholders not yet replaced (and no --dart-define override): don't hit
     // a bogus host — quietly report "no update info" instead of a scary error.

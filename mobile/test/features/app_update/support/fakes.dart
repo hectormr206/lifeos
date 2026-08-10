@@ -6,17 +6,31 @@ import 'package:lifeos/features/app_update/domain/apk_installer.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/app_update_preferences.dart';
 import 'package:lifeos/features/app_update/domain/app_version_info.dart';
+import 'package:lifeos/features/app_update/domain/installed_release.dart';
 import 'package:lifeos/features/app_update/domain/update_notifications.dart';
 
 /// In-memory [AppVersionInfo] — no `package_info_plus` platform channel.
+///
+/// [code] is nullable because "unknown" is a real answer this port has to be
+/// able to give: on the desktop the installed build number comes off disk and
+/// the disk may have nothing to say (see [FakeInstalledReleaseReader]).
 class FakeAppVersionInfo implements AppVersionInfo {
   FakeAppVersionInfo({this.code = 10, this.name = '1.0.0'});
-  int code;
+  int? code;
   String name;
   @override
-  Future<int> buildNumber() async => code;
+  Future<int?> buildNumber() async => code;
   @override
   Future<String> versionName() async => name;
+}
+
+/// In-memory [InstalledReleaseReader] — no `/opt/lifeos` on the test machine.
+/// `null` stands for "the installer left nothing readable here".
+class FakeInstalledReleaseReader implements InstalledReleaseReader {
+  FakeInstalledReleaseReader(this.release);
+  InstalledRelease? release;
+  @override
+  Future<InstalledRelease?> read() async => release;
 }
 
 /// In-memory [AppUpdatePreferences] — no shared_preferences channel.

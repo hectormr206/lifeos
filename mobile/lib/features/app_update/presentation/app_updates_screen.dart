@@ -25,6 +25,7 @@ class AppUpdatesScreen extends ConsumerWidget {
     final notifier = ref.read(appUpdateNotifierProvider.notifier);
     final status = state.status;
     final isDesktop = isDesktopPlatform(ref.watch(hostOperatingSystemProvider));
+    final l10n = AppLocalizations.of(context);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Actualizaciones de la app')),
@@ -34,11 +35,7 @@ class AppUpdatesScreen extends ConsumerWidget {
           ListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Versión instalada'),
-            subtitle: Text(
-              state.currentVersionName.isEmpty
-                  ? '—'
-                  : '${state.currentVersionName} (${state.currentVersionCode})',
-            ),
+            subtitle: Text(_installedVersionLabel(l10n, state)),
           ),
           _LatestTile(status: status),
           const SizedBox(height: 8),
@@ -92,6 +89,23 @@ class AppUpdatesScreen extends ConsumerWidget {
       ),
     );
   }
+}
+
+/// What the "Versión instalada" line says, including the two honest ways it can
+/// have nothing to say.
+///
+/// The em dash it used to print for an empty name was ambiguous — "loading" and
+/// "I have no idea which build you are on" looked identical, and on the desktop
+/// the app was CONFIDENTLY WRONG rather than blank. Now an unknown build is
+/// named as unknown, and a build code with no name (the `current` symlink
+/// fallback) shows the code alone instead of inventing a version string.
+String _installedVersionLabel(AppLocalizations l10n, AppUpdateUiState state) {
+  final code = state.currentVersionCode;
+  if (code == null) return l10n.installedVersionUnknown;
+  if (state.currentVersionName.isEmpty) {
+    return l10n.installedVersionBuildOnly(code);
+  }
+  return '${state.currentVersionName} ($code)';
 }
 
 class _LatestTile extends StatelessWidget {

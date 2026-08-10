@@ -432,6 +432,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get appVersionLoading => 'Version…';
 
   @override
+  String get appVersionUnknown => 'Version unknown';
+
+  @override
+  String get installedVersionUnknown =>
+      'The installed version could not be determined.';
+
+  @override
+  String installedVersionBuildOnly(int build) {
+    return 'Build $build';
+  }
+
+  @override
   String get appTagline => 'Axi, always with you ⚡';
 
   @override

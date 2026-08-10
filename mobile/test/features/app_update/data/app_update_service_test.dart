@@ -194,5 +194,20 @@ void main() {
       expect(await service.checkForUpdate(), isA<UpdateUnknown>());
       expect(adapter.lastRequest, isNull, reason: 'must not hit the placeholder host');
     });
+
+    test('UpdateUnknown when the installed build number is not known', () async {
+      // An unknown installed build is NOT build 0. Treating it as 0 would make
+      // every published release look newer and would offer an update the user
+      // may already be running — the desktop defect, reintroduced from the
+      // other side. No number, no comparison, no claim.
+      final adapter = _FixedResponseAdapter(200, _manifest(99));
+      final service = _service(adapter, FakeAppVersionInfo(code: null));
+
+      final result = await service.checkForUpdate();
+
+      expect(result, isA<UpdateUnknown>());
+      expect(adapter.lastRequest, isNull,
+          reason: 'nothing to compare against, so nothing to ask the server');
+    });
   });
 }

@@ -17,8 +17,31 @@ import '../domain/update_notifications.dart';
 import '../domain/update_source_config.dart';
 import '../domain/update_status.dart';
 
-/// The running build's version identity. Overridden with a fake in tests.
-final appVersionInfoProvider = Provider<AppVersionInfo>((ref) => const PackageInfoAppVersion());
+/// The version identity `package_info_plus` reports, straight out of the app
+/// bundle. THE ANDROID SOURCE — see [appVersionInfoProvider] for why desktop
+/// does not use it. Overridden with a fake in tests.
+final packageAppVersionInfoProvider =
+    Provider<AppVersionInfo>((ref) => const PackageInfoAppVersion());
+
+/// The running build's version identity, from the source that is TRUE on this
+/// platform. Overridden with a fake in tests.
+///
+/// PLATFORM-DEPENDENT SOURCE, SHARED BEHAVIOUR. Everything downstream — the
+/// version comparison in `AppUpdateService`, the Updates screen, the Home
+/// banner — is one implementation for every OS. The only thing that forks is
+/// where the running build number comes from, because on the desktop the app
+/// bundle simply does not carry it: the Flutter Linux build writes pubspec's
+/// `+1` into `flutter_assets/version.json` and ignores `--build-number`, so
+/// `package_info_plus` reported build 1 on a machine running release 795 and
+/// the app offered an update the user had already installed. The installer's
+/// own `/opt/lifeos/manifest.json` is the record that tracks what is really
+/// there, and [installedReleaseReaderProvider] already reads it.
+final appVersionInfoProvider = Provider<AppVersionInfo>((ref) {
+  if (isDesktopPlatform(ref.watch(hostOperatingSystemProvider))) {
+    return InstalledReleaseAppVersion(ref.watch(installedReleaseReaderProvider));
+  }
+  return ref.watch(packageAppVersionInfoProvider);
+});
 
 /// Local-only app-update preferences (shared_preferences). Faked in tests.
 final appUpdatePreferencesProvider =

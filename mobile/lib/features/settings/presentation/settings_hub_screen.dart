@@ -328,7 +328,10 @@ class _AppearanceTile extends StatelessWidget {
   }
 }
 
-Future<(String, int)> _loadVersion(AppVersionInfo info) async =>
+/// The build code is nullable because "unknown" is a real answer on the
+/// desktop, where it comes from the installer's manifest rather than from the
+/// app bundle (see [AppVersionInfo]).
+Future<(String, int?)> _loadVersion(AppVersionInfo info) async =>
     (await info.versionName(), await info.buildNumber());
 
 /// The LifeOS landing page opened from the "Acerca de" card.
@@ -353,11 +356,14 @@ class _AboutTile extends ConsumerWidget {
     final info = ref.watch(appVersionInfoProvider);
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
-    return FutureBuilder<(String, int)>(
+    return FutureBuilder<(String, int?)>(
       future: _loadVersion(info),
       builder: (context, snapshot) {
         final version = switch (snapshot.data) {
-          (final name, final build) => l10n.appVersionLabel(name, build),
+          (final name, final int build) => l10n.appVersionLabel(name, build),
+          // Resolved, but with no build code to show. Saying so beats printing
+          // "(null)" or a fabricated zero.
+          (final name, null) => name.isEmpty ? l10n.appVersionUnknown : name,
           null => l10n.appVersionLoading,
         };
         return ListTile(

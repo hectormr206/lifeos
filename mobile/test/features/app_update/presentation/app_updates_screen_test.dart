@@ -13,6 +13,7 @@ import 'package:lifeos/features/app_update/domain/app_update_preferences.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
 import 'package:lifeos/features/app_update/presentation/app_updates_screen.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../support/fakes.dart';
 
@@ -44,7 +45,15 @@ Future<void> _pump(
             .overrideWithValue(FakeAppUpdatePreferences(initial: settings)),
         updateNotificationsProvider.overrideWithValue(FakeUpdateNotifications()),
       ],
-      child: const MaterialApp(home: AppUpdatesScreen()),
+      // The installed-version line is now an ARB string (it has to be able to
+      // say "unknown"), so this screen needs the delegates on every platform,
+      // not only on the desktop outcome path.
+      child: const MaterialApp(
+        locale: Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: AppUpdatesScreen(),
+      ),
     ),
   );
   await tester.pumpAndSettle();
