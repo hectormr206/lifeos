@@ -380,7 +380,16 @@ flutter:
 #
 # The `sqlite3` code asset is built for every target, so Android/iOS release
 # builds also carry this library even though they use sqflite_sqlcipher's own
-# native SQLCipher. It is inert weight there; the mobile open path is untouched.
+# native SQLCipher.
+#
+# IT IS NOT INERT ON ANDROID, WHICH IS WHAT THIS COMMENT USED TO CLAIM.
+# The asset is named `libsqlcipher.so` — the SAME name as the JNI build inside
+# net.zetetic:sqlcipher-android — so packaging merged them by name and the FFI
+# one won. Every native method of net.zetetic.database.sqlcipher.SQLiteConnection
+# was then unbound and the app died opening its encrypted database before the
+# first frame, with UnsatisfiedLinkError. It shipped to a real phone twice.
+# android/app/build.gradle.kts now drops the code asset from the Android
+# staging dir; see the comment there for why that, and not a packaging rule.
 hooks:
   user_defines:
     sqlite3:
