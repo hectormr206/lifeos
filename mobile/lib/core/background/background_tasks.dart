@@ -17,7 +17,9 @@ import '../../features/data_control/data/graph_backup_service.dart';
 import '../../features/data_control/domain/backup_info.dart';
 import '../../features/local_model/data/flutter_gemma_llm_engine.dart';
 import '../../features/local_model/domain/brain_model_manifest.dart';
+import '../../features/local_model/domain/llm_request_queue.dart';
 import '../../features/local_model/domain/local_llm_engine.dart';
+import '../../features/local_model/domain/serial_llm_engine.dart';
 import '../../features/morning_briefing/background/briefing_background_runner.dart';
 import '../../features/morning_briefing/data/dio_source_fetcher.dart';
 import '../../features/morning_briefing/data/local_briefing_scheduler.dart';
@@ -65,7 +67,13 @@ void backgroundTaskDispatcher() {
 /// the MINIMAL service graph (no Riverpod/UI providers — this isolate has no
 /// widget tree) and hands it to the testable runner body.
 Future<bool> executeMorningBriefingBackgroundTask() async {
-  final engine = FlutterGemmaLlmEngine(const LocalModelConfig());
+  // Serialized like the UI isolate's engine: this isolate also drives one
+  // native session (translation, then brief writing), and a queue at the
+  // engine keeps those stages from ever overlapping.
+  final engine = SerialLlmEngine(
+    FlutterGemmaLlmEngine(const LocalModelConfig()),
+    LlmRequestQueue(),
+  );
   final deps = BriefingBackgroundDeps(
     preferences: SharedPrefsMorningBriefingPreferences(),
     harvester: BriefingHarvester(

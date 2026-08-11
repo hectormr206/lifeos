@@ -384,8 +384,13 @@
   "briefingHideCommentsSummary": "Hide comments summary",
   "briefingSummarizing": "Summarizing…",
   "briefingSummarizingComments": "Summarizing comments…",
+  "briefingSummaryQueued": "Queued…",
+  "@briefingSummaryQueued": {
+    "description": "Shown on a card whose summary was requested while the model is busy with another one: the request is accepted and will run in turn."
+  },
+  "briefingSummaryQueuedHint": "It will start as soon as the current summary finishes.",
   "briefingTranslating": "Translating…",
-  "briefingNoSummaryHint": "No summary — tap \"See full summary\".",
+  "briefingNoSummaryHint": "No summary: the source carries none and the page could not be read.",
   "briefingSkippedSources": "No news today: {sources}",
   "@briefingSkippedSources": {
     "placeholders": { "sources": { "type": "String" } }

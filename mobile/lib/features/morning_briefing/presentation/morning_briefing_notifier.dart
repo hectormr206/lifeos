@@ -49,6 +49,8 @@ class MorningBriefingState {
     this.error,
     this.summarizingArticles = const {},
     this.summarizingComments = const {},
+    this.queuedArticles = const {},
+    this.queuedComments = const {},
     this.articleErrors = const {},
     this.commentErrors = const {},
   });
@@ -76,6 +78,16 @@ class MorningBriefingState {
   /// Article keys whose on-demand HN comments summary is being generated.
   final Set<String> summarizingComments;
 
+  /// Article keys whose full summary was REQUESTED and is waiting its turn on
+  /// the shared model queue — accepted work that has not started yet. Kept
+  /// apart from [summarizingArticles] so the card can say "en cola" instead of
+  /// pretending the model is already writing.
+  final Set<String> queuedArticles;
+
+  /// Article keys whose comments summary is waiting its turn (see
+  /// [queuedArticles]).
+  final Set<String> queuedComments;
+
   /// Per-article on-demand full-summary error messages (keyed by article key).
   final Map<String, String> articleErrors;
 
@@ -87,6 +99,18 @@ class MorningBriefingState {
   bool isSummarizingArticle(String key) => summarizingArticles.contains(key);
   bool isSummarizingComments(String key) => summarizingComments.contains(key);
 
+  /// Whether the article's full summary was accepted and is waiting its turn.
+  bool isQueuedArticle(String key) => queuedArticles.contains(key);
+
+  /// Whether the article's comments summary was accepted and is waiting.
+  bool isQueuedComments(String key) => queuedComments.contains(key);
+
+  /// Running OR waiting — the guard against enqueuing the same article twice.
+  bool isArticlePending(String key) => isSummarizingArticle(key) || isQueuedArticle(key);
+
+  /// Running OR waiting, for the comments summary.
+  bool isCommentsPending(String key) => isSummarizingComments(key) || isQueuedComments(key);
+
   MorningBriefingState copyWith({
     List<String>? sources,
     OnDeviceBriefing? briefing,
@@ -96,6 +120,8 @@ class MorningBriefingState {
     String? error,
     Set<String>? summarizingArticles,
     Set<String>? summarizingComments,
+    Set<String>? queuedArticles,
+    Set<String>? queuedComments,
     Map<String, String>? articleErrors,
     Map<String, String>? commentErrors,
   }) =>
@@ -108,6 +134,8 @@ class MorningBriefingState {
         error: error,
         summarizingArticles: summarizingArticles ?? this.summarizingArticles,
         summarizingComments: summarizingComments ?? this.summarizingComments,
+        queuedArticles: queuedArticles ?? this.queuedArticles,
+        queuedComments: queuedComments ?? this.queuedComments,
         articleErrors: articleErrors ?? this.articleErrors,
         commentErrors: commentErrors ?? this.commentErrors,
       );
@@ -349,6 +377,8 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       // A fresh briefing clears any stale per-item caches/errors.
       summarizingArticles: const {},
       summarizingComments: const {},
+      queuedArticles: const {},
+      queuedComments: const {},
       articleErrors: const {},
       commentErrors: const {},
     );
@@ -398,6 +428,13 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     }
   }
 
+  /// The reader tapped "Ver resumen completo".
+  ///
+  /// The whole job (page fetch + one generation) is submitted to the SHARED
+  /// model queue as a single slot, so a second tap cannot interleave with this
+  /// one on the phone's only inference session — the bug where the first
+  /// summary stopped mid-sentence. Until its slot comes up the article is
+  /// reported as QUEUED: accepted and waiting, never running, never dropped.
   Future<void> summarizeArticle(BriefingArticle article) async {
     final briefing = state.briefing;
     if (briefing == null) return;
@@ -405,26 +442,38 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     final current = briefing.articleForKey(key);
     if (current == null) return;
     if ((current.fullSummary ?? '').isNotEmpty) return;
-    if (state.isSummarizingArticle(key)) return;
+    if (state.isArticlePending(key)) return;
 
-    _setArticlePending(key);
+    _setArticleQueued(key);
     try {
-      await ref.read(localLlmEngineProvider).load();
-      final fetcher = ref.read(sourceFetcherProvider);
-      final extractor = ref.read(sourceContentExtractorProvider);
-      final body = await fetcher.fetch(current.url);
-      final extract = extractor.extract(body, url: current.url);
-      if (extract.isEmpty) throw Exception('sin contenido legible');
-      final result = await ref.read(localLlmEngineProvider).generate(
-            _articleSummaryPrompt(title: current.title, content: extract.text),
-            temperature: longsumTemperature,
-            topK: longsumTopK,
-            topP: longsumTopP,
-          );
-      final summary = result.text.trim();
-      if (summary.isEmpty) throw Exception('resumen vacío');
-      _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
+      await ref.read(llmRequestQueueProvider).add(
+        label: 'article:$key',
+        onStart: () => _setArticleRunning(key),
+        () async {
+          try {
+            await ref.read(localLlmEngineProvider).load();
+            final fetcher = ref.read(sourceFetcherProvider);
+            final extractor = ref.read(sourceContentExtractorProvider);
+            final body = await fetcher.fetch(current.url);
+            final extract = extractor.extract(body, url: current.url);
+            if (extract.isEmpty) throw Exception('sin contenido legible');
+            final result = await ref.read(localLlmEngineProvider).generate(
+                  _articleSummaryPrompt(title: current.title, content: extract.text),
+                  temperature: longsumTemperature,
+                  topK: longsumTopK,
+                  topP: longsumTopP,
+                );
+            final summary = result.text.trim();
+            if (summary.isEmpty) throw Exception('resumen vacío');
+            _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
+          } catch (_) {
+            _setArticleError(key, _summaryErrorMessage);
+          }
+        },
+      );
     } catch (_) {
+      // The queue itself refused the job (it never should): say so on the card
+      // rather than leave a request that looks accepted and never arrives.
       _setArticleError(key, _summaryErrorMessage);
     }
   }
@@ -438,25 +487,35 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     final current = briefing.articleForKey(key);
     if (current == null || !current.isHackerNews) return;
     if ((current.commentsSummary ?? '').isNotEmpty) return;
-    if (state.isSummarizingComments(key)) return;
+    if (state.isCommentsPending(key)) return;
 
-    _setCommentsPending(key);
+    _setCommentsQueued(key);
     try {
-      await ref.read(localLlmEngineProvider).load();
-      final fetcher = ref.read(sourceFetcherProvider);
-      final extractor = ref.read(sourceContentExtractorProvider);
-      final body = await fetcher.fetch('$hnItemUrlPrefix${current.hnObjectId}');
-      final comments = extractor.extractHnComments(body);
-      if (comments.trim().isEmpty) throw Exception('sin comentarios');
-      final result = await ref.read(localLlmEngineProvider).generate(
-            _commentsSummaryPrompt(comments),
-            temperature: longsumTemperature,
-            topK: longsumTopK,
-            topP: longsumTopP,
-          );
-      final summary = result.text.trim();
-      if (summary.isEmpty) throw Exception('resumen vacío');
-      _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
+      await ref.read(llmRequestQueueProvider).add(
+        label: 'comments:$key',
+        onStart: () => _setCommentsRunning(key),
+        () async {
+          try {
+            await ref.read(localLlmEngineProvider).load();
+            final fetcher = ref.read(sourceFetcherProvider);
+            final extractor = ref.read(sourceContentExtractorProvider);
+            final body = await fetcher.fetch('$hnItemUrlPrefix${current.hnObjectId}');
+            final comments = extractor.extractHnComments(body);
+            if (comments.trim().isEmpty) throw Exception('sin comentarios');
+            final result = await ref.read(localLlmEngineProvider).generate(
+                  _commentsSummaryPrompt(comments),
+                  temperature: longsumTemperature,
+                  topK: longsumTopK,
+                  topP: longsumTopP,
+                );
+            final summary = result.text.trim();
+            if (summary.isEmpty) throw Exception('resumen vacío');
+            _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
+          } catch (_) {
+            _setCommentsError(key, _commentsErrorMessage);
+          }
+        },
+      );
     } catch (_) {
       _setCommentsError(key, _commentsErrorMessage);
     }
@@ -491,57 +550,89 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   // --- per-item state transitions -------------------------------------------
 
-  void _setArticlePending(String key) {
+  /// Accepted, waiting for the shared model queue: the card says "en cola".
+  void _setArticleQueued(String key) {
+    if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
-      summarizingArticles: {...state.summarizingArticles, key},
+      queuedArticles: {...state.queuedArticles, key},
       articleErrors: {...state.articleErrors}..remove(key),
     );
   }
 
+  /// The queue reached this job: waiting → running.
+  void _setArticleRunning(String key) {
+    if (_disposed) return;
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      queuedArticles: {...state.queuedArticles}..remove(key),
+      summarizingArticles: {...state.summarizingArticles, key},
+    );
+  }
+
   void _cacheArticleUpdate(String key, BriefingArticle updated) {
+    if (_disposed) return;
     final briefing = state.briefing?.replaceArticle(key, updated);
     state = state.copyWith(
       phase: state.phase,
       briefing: briefing,
+      queuedArticles: {...state.queuedArticles}..remove(key),
       summarizingArticles: {...state.summarizingArticles}..remove(key),
     );
     _persistBriefing(briefing);
   }
 
   void _setArticleError(String key, String message) {
+    if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
+      queuedArticles: {...state.queuedArticles}..remove(key),
       summarizingArticles: {...state.summarizingArticles}..remove(key),
       articleErrors: {...state.articleErrors, key: message},
     );
   }
 
-  void _setCommentsPending(String key) {
+  void _setCommentsQueued(String key) {
+    if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
-      summarizingComments: {...state.summarizingComments, key},
+      queuedComments: {...state.queuedComments, key},
       commentErrors: {...state.commentErrors}..remove(key),
     );
   }
 
+  void _setCommentsRunning(String key) {
+    if (_disposed) return;
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      queuedComments: {...state.queuedComments}..remove(key),
+      summarizingComments: {...state.summarizingComments, key},
+    );
+  }
+
   void _cacheCommentsUpdate(String key, BriefingArticle updated) {
+    if (_disposed) return;
     final briefing = state.briefing?.replaceArticle(key, updated);
     state = state.copyWith(
       phase: state.phase,
       briefing: briefing,
+      queuedComments: {...state.queuedComments}..remove(key),
       summarizingComments: {...state.summarizingComments}..remove(key),
     );
     _persistBriefing(briefing);
   }
 
   void _setCommentsError(String key, String message) {
+    if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
+      queuedComments: {...state.queuedComments}..remove(key),
       summarizingComments: {...state.summarizingComments}..remove(key),
       commentErrors: {...state.commentErrors, key: message},
     );

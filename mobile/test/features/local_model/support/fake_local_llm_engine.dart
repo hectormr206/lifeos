@@ -19,6 +19,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     this.deleteShouldFail = false,
     this.loadShouldFail = false,
     this.loadGate,
+    this.generateGate,
     String Function(String prompt)? reply,
     String Function(String prompt)? imageReply,
     GenerationMetrics? metrics,
@@ -55,6 +56,12 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   /// then release it to observe the transition to ready. Null = load resolves
   /// immediately.
   final Completer<void>? loadGate;
+
+  /// Optional gate every [generate] awaits BEFORE producing its reply — lets a
+  /// test hold a generation open and observe what a SECOND request does while
+  /// the first is still running (the queue's whole reason to exist). Null =
+  /// generation resolves immediately.
+  final Completer<void>? generateGate;
   final String Function(String prompt) reply;
   final String Function(String prompt) imageReply;
 
@@ -130,6 +137,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     generateCount++;
     prompts.add(prompt);
     generateSampling.add((temperature, topK, topP));
+    if (generateGate != null) await generateGate!.future;
     if (generateShouldFail) throw Exception('generate boom');
     return GenerationResult(text: reply(prompt), metrics: metrics);
   }

@@ -40,20 +40,35 @@ class BriefingBriefWriter {
   static const int topK = 20;
   static const double topP = 0.9;
 
-  /// Upper bound on model calls per briefing run.
+  /// Upper bound on MODEL calls per briefing run.
   ///
-  /// Each brief costs a page fetch plus an on-device generation, and an
-  /// unbounded loop over a bad day's feeds would run for a very long time on
-  /// battery. Items beyond the cap are NOT silently dropped: they keep the
-  /// existing "sin resumen" hint, which is visible on the card.
+  /// An on-device generation is the expensive part (seconds of GPU work each),
+  /// so a bad day's feeds must not turn into an unbounded inference loop on
+  /// battery. Items beyond this budget are NOT left blank: they fall to the
+  /// next rung of the ladder — the article's own opening words — which costs a
+  /// page fetch and no inference at all.
   static const int maxBriefsPerRun = 20;
+
+  /// Upper bound on ITEMS looked at per run (each costs one page fetch).
+  /// Generous, because a fetch is cheap next to a generation, but still finite
+  /// so a misconfigured feed list cannot fetch forever.
+  static const int maxItemsPerRun = 60;
 
   /// A brief must be short enough to read at a glance; anything longer is the
   /// model ignoring the instruction, and is cut rather than trusted.
   static const int maxBriefChars = 240;
 
   /// Fills in the missing briefs of [briefing], returning an updated briefing.
-  /// [onItem] fires before each model call (UI-progress seam).
+  /// [onItem] fires before each item is worked on (UI-progress seam).
+  ///
+  /// THE LADDER (the user's "este resumen corto debe estar siempre"):
+  ///   1. the feed's own brief wins and is never touched;
+  ///   2. otherwise the page is fetched and the MODEL writes a short brief —
+  ///      while the run's model budget lasts and the model is available;
+  ///   3. otherwise the page's OWN opening words are used verbatim;
+  ///   4. only when the page cannot be read at all does the card stay empty,
+  ///      and it then says so. Nothing is invented from a page we never read —
+  ///      a wrong summary is worse than an honest gap.
   Future<OnDeviceBriefing> fillMissing(
     OnDeviceBriefing briefing, {
     void Function(int index, int total)? onItem,
@@ -61,26 +76,39 @@ class BriefingBriefWriter {
     try {
       final pending = briefing.articles
           .where((a) => a.displayDescription.trim().isEmpty && a.url.trim().isNotEmpty)
-          .take(maxBriefsPerRun)
+          .take(maxItemsPerRun)
           .toList(growable: false);
       if (pending.isEmpty) return briefing;
 
+      // A missing/failing model no longer ends the stage: without it the ladder
+      // simply starts one rung lower, at the article's own words.
+      var modelReady = true;
       try {
         await engine.load();
       } catch (_) {
-        // No model on this device: every card keeps its hint. Not an error —
-        // the briefing itself is already complete and readable.
-        return briefing;
+        modelReady = false;
       }
 
+      var modelBudget = maxBriefsPerRun;
       var updated = briefing;
       for (var i = 0; i < pending.length; i++) {
         onItem?.call(i, pending.length);
-        final brief = await _briefFor(pending[i]);
-        if (brief == null) continue; // keep the hint for this one
+        final text = await _readable(pending[i]);
+        if (text == null) continue; // page unreadable → the honest gap
         final current = updated.articleForKey(pending[i].key);
         if (current == null) continue;
-        updated = updated.replaceArticle(current.key, current.copyWith(generatedBrief: brief));
+
+        String? written;
+        if (modelReady && modelBudget > 0) {
+          modelBudget--;
+          written = await _modelBrief(pending[i], text);
+        }
+        updated = updated.replaceArticle(
+          current.key,
+          written != null
+              ? current.copyWith(generatedBrief: written)
+              : current.copyWith(sourceExcerpt: _excerpt(text)),
+        );
       }
       return updated;
     } catch (_) {
@@ -89,29 +117,46 @@ class BriefingBriefWriter {
     }
   }
 
-  /// One item's brief, or null when the page could not be read or the model
-  /// gave nothing usable. Null is a real answer — the card shows its hint.
-  Future<String?> _briefFor(BriefingArticle article) async {
+  /// The article page's readable text, or null when it could not be fetched or
+  /// held nothing readable. Null is a real answer, and the only case in which a
+  /// card is left without a short summary.
+  Future<String?> _readable(BriefingArticle article) async {
     try {
       final body = await fetcher.fetch(article.url);
       final extract = extractor.extract(body, url: article.url);
       if (extract.isEmpty) return null;
+      return extract.text;
+    } catch (_) {
+      return null;
+    }
+  }
 
+  /// The model's short brief for [content], or null when the model gave nothing
+  /// usable — in which case the caller drops to the excerpt rung.
+  Future<String?> _modelBrief(BriefingArticle article, String content) async {
+    try {
       final result = await engine.generate(
-        _prompt(title: article.displayTitle, content: extract.text),
+        _prompt(title: article.displayTitle, content: content),
         temperature: temperature,
         topK: topK,
         topP: topP,
       );
       final brief = extractor.stripInvisible(result.text);
       if (brief.isEmpty) return null;
-      return brief.length <= maxBriefChars
-          ? brief
-          : '${brief.substring(0, maxBriefChars).trimRight()}…';
+      return _clip(brief);
     } catch (_) {
       return null;
     }
   }
+
+  /// The article's opening words, whitespace-collapsed and clipped. Verbatim
+  /// source text — no model, so nothing can be hallucinated into it.
+  static String _excerpt(String content) =>
+      _clip(content.replaceAll(RegExp(r'\s+'), ' ').trim());
+
+  static String _clip(String text) => text.length <= maxBriefChars
+      ? text
+      : '${text.substring(0, maxBriefChars).trimRight()}…';
 
   /// Mirrors the laptop's instruction (`axi/briefing.py`): one or two lines, in
   /// Spanish, saying what the article is about — no preamble, no headline

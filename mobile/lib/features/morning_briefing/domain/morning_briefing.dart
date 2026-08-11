@@ -24,6 +24,7 @@ class BriefingArticle {
     this.translatedTitle,
     this.translatedDescription,
     this.generatedBrief,
+    this.sourceExcerpt,
   });
 
   /// Human-readable source name (feed/channel title or "Hacker News").
@@ -72,6 +73,17 @@ class BriefingArticle {
   /// never overwritten by a model's.
   final String? generatedBrief;
 
+  /// The article's OWN opening words, taken verbatim from the fetched page and
+  /// truncated — the last rung of the "there is always a short summary" ladder.
+  ///
+  /// It is used when the feed carried no brief AND the model could not write
+  /// one (it failed, or the run's model budget was already spent). It is stored
+  /// apart from [generatedBrief] on purpose: this text is the SOURCE speaking,
+  /// not the model, and the two must never be confused. Nothing here is ever
+  /// invented — when the page cannot be read, this stays null and the card says
+  /// so plainly.
+  final String? sourceExcerpt;
+
   bool get isHackerNews => (hnObjectId ?? '').isNotEmpty;
 
   /// The headline to render: the cached translation when present, else the
@@ -79,18 +91,27 @@ class BriefingArticle {
   String get displayTitle =>
       (translatedTitle != null && translatedTitle!.trim().isNotEmpty) ? translatedTitle! : title;
 
-  /// The brief to render: the cached translation when present, else the
-  /// feed-native [description].
-  /// The brief to render, in preference order: the cached translation, the
-  /// feed's own words, then the on-device brief written for feeds that carried
-  /// none. The feed always outranks the model — a real summary beats a
-  /// generated one.
+  /// The brief to render — the ladder that keeps a card from ever being blank,
+  /// in strict preference order:
+  ///   1. [translatedDescription] — the feed's own brief, in the app language;
+  ///   2. [description] — the feed's own brief, natively;
+  ///   3. [generatedBrief] — a short brief the on-device model WROTE from the
+  ///      article, for feeds that ship only a headline;
+  ///   4. [sourceExcerpt] — the article's own opening words, verbatim, when the
+  ///      model could not write one;
+  ///   5. empty — the page could not be read at all. The card says that
+  ///      plainly rather than showing invented text.
+  ///
+  /// The feed always outranks the model, and the model always outranks a raw
+  /// excerpt: a real summary beats a written one, which beats a first paragraph.
   String get displayDescription {
     if (translatedDescription != null && translatedDescription!.trim().isNotEmpty) {
       return translatedDescription!;
     }
     if (description.trim().isNotEmpty) return description;
-    return generatedBrief ?? '';
+    final written = generatedBrief?.trim() ?? '';
+    if (written.isNotEmpty) return written;
+    return sourceExcerpt?.trim() ?? '';
   }
 
   /// Stable identity for caching/pending-state lookups across state rebuilds.
@@ -102,6 +123,7 @@ class BriefingArticle {
     String? translatedTitle,
     String? translatedDescription,
     String? generatedBrief,
+    String? sourceExcerpt,
   }) =>
       BriefingArticle(
         sourceName: sourceName,
@@ -115,6 +137,7 @@ class BriefingArticle {
         translatedTitle: translatedTitle ?? this.translatedTitle,
         translatedDescription: translatedDescription ?? this.translatedDescription,
         generatedBrief: generatedBrief ?? this.generatedBrief,
+        sourceExcerpt: sourceExcerpt ?? this.sourceExcerpt,
       );
 
   Map<String, dynamic> toJson() => {
@@ -129,6 +152,7 @@ class BriefingArticle {
         if (translatedTitle != null) 'translatedTitle': translatedTitle,
         if (translatedDescription != null) 'translatedDescription': translatedDescription,
         if (generatedBrief != null) 'generatedBrief': generatedBrief,
+        if (sourceExcerpt != null) 'sourceExcerpt': sourceExcerpt,
       };
 
   factory BriefingArticle.fromJson(Map<String, dynamic> json) => BriefingArticle(
@@ -143,6 +167,7 @@ class BriefingArticle {
         translatedTitle: json['translatedTitle'] as String?,
         translatedDescription: json['translatedDescription'] as String?,
         generatedBrief: json['generatedBrief'] as String?,
+        sourceExcerpt: json['sourceExcerpt'] as String?,
       );
 
   @override
@@ -157,11 +182,14 @@ class BriefingArticle {
       other.fullSummary == fullSummary &&
       other.commentsSummary == commentsSummary &&
       other.translatedTitle == translatedTitle &&
-      other.translatedDescription == translatedDescription;
+      other.translatedDescription == translatedDescription &&
+      other.generatedBrief == generatedBrief &&
+      other.sourceExcerpt == sourceExcerpt;
 
   @override
   int get hashCode => Object.hash(sourceName, title, url, description, publishedAt, hnObjectId,
-      fullSummary, commentsSummary, translatedTitle, translatedDescription);
+      fullSummary, commentsSummary, translatedTitle, translatedDescription, generatedBrief,
+      sourceExcerpt);
 }
 
 /// A run of consecutive articles that share a source, for the grouped card UI

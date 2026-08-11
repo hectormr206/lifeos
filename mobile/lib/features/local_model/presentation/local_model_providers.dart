@@ -5,23 +5,42 @@ import '../data/permission_handler_notification_gateway.dart';
 import '../data/vps_brain_model_gateway.dart';
 import '../domain/brain_model_update_gateway.dart';
 import '../domain/brain_model_version_store.dart';
+import '../domain/llm_request_queue.dart';
 import '../domain/local_llm_engine.dart';
 import '../domain/local_model_preferences.dart';
 import '../domain/notification_permission.dart';
+import '../domain/serial_llm_engine.dart';
 
 /// Immutable config for the on-device model (model URL + backend). Overridable
 /// in tests / to try the Pixel Tensor-G5 NPU build.
 final localModelConfigProvider = Provider<LocalModelConfig>((ref) => const LocalModelConfig());
 
+/// The ONE FIFO queue every piece of on-device model work goes through.
+///
+/// The phone has a single native inference session; chat, briefing translation,
+/// the short-brief writer and the two on-demand summaries all share it. This
+/// queue is what makes a second request WAIT instead of cutting the first one
+/// short. Kept as its own provider (not private to the engine) so a caller can
+/// submit a composite job — e.g. "fetch the page AND summarize it" — as one
+/// slot and show the reader whether it is running or still waiting.
+final llmRequestQueueProvider = Provider<LlmRequestQueue>((ref) => LlmRequestQueue());
+
 /// The single, long-lived on-device engine (roadmap SLICE 1, model lifecycle):
 /// plain (non-autoDispose) Provider so the loaded weights are NOT reloaded per
 /// screen. Disposed with the ProviderContainer via [Ref.onDispose].
 /// Overridden with a `FakeLocalLlmEngine` in tests.
+///
+/// Wrapped in [SerialLlmEngine]: serialization belongs at the engine, because
+/// every feature holds this same instance and a queue in one of them would
+/// leave the rest racing.
 final localLlmEngineProvider = Provider<LocalLlmEngine>((ref) {
   // No `initializer` override → uses the production default, which registers
   // the real `.litertlm` inference engine (LiteRtLmEngine) with flutter_gemma
   // once before the first model load. Tests override this provider with a fake.
-  final engine = FlutterGemmaLlmEngine(ref.watch(localModelConfigProvider));
+  final engine = SerialLlmEngine(
+    FlutterGemmaLlmEngine(ref.watch(localModelConfigProvider)),
+    ref.watch(llmRequestQueueProvider),
+  );
   ref.onDispose(engine.dispose);
   return engine;
 });

@@ -1598,6 +1598,18 @@ abstract class AppLocalizations {
   /// **'Summarizing comments…'**
   String get briefingSummarizingComments;
 
+  /// Shown on a card whose summary was requested while the model is busy with another one: the request is accepted and will run in turn.
+  ///
+  /// In en, this message translates to:
+  /// **'Queued…'**
+  String get briefingSummaryQueued;
+
+  /// No description provided for @briefingSummaryQueuedHint.
+  ///
+  /// In en, this message translates to:
+  /// **'It will start as soon as the current summary finishes.'**
+  String get briefingSummaryQueuedHint;
+
   /// No description provided for @briefingTranslating.
   ///
   /// In en, this message translates to:
@@ -1607,7 +1619,7 @@ abstract class AppLocalizations {
   /// No description provided for @briefingNoSummaryHint.
   ///
   /// In en, this message translates to:
-  /// **'No summary — tap \"See full summary\".'**
+  /// **'No summary: the source carries none and the page could not be read.'**
   String get briefingNoSummaryHint;
 
   /// No description provided for @briefingSkippedSources.

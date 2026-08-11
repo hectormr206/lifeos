@@ -259,8 +259,10 @@ class _SourceSection extends StatelessWidget {
                 key: ValueKey(article.key),
                 article: article,
                 isSummarizing: state.isSummarizingArticle(article.key),
+                isSummaryQueued: state.isQueuedArticle(article.key),
                 summaryError: state.articleErrors[article.key],
                 isSummarizingComments: state.isSummarizingComments(article.key),
+                isCommentsQueued: state.isQueuedComments(article.key),
                 commentsError: state.commentErrors[article.key],
                 onRequestSummary: () => notifier.summarizeArticle(article),
                 onRequestComments: () => notifier.summarizeComments(article),
@@ -301,8 +303,10 @@ class _ArticleCard extends StatefulWidget {
     super.key,
     required this.article,
     required this.isSummarizing,
+    required this.isSummaryQueued,
     required this.summaryError,
     required this.isSummarizingComments,
+    required this.isCommentsQueued,
     required this.commentsError,
     required this.onRequestSummary,
     required this.onRequestComments,
@@ -310,8 +314,14 @@ class _ArticleCard extends StatefulWidget {
 
   final BriefingArticle article;
   final bool isSummarizing;
+
+  /// The summary was requested and is WAITING for the shared model queue —
+  /// deliberately distinct from [isSummarizing], so a reader who tapped two
+  /// cards can see that the second one is coming rather than dead.
+  final bool isSummaryQueued;
   final String? summaryError;
   final bool isSummarizingComments;
+  final bool isCommentsQueued;
   final String? commentsError;
   final VoidCallback onRequestSummary;
   final VoidCallback onRequestComments;
@@ -382,6 +392,9 @@ class _ArticleCardState extends State<_ArticleCard> {
               _SummaryPanel(
                 loading: widget.isSummarizing,
                 loadingLabel: l10n.briefingSummarizing,
+                queued: widget.isSummaryQueued,
+                queuedLabel: l10n.briefingSummaryQueued,
+                queuedHint: l10n.briefingSummaryQueuedHint,
                 error: widget.summaryError,
                 text: article.fullSummary,
               ),
@@ -398,6 +411,9 @@ class _ArticleCardState extends State<_ArticleCard> {
               _SummaryPanel(
                 loading: widget.isSummarizingComments,
                 loadingLabel: l10n.briefingSummarizingComments,
+                queued: widget.isCommentsQueued,
+                queuedLabel: l10n.briefingSummaryQueued,
+                queuedHint: l10n.briefingSummaryQueuedHint,
                 error: widget.commentsError,
                 text: article.commentsSummary,
               ),
@@ -504,16 +520,29 @@ class _ActionRow extends StatelessWidget {
   }
 }
 
+/// The box under a "ver resumen" action. It has FOUR distinct looks, because
+/// the reader has to be able to tell them apart at a glance:
+///   * WAITING — the request is accepted and queued behind another summary:
+///     a clock icon and "En cola…", no spinner (nothing is being computed yet);
+///   * RUNNING — a spinner and "Resumiendo…";
+///   * DONE — the summary text;
+///   * FAILED — the error message.
 class _SummaryPanel extends StatelessWidget {
   const _SummaryPanel({
     required this.loading,
     required this.loadingLabel,
+    required this.queued,
+    required this.queuedLabel,
+    required this.queuedHint,
     required this.error,
     required this.text,
   });
 
   final bool loading;
   final String loadingLabel;
+  final bool queued;
+  final String queuedLabel;
+  final String queuedHint;
   final String? error;
   final String? text;
 
@@ -521,7 +550,29 @@ class _SummaryPanel extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     Widget child;
-    if (loading) {
+    if (queued) {
+      // No spinner: nothing is running yet. A clock says "your turn is coming"
+      // where a spinner would claim work that has not started.
+      child = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.schedule, size: 16, color: theme.hintColor),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(queuedLabel, style: theme.textTheme.bodySmall),
+                Text(
+                  queuedHint,
+                  style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    } else if (loading) {
       child = Row(
         children: [
           const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),

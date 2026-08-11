@@ -2,6 +2,8 @@
 // COLLAPSIBLE accordion header "<Source> (<count>)" (collapsed by default,
 // expanding to reveal the item cards), and an item with no brief shows a subtle
 // hint instead of an empty box.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -72,13 +74,19 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
       ],
     );
 
-Widget _app([OnDeviceBriefing? briefing]) => ProviderScope(
+Widget _app([
+  OnDeviceBriefing? briefing,
+  FakeLocalLlmEngine? engine,
+  FakeSourceFetcher? fetcher,
+]) =>
+    ProviderScope(
       overrides: [
         morningBriefingPreferencesProvider.overrideWithValue(
           FakeMorningBriefingPreferences(initialBriefing: briefing ?? _briefing()),
         ),
-        localLlmEngineProvider.overrideWithValue(FakeLocalLlmEngine(installed: true)),
-        sourceFetcherProvider.overrideWithValue(FakeSourceFetcher()),
+        localLlmEngineProvider
+            .overrideWithValue(engine ?? FakeLocalLlmEngine(installed: true)),
+        sourceFetcherProvider.overrideWithValue(fetcher ?? FakeSourceFetcher()),
         briefingNotificationsProvider.overrideWithValue(FakeBriefingNotifications()),
         briefingSchedulerProvider.overrideWithValue(FakeBriefingScheduler()),
         clockProvider.overrideWithValue(_FixedClock(DateTime(2026, 7, 22, 9))),
@@ -211,6 +219,46 @@ void main() {
     expect(find.text('Copiar enlace'), findsOneWidget);
   });
 
+  // THE REPORTED BUG. Two taps in quick succession used to leave the first
+  // summary cut short. Now the second WAITS — and the card has to say so, or
+  // the wait is indistinguishable from a dead tap.
+  testWidgets('a second summary tap shows "en cola" while the first one runs',
+      (tester) async {
+    final gate = Completer<void>();
+    final engine = FakeLocalLlmEngine(
+      installed: true,
+      generateGate: gate,
+      reply: (_) => 'Resumen listo',
+    );
+    const page = '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>';
+    final fetcher = FakeSourceFetcher(bodies: {
+      'https://a.com/1': page,
+      'https://a.com/2': page,
+    });
+
+    await tester.pumpWidget(_app(_briefing(), engine, fetcher));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Fuente A (2)'));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Ver resumen completo').first);
+    await tester.pump();
+    await tester.tap(find.text('Ver resumen completo').last);
+    await tester.pump();
+    await tester.pump();
+
+    // The first is running, the second is visibly waiting its turn.
+    expect(find.text('Resumiendo…'), findsOneWidget);
+    expect(find.text('En cola…'), findsOneWidget);
+
+    gate.complete();
+    await tester.pumpAndSettle();
+
+    // Both finish; nothing was dropped.
+    expect(find.text('Resumen listo'), findsNWidgets(2));
+    expect(find.text('En cola…'), findsNothing);
+    expect(find.text('Resumiendo…'), findsNothing);
+  });
 }
 
 /// Records launched URLs so the article link can be verified without a real

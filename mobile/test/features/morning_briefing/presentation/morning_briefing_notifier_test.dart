@@ -2,6 +2,8 @@
 // NO bulk model summarization (fetch + parse + freshness + group only), the
 // model runs ONLY on demand per item, and the on-demand full-article + HN
 // comments summaries are cached back onto the article.
+import 'dart:async';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/clock/clock.dart';
@@ -455,6 +457,155 @@ void main() {
       expect(prompt, contains('Hello world'), reason: 'description cleaned to plain text');
       expect(prompt, isNot(contains('<')), reason: 'no raw tags reach the model');
       expect(prompt, isNot(contains('&lt;')), reason: 'no escaped tags reach the model');
+    });
+  });
+
+  group('on-demand summaries queue instead of racing', () {
+    /// Two Spanish sources (no translation model calls to muddy the counts),
+    /// each with one article whose page can be fetched on demand.
+    ProviderContainer twoArticleContainer(FakeLocalLlmEngine engine) {
+      final page = '<html><head><title>Art</title></head>'
+          '<body><p>Cuerpo del artículo largo y legible.</p></body></html>';
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
+        'https://b.com/rss': _datedRss('Fuente B', 'Noticia B1', today),
+        hnFrontPageUrl: '{"hits":[]}',
+        'https://ex.com/${'Noticia A1'.hashCode}': page,
+        'https://ex.com/${'Noticia B1'.hashCode}': page,
+      });
+      return _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: FakeMorningBriefingPreferences(
+          initialSources: ['https://a.com/rss', 'https://b.com/rss'],
+        ),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+    }
+
+    test('a second tap WAITS in the queue; both summaries complete', () async {
+      // The reported bug: tapping a second "ver resumen completo" while the
+      // first is still running cut the first one short ("se queda mocho").
+      final gate = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        generateGate: gate,
+        reply: (p) => 'Resumen de ${p.contains('A1') ? 'A1' : 'B1'}',
+      );
+      final container = twoArticleContainer(engine);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      final articles = container.read(morningBriefingNotifierProvider).briefing!.articles;
+      final first = articles.firstWhere((a) => a.title == 'Noticia A1');
+      final second = articles.firstWhere((a) => a.title == 'Noticia B1');
+
+      final f1 = notifier.summarizeArticle(first);
+      final f2 = notifier.summarizeArticle(second);
+      await pumpEventQueue();
+
+      var state = container.read(morningBriefingNotifierProvider);
+      expect(state.isSummarizingArticle(first.key), isTrue, reason: 'the first is running');
+      expect(state.isQueuedArticle(second.key), isTrue,
+          reason: 'the second is visibly waiting its turn, not running');
+      expect(state.isSummarizingArticle(second.key), isFalse);
+      expect(engine.generateCount, 1, reason: 'never two generations at once');
+
+      gate.complete();
+      await Future.wait([f1, f2]);
+
+      state = container.read(morningBriefingNotifierProvider);
+      expect(state.briefing!.articleForKey(first.key)!.fullSummary, 'Resumen de A1');
+      expect(state.briefing!.articleForKey(second.key)!.fullSummary, 'Resumen de B1',
+          reason: 'the queued request is served, never dropped');
+      expect(state.isQueuedArticle(second.key), isFalse);
+      expect(state.isSummarizingArticle(second.key), isFalse);
+    });
+
+    test('a queued comments summary is reported as waiting, then runs', () async {
+      final gate = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        generateGate: gate,
+        reply: (_) => 'Resumen',
+      );
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
+        // A Spanish HN headline: generation must not spend a (gated) model call
+        // on translation, so the gate only ever holds the on-demand summaries.
+        hnFrontPageUrl: '{"hits":[{"objectID":"42",'
+            '"title":"La economía de España crece hoy",'
+            '"url":"https://ext.com/story",'
+            '"created_at":"${today.toUtc().toIso8601String()}"}]}',
+        'https://ex.com/${'Noticia A1'.hashCode}':
+            '<html><body><p>Cuerpo del artículo largo.</p></body></html>',
+        // ext.com is deliberately NOT fetchable: the brief writer must not
+        // spend the (gated) model on it before the on-demand summaries run.
+        '${hnItemUrlPrefix}42': '{"children":[{"author":"alice","text":"Gran punto"}]}',
+      });
+      final container = _container(
+        engine: engine,
+        fetcher: fetcher,
+        prefs: FakeMorningBriefingPreferences(initialSources: ['https://a.com/rss']),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      final state0 = container.read(morningBriefingNotifierProvider);
+      final article = state0.briefing!.articles.firstWhere((a) => a.title == 'Noticia A1');
+      final hn = state0.briefing!.articles.firstWhere((a) => a.isHackerNews);
+
+      final f1 = notifier.summarizeArticle(article);
+      final f2 = notifier.summarizeComments(hn);
+      await pumpEventQueue();
+
+      var state = container.read(morningBriefingNotifierProvider);
+      expect(state.isSummarizingArticle(article.key), isTrue);
+      expect(state.isQueuedComments(hn.key), isTrue,
+          reason: 'the comments summary shares the model, so it waits too');
+      expect(state.isSummarizingComments(hn.key), isFalse);
+
+      gate.complete();
+      await Future.wait([f1, f2]);
+
+      state = container.read(morningBriefingNotifierProvider);
+      expect(state.briefing!.articleForKey(hn.key)!.commentsSummary, 'Resumen');
+      expect(state.isQueuedComments(hn.key), isFalse);
+    });
+
+    test('a re-tap while queued does not enqueue the same article twice', () async {
+      final gate = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        generateGate: gate,
+        reply: (_) => 'Resumen',
+      );
+      final container = twoArticleContainer(engine);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+
+      final articles = container.read(morningBriefingNotifierProvider).briefing!.articles;
+      final first = articles.firstWhere((a) => a.title == 'Noticia A1');
+      final second = articles.firstWhere((a) => a.title == 'Noticia B1');
+
+      final futures = [
+        notifier.summarizeArticle(first),
+        notifier.summarizeArticle(second),
+        notifier.summarizeArticle(second),
+      ];
+      await pumpEventQueue();
+      gate.complete();
+      await Future.wait(futures);
+
+      expect(engine.generateCount, 2, reason: 'the duplicate tap was ignored, not re-queued');
     });
   });
 

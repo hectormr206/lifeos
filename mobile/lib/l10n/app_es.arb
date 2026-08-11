@@ -322,8 +322,13 @@
   "briefingHideCommentsSummary": "Ocultar resumen de comentarios",
   "briefingSummarizing": "Resumiendo…",
   "briefingSummarizingComments": "Resumiendo comentarios…",
+  "briefingSummaryQueued": "En cola…",
+  "@briefingSummaryQueued": {
+    "description": "Shown on a card whose summary was requested while the model is busy with another one: the request is accepted and will run in turn."
+  },
+  "briefingSummaryQueuedHint": "Empezará en cuanto termine el resumen en curso.",
   "briefingTranslating": "Traduciendo…",
-  "briefingNoSummaryHint": "Sin resumen — toca \"Ver resumen completo\".",
+  "briefingNoSummaryHint": "Sin resumen: la fuente no lo trae y no se pudo leer la página.",
   "briefingSkippedSources": "Sin novedades hoy: {sources}",
   "@briefingSkippedSources": {
     "placeholders": { "sources": { "type": "String" } }

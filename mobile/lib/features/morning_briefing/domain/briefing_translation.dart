@@ -5,8 +5,9 @@ import 'morning_briefing.dart';
 /// Eager per-source title/brief translation of an assembled briefing — the
 /// SECOND stage of the pipeline, after fetch+assemble.
 ///
-/// Extracted from the notifier so the SAME translation (same-language skip,
-/// `title ||| brief` packing, per-slot fallback, source de-duplication) runs
+/// Extracted from the notifier so the SAME translation (per-article
+/// same-language skip, `title ||| brief` packing, per-slot fallback, source
+/// de-duplication) runs
 /// both in the foreground (`MorningBriefingNotifier.generate`, with a
 /// progress-label callback) and in the headless WorkManager background task.
 ///
@@ -59,7 +60,8 @@ class BriefingTranslationPipeline {
   }
 
   /// Translates one source's articles inside [briefing], returning an updated
-  /// briefing. Cheap same-language sources are skipped (no model call). Each
+  /// briefing. Articles ALREADY in the target language are skipped one by one
+  /// (a source with none left to translate costs no model call). Each
   /// description is re-cleaned of raw/escaped HTML before it reaches the model
   /// (messy feeds like Simon Willison's ship escaped tags in `<description>`),
   /// so the model gets plain text and translates reliably. Any per-slot miss
@@ -72,19 +74,27 @@ class BriefingTranslationPipeline {
     final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
     if (articles.isEmpty) return briefing;
 
-    // Cheap same-language detection: skip feeds already in the target language.
-    final sample = articles.map((a) => '${a.title} ${a.description}').join('\n');
-    if (looksTargetLanguage(sample, languageCode)) return briefing;
-
-    // Pack each article as `title ||| cleanBrief` (brief omitted when empty),
-    // cleaning the brief of any raw/escaped HTML first.
+    // Cheap same-language detection, decided PER ARTICLE.
+    //
+    // It used to be decided once per source, from a sample of all of them: one
+    // Spanish item in a mostly-English feed (or a Spanish site quoting an
+    // English headline) then skipped the WHOLE source, and those items stayed
+    // in their original language for good. A feed is not a language.
+    //
+    // Pack each article to translate as `title ||| cleanBrief` (brief omitted
+    // when empty), cleaning the brief of any raw/escaped HTML first.
+    final pending = <int>[];
     final inputs = <String>[];
-    final cleaned = <String>[];
-    for (final a in articles) {
+    final cleaned = List<String>.filled(articles.length, '');
+    for (var i = 0; i < articles.length; i++) {
+      final a = articles[i];
       final brief = extractor.cleanBrief(a.description);
-      cleaned.add(brief);
+      cleaned[i] = brief;
+      if (looksTargetLanguage('${a.title} $brief', languageCode)) continue;
+      pending.add(i);
       inputs.add(brief.isNotEmpty ? '${a.title} ||| $brief' : a.title);
     }
+    if (pending.isEmpty) return briefing;
 
     final translated = await translator.translate(
       inputs,
@@ -95,8 +105,9 @@ class BriefingTranslationPipeline {
     );
 
     var updated = briefing;
-    for (var i = 0; i < articles.length; i++) {
-      final line = translated[i];
+    for (var slot = 0; slot < pending.length; slot++) {
+      final i = pending[slot];
+      final line = translated[slot];
       if (line == null) continue; // keep native text for this slot
       final parts = line.split('|||');
       // Model output gets the same invisible-character scrub as feed text: a
@@ -121,10 +132,11 @@ class BriefingTranslationPipeline {
     return updated;
   }
 
-  /// Cheap language guess for the same-language skip. Returns true when [text]
-  /// already looks like [code]'s language, so no translation is needed. Biased
-  /// to translate when there is no positive evidence of the target language
-  /// (short English HN headlines have no Spanish signal → translate to es).
+  /// Cheap language guess for the PER-ARTICLE same-language skip. Returns true
+  /// when [text] already looks like [code]'s language, so no translation is
+  /// needed. Biased to translate when there is no positive evidence of the
+  /// target language (short English HN headlines have no Spanish signal →
+  /// translate to es).
   static bool looksTargetLanguage(String text, String code) {
     final lower = text.toLowerCase();
     if (lower.trim().isEmpty) return true; // nothing to translate

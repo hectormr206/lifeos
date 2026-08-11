@@ -25,8 +25,27 @@ class OnDeviceTranslator {
   static const int defaultTopK = 20;
   static const double defaultTopP = 0.9;
 
-  /// Translates [inputs] into [languageCode]'s language in one batched call.
-  /// See the class contract for the per-slot fallback semantics.
+  /// Max items in one batched call.
+  ///
+  /// WHY BOUNDED. The engine caps a generation at `maxOutputTokens`; a batch
+  /// whose translation is longer than that cap comes back with its LAST lines
+  /// missing, and those slots silently kept their original language. That is
+  /// the "some items don't get translated" the user reported, and it hit the
+  /// tail of a source every time. Small batches keep each answer well inside
+  /// the cap.
+  static const int maxItemsPerBatch = 4;
+
+  /// Max input characters in one batched call — the same protection as
+  /// [maxItemsPerBatch] for sources whose briefs are long.
+  static const int maxCharsPerBatch = 600;
+
+  /// Upper bound on per-slot retries in one call, so a model that answers
+  /// nothing useful cannot turn one translation into an unbounded loop.
+  static const int maxSlotRetries = 12;
+
+  /// Translates [inputs] into [languageCode]'s language, in bounded batches,
+  /// retrying any slot that came back missing ON ITS OWN before giving up on
+  /// it. See the class contract for the per-slot fallback semantics.
   Future<List<String?>> translate(
     List<String> inputs, {
     required String languageCode,
@@ -35,22 +54,104 @@ class OnDeviceTranslator {
     double topP = defaultTopP,
   }) async {
     if (inputs.isEmpty) return const [];
+    final out = List<String?>.filled(inputs.length, null);
     try {
       await _engine.load();
+    } catch (_) {
+      // No model: keep every original (all-null result).
+      return out;
+    }
+
+    for (final batch in _batches(inputs)) {
+      try {
+        final result = await _engine.generate(
+          _prompt([for (final i in batch) inputs[i]], languageCode),
+          temperature: temperature,
+          topK: topK,
+          topP: topP,
+        );
+        final parsed = parseNumbered(result.text);
+        for (var j = 0; j < batch.length; j++) {
+          out[batch[j]] = _nonEmpty(parsed[j + 1]);
+        }
+      } catch (_) {
+        // This batch produced nothing; its slots fall to the retry below.
+      }
+    }
+
+    var retries = 0;
+    for (var i = 0; i < inputs.length && retries < maxSlotRetries; i++) {
+      if (out[i] != null) continue;
+      if (inputs[i].trim().isEmpty) continue; // nothing to translate
+      retries++;
+      out[i] = await _translateOne(inputs[i], languageCode, temperature, topK, topP);
+    }
+    return out;
+  }
+
+  /// Index groups for the batched calls, bounded by item count AND size.
+  List<List<int>> _batches(List<String> inputs) {
+    final batches = <List<int>>[];
+    var current = <int>[];
+    var chars = 0;
+    for (var i = 0; i < inputs.length; i++) {
+      final length = inputs[i].length;
+      if (current.isNotEmpty &&
+          (current.length >= maxItemsPerBatch || chars + length > maxCharsPerBatch)) {
+        batches.add(current);
+        current = <int>[];
+        chars = 0;
+      }
+      current.add(i);
+      chars += length;
+    }
+    if (current.isNotEmpty) batches.add(current);
+    return batches;
+  }
+
+  /// One item on its own — the recovery path for a slot the batch lost. Asking
+  /// for a single line makes the output cap a non-issue, so a translation that
+  /// was merely truncated away comes back.
+  Future<String?> _translateOne(
+    String input,
+    String languageCode,
+    double temperature,
+    int topK,
+    double topP,
+  ) async {
+    try {
       final result = await _engine.generate(
-        _prompt(inputs, languageCode),
+        _singlePrompt(input, languageCode),
         temperature: temperature,
         topK: topK,
         topP: topP,
       );
-      final parsed = parseNumbered(result.text);
-      return [
-        for (var i = 0; i < inputs.length; i++) _nonEmpty(parsed[i + 1]),
-      ];
+      return _firstUsableLine(result.text);
     } catch (_) {
-      // Whole-batch failure: keep every original (all-null result).
-      return List<String?>.filled(inputs.length, null);
+      return null;
     }
+  }
+
+  String _singlePrompt(String input, String languageCode) {
+    final target = languageCode == 'en' ? 'English' : 'neutral Spanish';
+    return 'Translate the following text to $target. Keep any separators or '
+        'punctuation inside it. If it is already in $target, return it '
+        'unchanged. Answer with the translation only, on a single line, with no '
+        'numbering, quotes or commentary.\n\n$input';
+  }
+
+  /// The first line of a single-item answer, with any stray `N.` numbering the
+  /// model added stripped off. Null when nothing usable came back.
+  static String? _firstUsableLine(String out) {
+    for (final raw in out.split('\n')) {
+      final line = raw.trim();
+      if (line.isEmpty) continue;
+      final numbered = RegExp(r'^\s*\d+[.)]\s*(.*)$').firstMatch(line);
+      final text = (numbered == null ? line : numbered.group(1)!).trim();
+      if (text.isEmpty) continue;
+      return text;
+    }
+    return null;
   }
 
   /// Builds the batched translation prompt: a numbered list, asking the model to

@@ -158,8 +158,12 @@ void main() {
     });
   });
 
-  group('a failure never costs the user the briefing', () {
-    test('no model on the device → every card keeps its hint, news intact', () async {
+  // The user's requirement, in his words: "este resumen corto debe estar
+  // siempre". A card is never left with nothing while ANY honest source of
+  // text remains — and the ladder never invents one.
+  group('the short summary is always there when the page can be read', () {
+    test('no model on the device → the article\'s own opening words, not a blank',
+        () async {
       final engine = _FakeEngine(failsLoad: true);
       final briefing = _briefing(const [
         BriefingArticle(sourceName: 'HF', title: 'Sigue aquí', url: 'https://hf.co/1'),
@@ -168,8 +172,50 @@ void main() {
       final out = await _writer(engine, _FakeFetcher()).fillMissing(briefing);
 
       expect(out.articles.single.title, 'Sigue aquí');
+      expect(out.articles.single.displayDescription, contains('El cuerpo del artículo'),
+          reason: 'the page WAS read, so its own first words are shown');
+      expect(out.articles.single.generatedBrief, isNull,
+          reason: 'an excerpt is the source speaking, never presented as a model brief');
+    });
+
+    test('a model failure falls back to the excerpt, never to a fabricated brief', () async {
+      final engine = _FakeEngine(answer: '   ');
+      final out = await _writer(engine, _FakeFetcher()).fillMissing(_briefing(const [
+        BriefingArticle(sourceName: 'HF', title: 'T', url: 'https://hf.co/1'),
+      ]));
+
+      expect(out.articles.single.generatedBrief, isNull);
+      expect(out.articles.single.sourceExcerpt, contains('El cuerpo del artículo'));
+      expect(out.articles.single.displayDescription, isNotEmpty);
+    });
+
+    test('past the model budget, items still get an excerpt instead of nothing', () async {
+      final engine = _FakeEngine();
+      final many = List.generate(
+        BriefingBriefWriter.maxBriefsPerRun + 5,
+        (i) => BriefingArticle(sourceName: 'HF', title: 'T$i', url: 'https://hf.co/$i'),
+      );
+
+      final out = await _writer(engine, _FakeFetcher()).fillMissing(_briefing(many));
+
+      expect(engine.prompts, hasLength(BriefingBriefWriter.maxBriefsPerRun),
+          reason: 'the model budget still bounds battery cost');
+      expect(out.articles.where((a) => a.displayDescription.isEmpty), isEmpty,
+          reason: 'no card is left with nothing when its page could be read');
+    });
+
+    test('a page that cannot be read is the ONE honest gap: no text is invented', () async {
+      final engine = _FakeEngine(answer: 'Un resumen inventado.');
+      final out = await _writer(engine, _FakeFetcher(fails: true)).fillMissing(_briefing(const [
+        BriefingArticle(sourceName: 'HF', title: 'Uno', url: 'https://hf.co/1'),
+      ]));
+
+      expect(engine.prompts, isEmpty, reason: 'never summarize a page we could not read');
       expect(out.articles.single.displayDescription, isEmpty);
     });
+  });
+
+  group('a failure never costs the user the briefing', () {
 
     test('a page that cannot be fetched leaves THAT item blank, not the rest', () async {
       final engine = _FakeEngine(answer: 'Resumen bueno.');
@@ -214,8 +260,9 @@ void main() {
 
       final out = await _writer(engine, _FakeFetcher()).fillMissing(_briefing(many));
 
-      // Not silently dropped: the extras render the same "sin resumen" hint
-      // they render today, which is visible on the card.
+      // The MODEL budget is what is capped. The extras are not silently
+      // dropped — they fall to the next rung of the ladder (the page's own
+      // opening words), which is asserted in the "always there" group above.
       expect(engine.prompts, hasLength(BriefingBriefWriter.maxBriefsPerRun));
       expect(out.articles.where((a) => a.generatedBrief == null), hasLength(5));
     });

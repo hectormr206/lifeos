@@ -834,10 +834,18 @@ class AppLocalizationsEn extends AppLocalizations {
   String get briefingSummarizingComments => 'Summarizing comments…';
 
   @override
+  String get briefingSummaryQueued => 'Queued…';
+
+  @override
+  String get briefingSummaryQueuedHint =>
+      'It will start as soon as the current summary finishes.';
+
+  @override
   String get briefingTranslating => 'Translating…';
 
   @override
-  String get briefingNoSummaryHint => 'No summary — tap \"See full summary\".';
+  String get briefingNoSummaryHint =>
+      'No summary: the source carries none and the page could not be read.';
 
   @override
   String briefingSkippedSources(String sources) {
