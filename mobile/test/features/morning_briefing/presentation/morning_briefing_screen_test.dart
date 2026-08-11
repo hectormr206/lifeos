@@ -7,6 +7,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:go_router/go_router.dart';
 import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
@@ -74,29 +75,57 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
       ],
     );
 
-Widget _app([
+/// Wraps [app] in the fully faked provider scope. Returns the whole scoped
+/// widget rather than a bare override list because Riverpod 3 does not export
+/// `Override` publicly, so a `List<Override>` helper cannot be given a real
+/// return type.
+Widget _scoped(
+  Widget app, {
   OnDeviceBriefing? briefing,
   FakeLocalLlmEngine? engine,
   FakeSourceFetcher? fetcher,
-]) =>
+}) =>
     ProviderScope(
       overrides: [
         morningBriefingPreferencesProvider.overrideWithValue(
           FakeMorningBriefingPreferences(initialBriefing: briefing ?? _briefing()),
         ),
-        localLlmEngineProvider
-            .overrideWithValue(engine ?? FakeLocalLlmEngine(installed: true)),
+        localLlmEngineProvider.overrideWithValue(engine ?? FakeLocalLlmEngine(installed: true)),
         sourceFetcherProvider.overrideWithValue(fetcher ?? FakeSourceFetcher()),
         briefingNotificationsProvider.overrideWithValue(FakeBriefingNotifications()),
         briefingSchedulerProvider.overrideWithValue(FakeBriefingScheduler()),
         clockProvider.overrideWithValue(_FixedClock(DateTime(2026, 7, 22, 9))),
       ],
-      child: const MaterialApp(
+      child: app,
+    );
+
+Widget _app([
+  OnDeviceBriefing? briefing,
+  FakeLocalLlmEngine? engine,
+  FakeSourceFetcher? fetcher,
+]) =>
+    _scoped(
+      const MaterialApp(
         locale: Locale('es'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: MorningBriefingScreen(),
       ),
+      briefing: briefing,
+      engine: engine,
+      fetcher: fetcher,
+    );
+
+/// The same screen behind a real [GoRouter], so a deep link out of the card
+/// (the "descargar un modelo" action) can actually be followed in a test.
+Widget _routerApp(GoRouter router, [FakeLocalLlmEngine? engine]) => _scoped(
+      MaterialApp.router(
+        locale: const Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        routerConfig: router,
+      ),
+      engine: engine,
     );
 
 void main() {
@@ -258,6 +287,108 @@ void main() {
     expect(find.text('Resumen listo'), findsNWidgets(2));
     expect(find.text('En cola…'), findsNothing);
     expect(find.text('Resumiendo…'), findsNothing);
+  });
+
+  // THE REPORTED BUG (build 799). Every failure read "No se pudo generar el
+  // resumen. Inténtalo de nuevo.", there was no way to try again except
+  // collapsing and reopening the panel, and the retry failed so fast that the
+  // screen never appeared to change.
+  group('a failed summary says WHAT failed and what to do about it', () {
+    /// Opens "Fuente A" and taps the first "Ver resumen completo".
+    Future<void> requestFirstSummary(WidgetTester tester) async {
+      await tester.tap(find.text('Fuente A (2)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ver resumen completo').first);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('no model installed: it says so and offers the DOWNLOAD, not a retry',
+        (tester) async {
+      await tester.pumpWidget(_app(_briefing(), FakeLocalLlmEngine(installed: false)));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      expect(find.textContaining('no hay ningún modelo instalado'), findsOneWidget);
+      expect(find.text('Descargar un modelo'), findsOneWidget);
+      expect(find.text('Reintentar'), findsNothing,
+          reason: 'without a model, a retry fails identically forever');
+    });
+
+    testWidgets('the download action opens the local-model screen', (tester) async {
+      final router = GoRouter(
+        routes: [
+          GoRoute(path: '/', builder: (_, _) => const MorningBriefingScreen()),
+          GoRoute(
+            path: '/settings/local-model',
+            builder: (_, _) => const Scaffold(body: Text('pantalla del modelo')),
+          ),
+        ],
+      );
+      await tester.pumpWidget(_routerApp(router, FakeLocalLlmEngine(installed: false)));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      await tester.tap(find.text('Descargar un modelo'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('pantalla del modelo'), findsOneWidget);
+    });
+
+    testWidgets('an unreadable page says it is permanent and offers no retry', (tester) async {
+      final fetcher = FakeSourceFetcher(bodies: {'https://a.com/1': '<html><body></body></html>'});
+      await tester.pumpWidget(
+          _app(_briefing(), FakeLocalLlmEngine(installed: true), fetcher));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      expect(find.textContaining('no tiene texto legible'), findsOneWidget);
+      expect(find.text('Reintentar'), findsNothing);
+      expect(find.text('Reintentar no cambiaría el resultado.'), findsOneWidget);
+    });
+
+    testWidgets('reopening the panel does NOT silently re-run a permanent failure',
+        (tester) async {
+      // Collapsing and reopening used to be the ONLY way to retry, so it
+      // re-ran everything. For a page that will never be readable that is a
+      // pointless fetch the user did not ask for.
+      final fetcher = FakeSourceFetcher(bodies: {'https://a.com/1': '<html><body></body></html>'});
+      await tester.pumpWidget(_app(_briefing(), FakeLocalLlmEngine(installed: true), fetcher));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+      expect(fetcher.fetched.where((u) => u == 'https://a.com/1').length, 1);
+
+      await tester.tap(find.text('Ocultar resumen completo').first);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ver resumen completo').first);
+      await tester.pumpAndSettle();
+
+      expect(fetcher.fetched.where((u) => u == 'https://a.com/1').length, 1);
+      // …and the explanation is still there when it reopens.
+      expect(find.textContaining('no tiene texto legible'), findsOneWidget);
+    });
+
+    testWidgets('a transient failure offers "Reintentar", and a repeat failure is visible',
+        (tester) async {
+      // The page cannot be fetched: a real "try again" case.
+      final engine = FakeLocalLlmEngine(installed: true);
+      final fetcher = FakeSourceFetcher(failing: {'https://a.com/1'});
+      await tester.pumpWidget(_app(_briefing(), engine, fetcher));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      expect(find.textContaining('No se pudo descargar la página'), findsOneWidget);
+      expect(find.text('Reintentar'), findsOneWidget);
+      // First failure: no attempt line to shout about yet.
+      expect(find.textContaining('Volvió a fallar'), findsNothing);
+
+      await tester.tap(find.text('Reintentar'));
+      await tester.pumpAndSettle();
+
+      // It really ran again, and the card SAYS so — otherwise the identical
+      // red line reads as a tap that did nothing.
+      expect(fetcher.fetched.where((u) => u == 'https://a.com/1').length, 2);
+      expect(find.text('Volvió a fallar (intento 2).'), findsOneWidget);
+    });
   });
 }
 

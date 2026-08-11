@@ -8,6 +8,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
+import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
+import 'package:lifeos/features/morning_briefing/domain/summary_failure.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_notifier.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_providers.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
@@ -606,6 +608,204 @@ void main() {
       await Future.wait(futures);
 
       expect(engine.generateCount, 2, reason: 'the duplicate tap was ignored, not re-queued');
+    });
+  });
+
+  // THE REPORTED BUG. Every on-demand failure used to land on one string —
+  // "No se pudo generar el resumen. Inténtalo de nuevo." — so a phone with no
+  // model installed looked exactly like a paywalled page. The five causes are
+  // different problems with different answers, and the state must say which.
+  group('on-demand summary failures name their cause', () {
+    /// One Spanish source (no translation model calls) whose single article
+    /// page is [page], plus whatever [failing] URLs should blow up.
+    ProviderContainer articleContainer(
+      FakeLocalLlmEngine engine, {
+      String page = '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>',
+      Set<String> failing = const {},
+    }) =>
+        _container(
+          engine: engine,
+          fetcher: FakeSourceFetcher(
+            bodies: {
+              'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
+              hnFrontPageUrl: '{"hits":[]}',
+              'https://ex.com/${'Noticia A1'.hashCode}': page,
+            },
+            failing: failing,
+          ),
+          prefs: FakeMorningBriefingPreferences(initialSources: ['https://a.com/rss']),
+          notifications: FakeBriefingNotifications(),
+          now: now,
+          languageCode: 'es',
+        );
+
+    Future<(MorningBriefingNotifier, ProviderContainer, BriefingArticle)> ready(
+      ProviderContainer container,
+    ) async {
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      final article = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .articles
+          .firstWhere((a) => a.title == 'Noticia A1');
+      return (notifier, container, article);
+    }
+
+    // THE USER'S ACTUAL FAILURE: no model downloaded. This has to be its own
+    // cause, because the answer is "download one", not "try again".
+    test('no model installed is reported as such, and is NOT retryable', () async {
+      final engine = FakeLocalLlmEngine(installed: false);
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.modelMissing);
+      expect(failure.failure.recovery, SummaryRecovery.installModel,
+          reason: 'retrying without a model fails identically forever');
+      expect(engine.generateCount, 0);
+    });
+
+    test('an installed model that will not load is its own cause', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.modelUnavailable);
+      expect(failure.failure.recovery, SummaryRecovery.retry);
+    });
+
+    test('a page that cannot be fetched is a transient network failure', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+      final container = articleContainer(engine, failing: {'https://ex.com/${'Noticia A1'.hashCode}'});
+      final (notifier, _, article) = await ready(container);
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.pageUnavailable);
+      expect(failure.failure.recovery, SummaryRecovery.retry);
+    });
+
+    // A page with nothing readable will never become readable by tapping
+    // again: this is a permanent outcome and must not invite a retry loop.
+    test('a page with no readable text is permanent, not retryable', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+      final container = articleContainer(engine, page: '<html><body></body></html>');
+      final (notifier, _, article) = await ready(container);
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.pageUnreadable);
+      expect(failure.failure.recovery, SummaryRecovery.none);
+    });
+
+    test('a model that writes nothing is reported as an empty generation', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => '   ');
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.emptyGeneration);
+      expect(failure.failure.recovery, SummaryRecovery.retry);
+    });
+
+    // The retry that "did nothing": it DID run, failed again in milliseconds,
+    // and rewrote the identical string. The attempt count is what makes the
+    // second failure distinguishable from a dead tap.
+    test('a repeated failure counts the attempts', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+      expect(container.read(morningBriefingNotifierProvider).articleFailures[article.key]!.attempt, 1);
+
+      await notifier.summarizeArticle(article);
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.attempt, 2, reason: 'the second tap was taken, not swallowed');
+      expect(engine.loadCount, 2, reason: 'it really did try again');
+    });
+
+    test('a successful retry clears the failure and its attempt count', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true, reply: (_) => 'Resumen');
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+      engine.loadShouldFail = false;
+      await notifier.summarizeArticle(article);
+
+      final state = container.read(morningBriefingNotifierProvider);
+      expect(state.articleFailures[article.key], isNull);
+      expect(state.briefing!.articleForKey(article.key)!.fullSummary, 'Resumen');
+    });
+
+    test('an HN thread with no comments is permanent, not retryable', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+      final container = _container(
+        engine: engine,
+        fetcher: FakeSourceFetcher(bodies: {
+          hnFrontPageUrl: '{"hits":[{"objectID":"42",'
+              '"title":"La economía de España crece hoy",'
+              '"url":"https://ext.com/story",'
+              '"created_at":"${today.toUtc().toIso8601String()}"}]}',
+          '${hnItemUrlPrefix}42': '{"children":[]}',
+        }),
+        prefs: FakeMorningBriefingPreferences(initialSources: const []),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      final hn = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .articles
+          .firstWhere((a) => a.isHackerNews);
+
+      await notifier.summarizeComments(hn);
+
+      final failure = container.read(morningBriefingNotifierProvider).commentFailures[hn.key]!;
+      expect(failure.failure, SummaryFailure.commentsMissing);
+      expect(failure.failure.recovery, SummaryRecovery.none);
+    });
+
+    test('the comments summary reports a missing model the same way', () async {
+      final engine = FakeLocalLlmEngine(installed: false);
+      final container = _container(
+        engine: engine,
+        fetcher: FakeSourceFetcher(bodies: {
+          hnFrontPageUrl: '{"hits":[{"objectID":"42",'
+              '"title":"La economía de España crece hoy",'
+              '"url":"https://ext.com/story",'
+              '"created_at":"${today.toUtc().toIso8601String()}"}]}',
+          '${hnItemUrlPrefix}42': '{"children":[{"author":"alice","text":"Gran punto"}]}',
+        }),
+        prefs: FakeMorningBriefingPreferences(initialSources: const []),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      final hn = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .articles
+          .firstWhere((a) => a.isHackerNews);
+
+      await notifier.summarizeComments(hn);
+
+      expect(container.read(morningBriefingNotifierProvider).commentFailures[hn.key]!.failure,
+          SummaryFailure.modelMissing);
     });
   });
 

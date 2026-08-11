@@ -17,6 +17,7 @@ import '../domain/briefing_brief_writer.dart';
 import '../domain/briefing_scheduler.dart';
 import '../domain/briefing_translation.dart';
 import '../domain/morning_briefing.dart';
+import '../domain/summary_failure.dart';
 import 'morning_briefing_providers.dart';
 
 export '../domain/briefing_harvester.dart' show hnFrontPageUrl, hnItemUrlPrefix;
@@ -51,8 +52,8 @@ class MorningBriefingState {
     this.summarizingComments = const {},
     this.queuedArticles = const {},
     this.queuedComments = const {},
-    this.articleErrors = const {},
-    this.commentErrors = const {},
+    this.articleFailures = const {},
+    this.commentFailures = const {},
   });
 
   /// Configured news-source URLs (the user adds/removes these).
@@ -88,11 +89,13 @@ class MorningBriefingState {
   /// [queuedArticles]).
   final Set<String> queuedComments;
 
-  /// Per-article on-demand full-summary error messages (keyed by article key).
-  final Map<String, String> articleErrors;
+  /// Per-article on-demand full-summary failures (keyed by article key): the
+  /// identified CAUSE plus the attempt count, never a pre-rendered sentence —
+  /// the wording (and whether a retry is even offered) belongs to the UI.
+  final Map<String, SummaryAttemptFailure> articleFailures;
 
-  /// Per-article on-demand comments-summary error messages.
-  final Map<String, String> commentErrors;
+  /// Per-article on-demand comments-summary failures (see [articleFailures]).
+  final Map<String, SummaryAttemptFailure> commentFailures;
 
   bool get isGenerating => phase == BriefingPhase.fetching;
 
@@ -122,8 +125,8 @@ class MorningBriefingState {
     Set<String>? summarizingComments,
     Set<String>? queuedArticles,
     Set<String>? queuedComments,
-    Map<String, String>? articleErrors,
-    Map<String, String>? commentErrors,
+    Map<String, SummaryAttemptFailure>? articleFailures,
+    Map<String, SummaryAttemptFailure>? commentFailures,
   }) =>
       MorningBriefingState(
         sources: sources ?? this.sources,
@@ -136,8 +139,8 @@ class MorningBriefingState {
         summarizingComments: summarizingComments ?? this.summarizingComments,
         queuedArticles: queuedArticles ?? this.queuedArticles,
         queuedComments: queuedComments ?? this.queuedComments,
-        articleErrors: articleErrors ?? this.articleErrors,
-        commentErrors: commentErrors ?? this.commentErrors,
+        articleFailures: articleFailures ?? this.articleFailures,
+        commentFailures: commentFailures ?? this.commentFailures,
       );
 }
 
@@ -160,6 +163,14 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// Set once disposed, so an in-flight async arm (now awaiting the effective
   /// zone) never touches `state` afterwards.
   bool _disposed = false;
+
+  /// How many times each article's full summary has been REQUESTED since its
+  /// last success. A retry that fails instantly repaints the identical error,
+  /// so the count is what tells the reader his tap was taken.
+  final Map<String, int> _articleAttempts = {};
+
+  /// The same, for the comments summary.
+  final Map<String, int> _commentAttempts = {};
 
   /// Injectable clock for the schedule/auto-run logic (production uses the real
   /// clock). Freshness uses [clockProvider] instead (the device-timezone seam).
@@ -370,6 +381,8 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // so "tu boletín está listo" is only ever said about a finished briefing.
     briefing = await _writeMissingBriefs(briefing);
 
+    _articleAttempts.clear();
+    _commentAttempts.clear();
     state = state.copyWith(
       briefing: briefing,
       phase: BriefingPhase.done,
@@ -379,8 +392,8 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       summarizingComments: const {},
       queuedArticles: const {},
       queuedComments: const {},
-      articleErrors: const {},
-      commentErrors: const {},
+      articleFailures: const {},
+      commentFailures: const {},
     );
 
     try {
@@ -444,6 +457,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     if ((current.fullSummary ?? '').isNotEmpty) return;
     if (state.isArticlePending(key)) return;
 
+    _articleAttempts[key] = (_articleAttempts[key] ?? 0) + 1;
     _setArticleQueued(key);
     try {
       await ref.read(llmRequestQueueProvider).add(
@@ -451,31 +465,85 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
         onStart: () => _setArticleRunning(key),
         () async {
           try {
-            await ref.read(localLlmEngineProvider).load();
-            final fetcher = ref.read(sourceFetcherProvider);
-            final extractor = ref.read(sourceContentExtractorProvider);
-            final body = await fetcher.fetch(current.url);
-            final extract = extractor.extract(body, url: current.url);
-            if (extract.isEmpty) throw Exception('sin contenido legible');
-            final result = await ref.read(localLlmEngineProvider).generate(
-                  _articleSummaryPrompt(title: current.title, content: extract.text),
-                  temperature: longsumTemperature,
-                  topK: longsumTopK,
-                  topP: longsumTopP,
-                );
-            final summary = result.text.trim();
-            if (summary.isEmpty) throw Exception('resumen vacío');
+            await _ensureModelReady();
+            final extract = await _readableArticle(current.url);
+            final summary = await _generate(
+              _articleSummaryPrompt(title: current.title, content: extract),
+            );
             _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
+          } on SummaryFailureException catch (e) {
+            _setArticleFailure(key, e.failure);
           } catch (_) {
-            _setArticleError(key, _summaryErrorMessage);
+            // A failure we cannot attribute to any step: say exactly that,
+            // instead of naming the most plausible suspect.
+            _setArticleFailure(key, SummaryFailure.unknown);
           }
         },
       );
     } catch (_) {
       // The queue itself refused the job (it never should): say so on the card
       // rather than leave a request that looks accepted and never arrives.
-      _setArticleError(key, _summaryErrorMessage);
+      _setArticleFailure(key, SummaryFailure.unknown);
     }
+  }
+
+  /// Loads the on-device model, distinguishing "there is NO model at all" (the
+  /// user has to download one; retrying is pointless) from "a model is here but
+  /// would not load" (a retry can genuinely work).
+  Future<void> _ensureModelReady() async {
+    final engine = ref.read(localLlmEngineProvider);
+    bool? installed;
+    try {
+      installed = await engine.isModelInstalled();
+    } catch (_) {
+      // The device could not even be asked; fall through to the load attempt
+      // rather than claiming a missing model we never checked.
+      installed = null;
+    }
+    if (installed == false) {
+      throw const SummaryFailureException(SummaryFailure.modelMissing);
+    }
+    try {
+      await engine.load();
+    } catch (_) {
+      throw const SummaryFailureException(SummaryFailure.modelUnavailable);
+    }
+  }
+
+  /// The article page's readable text, separating "could not be downloaded"
+  /// (transient) from "downloaded, and there is nothing to read" (permanent).
+  Future<String> _readableArticle(String url) async {
+    final String body;
+    try {
+      body = await ref.read(sourceFetcherProvider).fetch(url);
+    } catch (_) {
+      throw const SummaryFailureException(SummaryFailure.pageUnavailable);
+    }
+    final extract = ref.read(sourceContentExtractorProvider).extract(body, url: url);
+    if (extract.isEmpty) {
+      throw const SummaryFailureException(SummaryFailure.pageUnreadable);
+    }
+    return extract.text;
+  }
+
+  /// One LONGSUM generation, with an empty answer reported as its own cause.
+  Future<String> _generate(String prompt) async {
+    final GenerationResult result;
+    try {
+      result = await ref.read(localLlmEngineProvider).generate(
+            prompt,
+            temperature: longsumTemperature,
+            topK: longsumTopK,
+            topP: longsumTopP,
+          );
+    } catch (_) {
+      throw const SummaryFailureException(SummaryFailure.modelUnavailable);
+    }
+    final text = result.text.trim();
+    if (text.isEmpty) {
+      throw const SummaryFailureException(SummaryFailure.emptyGeneration);
+    }
+    return text;
   }
 
   /// Fetches [article]'s HN comments thread and summarizes it on-device
@@ -489,6 +557,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     if ((current.commentsSummary ?? '').isNotEmpty) return;
     if (state.isCommentsPending(key)) return;
 
+    _commentAttempts[key] = (_commentAttempts[key] ?? 0) + 1;
     _setCommentsQueued(key);
     try {
       await ref.read(llmRequestQueueProvider).add(
@@ -496,29 +565,36 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
         onStart: () => _setCommentsRunning(key),
         () async {
           try {
-            await ref.read(localLlmEngineProvider).load();
-            final fetcher = ref.read(sourceFetcherProvider);
-            final extractor = ref.read(sourceContentExtractorProvider);
-            final body = await fetcher.fetch('$hnItemUrlPrefix${current.hnObjectId}');
-            final comments = extractor.extractHnComments(body);
-            if (comments.trim().isEmpty) throw Exception('sin comentarios');
-            final result = await ref.read(localLlmEngineProvider).generate(
-                  _commentsSummaryPrompt(comments),
-                  temperature: longsumTemperature,
-                  topK: longsumTopK,
-                  topP: longsumTopP,
-                );
-            final summary = result.text.trim();
-            if (summary.isEmpty) throw Exception('resumen vacío');
+            await _ensureModelReady();
+            final comments = await _readableComments(current.hnObjectId);
+            final summary = await _generate(_commentsSummaryPrompt(comments));
             _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
+          } on SummaryFailureException catch (e) {
+            _setCommentsFailure(key, e.failure);
           } catch (_) {
-            _setCommentsError(key, _commentsErrorMessage);
+            _setCommentsFailure(key, SummaryFailure.unknown);
           }
         },
       );
     } catch (_) {
-      _setCommentsError(key, _commentsErrorMessage);
+      _setCommentsFailure(key, SummaryFailure.unknown);
     }
+  }
+
+  /// The HN thread's comment text: a thread that could not be downloaded is
+  /// transient; a thread with no comments in it is simply nothing to summarize.
+  Future<String> _readableComments(String? hnObjectId) async {
+    final String body;
+    try {
+      body = await ref.read(sourceFetcherProvider).fetch('$hnItemUrlPrefix$hnObjectId');
+    } catch (_) {
+      throw const SummaryFailureException(SummaryFailure.pageUnavailable);
+    }
+    final comments = ref.read(sourceContentExtractorProvider).extractHnComments(body);
+    if (comments.trim().isEmpty) {
+      throw const SummaryFailureException(SummaryFailure.commentsMissing);
+    }
+    return comments;
   }
 
   // ---------------------------------------------------------------------------
@@ -557,7 +633,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       phase: state.phase,
       briefing: state.briefing,
       queuedArticles: {...state.queuedArticles, key},
-      articleErrors: {...state.articleErrors}..remove(key),
+      articleFailures: {...state.articleFailures}..remove(key),
     );
   }
 
@@ -574,6 +650,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   void _cacheArticleUpdate(String key, BriefingArticle updated) {
     if (_disposed) return;
+    _articleAttempts.remove(key);
     final briefing = state.briefing?.replaceArticle(key, updated);
     state = state.copyWith(
       phase: state.phase,
@@ -584,14 +661,17 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setArticleError(String key, String message) {
+  void _setArticleFailure(String key, SummaryFailure failure) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
       queuedArticles: {...state.queuedArticles}..remove(key),
       summarizingArticles: {...state.summarizingArticles}..remove(key),
-      articleErrors: {...state.articleErrors, key: message},
+      articleFailures: {
+        ...state.articleFailures,
+        key: SummaryAttemptFailure(failure: failure, attempt: _articleAttempts[key] ?? 1),
+      },
     );
   }
 
@@ -601,7 +681,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       phase: state.phase,
       briefing: state.briefing,
       queuedComments: {...state.queuedComments, key},
-      commentErrors: {...state.commentErrors}..remove(key),
+      commentFailures: {...state.commentFailures}..remove(key),
     );
   }
 
@@ -617,6 +697,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
 
   void _cacheCommentsUpdate(String key, BriefingArticle updated) {
     if (_disposed) return;
+    _commentAttempts.remove(key);
     final briefing = state.briefing?.replaceArticle(key, updated);
     state = state.copyWith(
       phase: state.phase,
@@ -627,14 +708,17 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setCommentsError(String key, String message) {
+  void _setCommentsFailure(String key, SummaryFailure failure) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
       briefing: state.briefing,
       queuedComments: {...state.queuedComments}..remove(key),
       summarizingComments: {...state.summarizingComments}..remove(key),
-      commentErrors: {...state.commentErrors, key: message},
+      commentFailures: {
+        ...state.commentFailures,
+        key: SummaryAttemptFailure(failure: failure, attempt: _commentAttempts[key] ?? 1),
+      },
     );
   }
 
@@ -653,16 +737,6 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// in this language, translating foreign-language sources into it — which is
   /// why the feed-native title/description are kept as-is on the card.
   String get _languageCode => ref.read(appLanguageCodeProvider);
-
-  String get _summaryErrorMessage => switch (_languageCode) {
-        'en' => 'Could not generate the summary. Try again.',
-        _ => 'No se pudo generar el resumen. Inténtalo de nuevo.',
-      };
-
-  String get _commentsErrorMessage => switch (_languageCode) {
-        'en' => 'Could not summarize the comments. Try again.',
-        _ => 'No se pudo resumir los comentarios. Inténtalo de nuevo.',
-      };
 
   String _articleSummaryPrompt({required String title, required String content}) =>
       switch (_languageCode) {

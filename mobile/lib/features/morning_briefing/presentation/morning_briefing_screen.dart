@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../theme/lifeos_theme.dart';
 import '../domain/morning_briefing.dart';
+import '../domain/summary_failure.dart';
 import 'morning_briefing_notifier.dart';
 
 /// The ON-DEVICE "Boletín" screen: a grouped, card-per-item view of the latest
@@ -260,10 +261,10 @@ class _SourceSection extends StatelessWidget {
                 article: article,
                 isSummarizing: state.isSummarizingArticle(article.key),
                 isSummaryQueued: state.isQueuedArticle(article.key),
-                summaryError: state.articleErrors[article.key],
+                summaryFailure: state.articleFailures[article.key],
                 isSummarizingComments: state.isSummarizingComments(article.key),
                 isCommentsQueued: state.isQueuedComments(article.key),
-                commentsError: state.commentErrors[article.key],
+                commentsFailure: state.commentFailures[article.key],
                 onRequestSummary: () => notifier.summarizeArticle(article),
                 onRequestComments: () => notifier.summarizeComments(article),
               ),
@@ -304,10 +305,10 @@ class _ArticleCard extends StatefulWidget {
     required this.article,
     required this.isSummarizing,
     required this.isSummaryQueued,
-    required this.summaryError,
+    required this.summaryFailure,
     required this.isSummarizingComments,
     required this.isCommentsQueued,
-    required this.commentsError,
+    required this.commentsFailure,
     required this.onRequestSummary,
     required this.onRequestComments,
   });
@@ -319,10 +320,15 @@ class _ArticleCard extends StatefulWidget {
   /// deliberately distinct from [isSummarizing], so a reader who tapped two
   /// cards can see that the second one is coming rather than dead.
   final bool isSummaryQueued;
-  final String? summaryError;
+
+  /// The identified cause of the last failed attempt (plus its attempt count),
+  /// or null when nothing failed. Deliberately NOT a pre-rendered sentence: the
+  /// card decides both the wording and which action — retry, download a model,
+  /// or none at all — the cause deserves.
+  final SummaryAttemptFailure? summaryFailure;
   final bool isSummarizingComments;
   final bool isCommentsQueued;
-  final String? commentsError;
+  final SummaryAttemptFailure? commentsFailure;
   final VoidCallback onRequestSummary;
   final VoidCallback onRequestComments;
 
@@ -395,7 +401,12 @@ class _ArticleCardState extends State<_ArticleCard> {
                 queued: widget.isSummaryQueued,
                 queuedLabel: l10n.briefingSummaryQueued,
                 queuedHint: l10n.briefingSummaryQueuedHint,
-                error: widget.summaryError,
+                failure: widget.summaryFailure,
+                failureMessage: widget.summaryFailure == null
+                    ? null
+                    : _failureMessage(l10n, widget.summaryFailure!.failure, comments: false),
+                onRetry: widget.onRequestSummary,
+                onInstallModel: () => _openModelScreen(context),
                 text: article.fullSummary,
               ),
             // On-demand HN comments summary.
@@ -414,7 +425,12 @@ class _ArticleCardState extends State<_ArticleCard> {
                 queued: widget.isCommentsQueued,
                 queuedLabel: l10n.briefingSummaryQueued,
                 queuedHint: l10n.briefingSummaryQueuedHint,
-                error: widget.commentsError,
+                failure: widget.commentsFailure,
+                failureMessage: widget.commentsFailure == null
+                    ? null
+                    : _failureMessage(l10n, widget.commentsFailure!.failure, comments: true),
+                onRetry: widget.onRequestComments,
+                onInstallModel: () => _openModelScreen(context),
                 text: article.commentsSummary,
               ),
           ],
@@ -423,9 +439,42 @@ class _ArticleCardState extends State<_ArticleCard> {
     );
   }
 
+  /// What the reader is told for each identified cause. One sentence per cause,
+  /// saying only what was actually observed — a page that could not be
+  /// downloaded is never described as a paywall, and an unattributable failure
+  /// says so instead of naming a plausible suspect.
+  static String _failureMessage(
+    AppLocalizations l10n,
+    SummaryFailure failure, {
+    required bool comments,
+  }) =>
+      switch (failure) {
+        SummaryFailure.modelMissing => l10n.briefingSummaryErrorNoModel,
+        SummaryFailure.modelUnavailable => l10n.briefingSummaryErrorModelLoad,
+        SummaryFailure.pageUnavailable =>
+          comments ? l10n.briefingCommentsErrorFetch : l10n.briefingSummaryErrorFetch,
+        SummaryFailure.pageUnreadable => l10n.briefingSummaryErrorUnreadable,
+        SummaryFailure.commentsMissing => l10n.briefingCommentsErrorNone,
+        SummaryFailure.emptyGeneration => l10n.briefingSummaryErrorEmpty,
+        SummaryFailure.unknown => l10n.briefingSummaryErrorUnknown,
+      };
+
+  /// The answer to "there is no model": the download screen, one tap away —
+  /// the same deep-link shape the update banner uses for `/settings/updates`.
+  static void _openModelScreen(BuildContext context) => context.push('/settings/local-model');
+
+  /// A failure that nothing can fix is not re-run behind the user's back when
+  /// he reopens the panel: the explanation is already there, and a second
+  /// identical fetch is work he never asked for.
+  static bool _isPermanent(SummaryAttemptFailure? failure) =>
+      failure != null && failure.failure.recovery == SummaryRecovery.none;
+
   void _toggleSummary() {
     setState(() => _showSummary = !_showSummary);
-    if (_showSummary && (widget.article.fullSummary ?? '').isEmpty && !widget.isSummarizing) {
+    if (_showSummary &&
+        (widget.article.fullSummary ?? '').isEmpty &&
+        !widget.isSummarizing &&
+        !_isPermanent(widget.summaryFailure)) {
       widget.onRequestSummary();
     }
   }
@@ -434,7 +483,8 @@ class _ArticleCardState extends State<_ArticleCard> {
     setState(() => _showComments = !_showComments);
     if (_showComments &&
         (widget.article.commentsSummary ?? '').isEmpty &&
-        !widget.isSummarizingComments) {
+        !widget.isSummarizingComments &&
+        !_isPermanent(widget.commentsFailure)) {
       widget.onRequestComments();
     }
   }
@@ -526,7 +576,14 @@ class _ActionRow extends StatelessWidget {
 ///     a clock icon and "En cola…", no spinner (nothing is being computed yet);
 ///   * RUNNING — a spinner and "Resumiendo…";
 ///   * DONE — the summary text;
-///   * FAILED — the error message.
+///   * FAILED — WHAT failed, and the one thing worth doing about it.
+///
+/// The failed look is the one this screen got wrong in build 799: every cause
+/// printed "No se pudo generar el resumen. Inténtalo de nuevo.", and the only
+/// way to try again was to collapse and reopen the panel. Now the message names
+/// the cause and carries exactly one of three shapes — retry it, download a
+/// model, or nothing (this item will not work) — plus the attempt count, so a
+/// retry that fails again in milliseconds still visibly changes the card.
 class _SummaryPanel extends StatelessWidget {
   const _SummaryPanel({
     required this.loading,
@@ -534,7 +591,10 @@ class _SummaryPanel extends StatelessWidget {
     required this.queued,
     required this.queuedLabel,
     required this.queuedHint,
-    required this.error,
+    required this.failure,
+    required this.failureMessage,
+    required this.onRetry,
+    required this.onInstallModel,
     required this.text,
   });
 
@@ -543,7 +603,10 @@ class _SummaryPanel extends StatelessWidget {
   final bool queued;
   final String queuedLabel;
   final String queuedHint;
-  final String? error;
+  final SummaryAttemptFailure? failure;
+  final String? failureMessage;
+  final VoidCallback onRetry;
+  final VoidCallback onInstallModel;
   final String? text;
 
   @override
@@ -580,8 +643,13 @@ class _SummaryPanel extends StatelessWidget {
           Text(loadingLabel, style: theme.textTheme.bodySmall),
         ],
       );
-    } else if (error != null) {
-      child = Text(error!, style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink));
+    } else if (failure != null) {
+      child = _FailurePanel(
+        failure: failure!,
+        message: failureMessage ?? '',
+        onRetry: onRetry,
+        onInstallModel: onInstallModel,
+      );
     } else if ((text ?? '').isNotEmpty) {
       child = Text(text!, style: theme.textTheme.bodyMedium);
     } else {
@@ -596,6 +664,74 @@ class _SummaryPanel extends StatelessWidget {
         borderRadius: BorderRadius.circular(8),
       ),
       child: child,
+    );
+  }
+}
+
+/// The FAILED look: the cause in words, the repeat-failure count once there is
+/// one, and the single action that cause deserves.
+class _FailurePanel extends StatelessWidget {
+  const _FailurePanel({
+    required this.failure,
+    required this.message,
+    required this.onRetry,
+    required this.onInstallModel,
+  });
+
+  final SummaryAttemptFailure failure;
+  final String message;
+  final VoidCallback onRetry;
+  final VoidCallback onInstallModel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(message, style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink)),
+        // From the second failure on: the retry IS running, and failing fast.
+        // Without this line the identical message repaints and the tap reads as
+        // if it had been swallowed.
+        if (failure.attempt > 1)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              l10n.briefingSummaryRetryFailedAgain(failure.attempt),
+              style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+            ),
+          ),
+        switch (failure.failure.recovery) {
+          SummaryRecovery.retry => Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onRetry,
+                icon: const Icon(Icons.refresh, size: 18),
+                label: Text(l10n.briefingSummaryRetryAction),
+              ),
+            ),
+          // No model: retrying fails identically forever, so the card offers
+          // the thing that actually fixes it instead.
+          SummaryRecovery.installModel => Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: onInstallModel,
+                icon: const Icon(Icons.download_outlined, size: 18),
+                label: Text(l10n.briefingSummaryInstallModelAction),
+              ),
+            ),
+          // Permanent for this item: say so rather than invite a loop of taps
+          // that will each fail the same way.
+          SummaryRecovery.none => Padding(
+              padding: const EdgeInsets.only(top: 4),
+              child: Text(
+                l10n.briefingSummaryNotRetryable,
+                style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+              ),
+            ),
+        },
+      ],
     );
   }
 }

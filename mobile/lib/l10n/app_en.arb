@@ -389,6 +389,28 @@
     "description": "Shown on a card whose summary was requested while the model is busy with another one: the request is accepted and will run in turn."
   },
   "briefingSummaryQueuedHint": "It will start as soon as the current summary finishes.",
+  "briefingSummaryErrorNoModel": "The summary is written on this device, and there is no model installed.",
+  "@briefingSummaryErrorNoModel": {
+    "description": "On-demand summary failed because no on-device model is installed. Paired with the download action, never with a retry: without a model the retry fails identically forever."
+  },
+  "briefingSummaryInstallModelAction": "Download a model",
+  "briefingSummaryErrorModelLoad": "A model is installed, but it could not be used to write this summary.",
+  "briefingSummaryErrorFetch": "The article page could not be downloaded. It may be the connection, or the site refusing it.",
+  "briefingSummaryErrorUnreadable": "The page was downloaded, but it has no readable text (it may be behind a paywall or built with JavaScript).",
+  "briefingCommentsErrorFetch": "The comments thread could not be downloaded. It may be the connection, or Hacker News refusing it.",
+  "briefingCommentsErrorNone": "This thread has no comments to summarize.",
+  "briefingSummaryErrorEmpty": "The model finished without writing anything.",
+  "briefingSummaryErrorUnknown": "The summary failed, and the reason could not be identified.",
+  "@briefingSummaryErrorUnknown": {
+    "description": "A failure that could not be attributed to any step. Says so plainly rather than guessing the most likely cause."
+  },
+  "briefingSummaryRetryAction": "Try again",
+  "briefingSummaryRetryFailedAgain": "Failed again (attempt {attempt}).",
+  "@briefingSummaryRetryFailedAgain": {
+    "description": "Shown from the second failure on. The retry fails in milliseconds, so without this line the identical error message reads as a tap that did nothing.",
+    "placeholders": { "attempt": { "type": "int" } }
+  },
+  "briefingSummaryNotRetryable": "Trying again would not change the result.",
   "briefingTranslating": "Translating…",
   "briefingNoSummaryHint": "No summary: the source carries none and the page could not be read.",
   "briefingSkippedSources": "No news today: {sources}",

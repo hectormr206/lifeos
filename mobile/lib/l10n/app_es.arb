@@ -327,6 +327,28 @@
     "description": "Shown on a card whose summary was requested while the model is busy with another one: the request is accepted and will run in turn."
   },
   "briefingSummaryQueuedHint": "Empezará en cuanto termine el resumen en curso.",
+  "briefingSummaryErrorNoModel": "El resumen se escribe en este dispositivo y no hay ningún modelo instalado.",
+  "@briefingSummaryErrorNoModel": {
+    "description": "On-demand summary failed because no on-device model is installed. Paired with the download action, never with a retry: without a model the retry fails identically forever."
+  },
+  "briefingSummaryInstallModelAction": "Descargar un modelo",
+  "briefingSummaryErrorModelLoad": "Hay un modelo instalado, pero no se pudo usar para escribir este resumen.",
+  "briefingSummaryErrorFetch": "No se pudo descargar la página del artículo. Puede ser la conexión, o el sitio rechazándola.",
+  "briefingSummaryErrorUnreadable": "La página se descargó, pero no tiene texto legible (puede estar tras un muro de pago o construida con JavaScript).",
+  "briefingCommentsErrorFetch": "No se pudo descargar el hilo de comentarios. Puede ser la conexión, o Hacker News rechazándolo.",
+  "briefingCommentsErrorNone": "Este hilo no tiene comentarios que resumir.",
+  "briefingSummaryErrorEmpty": "El modelo terminó sin escribir nada.",
+  "briefingSummaryErrorUnknown": "El resumen falló y no se pudo identificar el motivo.",
+  "@briefingSummaryErrorUnknown": {
+    "description": "A failure that could not be attributed to any step. Says so plainly rather than guessing the most likely cause."
+  },
+  "briefingSummaryRetryAction": "Reintentar",
+  "briefingSummaryRetryFailedAgain": "Volvió a fallar (intento {attempt}).",
+  "@briefingSummaryRetryFailedAgain": {
+    "description": "Shown from the second failure on. The retry fails in milliseconds, so without this line the identical error message reads as a tap that did nothing.",
+    "placeholders": { "attempt": { "type": "int" } }
+  },
+  "briefingSummaryNotRetryable": "Reintentar no cambiaría el resultado.",
   "briefingTranslating": "Traduciendo…",
   "briefingNoSummaryHint": "Sin resumen: la fuente no lo trae y no se pudo leer la página.",
   "briefingSkippedSources": "Sin novedades hoy: {sources}",

@@ -846,6 +846,53 @@ class AppLocalizationsEs extends AppLocalizations {
       'Empezará en cuanto termine el resumen en curso.';
 
   @override
+  String get briefingSummaryErrorNoModel =>
+      'El resumen se escribe en este dispositivo y no hay ningún modelo instalado.';
+
+  @override
+  String get briefingSummaryInstallModelAction => 'Descargar un modelo';
+
+  @override
+  String get briefingSummaryErrorModelLoad =>
+      'Hay un modelo instalado, pero no se pudo usar para escribir este resumen.';
+
+  @override
+  String get briefingSummaryErrorFetch =>
+      'No se pudo descargar la página del artículo. Puede ser la conexión, o el sitio rechazándola.';
+
+  @override
+  String get briefingSummaryErrorUnreadable =>
+      'La página se descargó, pero no tiene texto legible (puede estar tras un muro de pago o construida con JavaScript).';
+
+  @override
+  String get briefingCommentsErrorFetch =>
+      'No se pudo descargar el hilo de comentarios. Puede ser la conexión, o Hacker News rechazándolo.';
+
+  @override
+  String get briefingCommentsErrorNone =>
+      'Este hilo no tiene comentarios que resumir.';
+
+  @override
+  String get briefingSummaryErrorEmpty =>
+      'El modelo terminó sin escribir nada.';
+
+  @override
+  String get briefingSummaryErrorUnknown =>
+      'El resumen falló y no se pudo identificar el motivo.';
+
+  @override
+  String get briefingSummaryRetryAction => 'Reintentar';
+
+  @override
+  String briefingSummaryRetryFailedAgain(int attempt) {
+    return 'Volvió a fallar (intento $attempt).';
+  }
+
+  @override
+  String get briefingSummaryNotRetryable =>
+      'Reintentar no cambiaría el resultado.';
+
+  @override
   String get briefingTranslating => 'Traduciendo…';
 
   @override

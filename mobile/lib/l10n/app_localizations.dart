@@ -1610,6 +1610,78 @@ abstract class AppLocalizations {
   /// **'It will start as soon as the current summary finishes.'**
   String get briefingSummaryQueuedHint;
 
+  /// On-demand summary failed because no on-device model is installed. Paired with the download action, never with a retry: without a model the retry fails identically forever.
+  ///
+  /// In en, this message translates to:
+  /// **'The summary is written on this device, and there is no model installed.'**
+  String get briefingSummaryErrorNoModel;
+
+  /// No description provided for @briefingSummaryInstallModelAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Download a model'**
+  String get briefingSummaryInstallModelAction;
+
+  /// No description provided for @briefingSummaryErrorModelLoad.
+  ///
+  /// In en, this message translates to:
+  /// **'A model is installed, but it could not be used to write this summary.'**
+  String get briefingSummaryErrorModelLoad;
+
+  /// No description provided for @briefingSummaryErrorFetch.
+  ///
+  /// In en, this message translates to:
+  /// **'The article page could not be downloaded. It may be the connection, or the site refusing it.'**
+  String get briefingSummaryErrorFetch;
+
+  /// No description provided for @briefingSummaryErrorUnreadable.
+  ///
+  /// In en, this message translates to:
+  /// **'The page was downloaded, but it has no readable text (it may be behind a paywall or built with JavaScript).'**
+  String get briefingSummaryErrorUnreadable;
+
+  /// No description provided for @briefingCommentsErrorFetch.
+  ///
+  /// In en, this message translates to:
+  /// **'The comments thread could not be downloaded. It may be the connection, or Hacker News refusing it.'**
+  String get briefingCommentsErrorFetch;
+
+  /// No description provided for @briefingCommentsErrorNone.
+  ///
+  /// In en, this message translates to:
+  /// **'This thread has no comments to summarize.'**
+  String get briefingCommentsErrorNone;
+
+  /// No description provided for @briefingSummaryErrorEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'The model finished without writing anything.'**
+  String get briefingSummaryErrorEmpty;
+
+  /// A failure that could not be attributed to any step. Says so plainly rather than guessing the most likely cause.
+  ///
+  /// In en, this message translates to:
+  /// **'The summary failed, and the reason could not be identified.'**
+  String get briefingSummaryErrorUnknown;
+
+  /// No description provided for @briefingSummaryRetryAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Try again'**
+  String get briefingSummaryRetryAction;
+
+  /// Shown from the second failure on. The retry fails in milliseconds, so without this line the identical error message reads as a tap that did nothing.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed again (attempt {attempt}).'**
+  String briefingSummaryRetryFailedAgain(int attempt);
+
+  /// No description provided for @briefingSummaryNotRetryable.
+  ///
+  /// In en, this message translates to:
+  /// **'Trying again would not change the result.'**
+  String get briefingSummaryNotRetryable;
+
   /// No description provided for @briefingTranslating.
   ///
   /// In en, this message translates to:
