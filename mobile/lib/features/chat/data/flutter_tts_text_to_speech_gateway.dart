@@ -131,6 +131,20 @@ class FlutterTtsTextToSpeechGateway implements TextToSpeechGateway {
     await _tts.speak(text);
   }
 
+  /// This engine either speaks or it does not exist: there is no neural voice
+  /// here to distinguish, so a success is always [VoiceTestEngine.system] and
+  /// any failure means the OS engine itself is missing or broken
+  /// ([VoiceTestFailure.noEngine]) — nothing the user can download fixes it.
+  @override
+  Future<VoiceTestOutcome> speakDiagnostic(String text) async {
+    try {
+      await speak(text);
+      return const VoiceTestSpoke(VoiceTestEngine.system);
+    } catch (e) {
+      return VoiceTestFailed(VoiceTestFailure.noEngine, detail: '$e');
+    }
+  }
+
   @override
   Future<void> stop() => _tts.stop();
 

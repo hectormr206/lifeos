@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../../tts/domain/tts_voice.dart';
+import '../../tts/domain/voice_test_outcome.dart';
 import '../domain/voice_catalog.dart';
 import '../domain/voice_settings.dart';
 import 'voice_catalog_providers.dart';
@@ -41,6 +42,13 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
   /// Live slider value while dragging (persisted only on release), so a drag
   /// stays smooth without a shared_preferences write per tick.
   double? _dragRate;
+
+  /// Whether a voice test is running RIGHT NOW. The neural synthesis can take
+  /// tens of seconds on a cold engine, and the button used to look dead for
+  /// all of it: this drives the spinner (immediate acknowledgement) and
+  /// disables the button, because every extra tap started ANOTHER synthesis
+  /// run and made the wait longer.
+  bool _testing = false;
 
   @override
   void initState() {
@@ -133,8 +141,16 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
             child: Align(
               alignment: Alignment.centerLeft,
               child: FilledButton.tonalIcon(
-                onPressed: _testVoice,
-                icon: const Icon(Icons.play_arrow),
+                // Disabled while speaking: a second tap does not "hurry it up",
+                // it queues another full synthesis.
+                onPressed: _testing ? null : _testVoice,
+                icon: _testing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.play_arrow),
                 label: Text(l10n.voiceTestButton),
               ),
             ),
@@ -166,10 +182,85 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
 
   /// Speaks a neutral-Spanish sample through the SHARED gateway, so the test
   /// uses the exact same Piper-preferred + persisted-rate path the chat does.
+  ///
+  /// Two guarantees the old fire-and-forget version broke:
+  ///  * the spinner is on screen in the SAME frame as the tap (the setState
+  ///    happens before the first await), so the tap is never swallowed;
+  ///  * the result is reported honestly — including a fallback to the robotic
+  ///    system voice, which is NOT the success this screen promises.
   Future<void> _testVoice() async {
     final l10n = AppLocalizations.of(context);
-    await ref.read(textToSpeechGatewayProvider).speak(l10n.voiceSampleText);
+    setState(() => _testing = true); // before any await: same frame as the tap
+
+    VoiceTestOutcome outcome;
+    try {
+      outcome = await ref.read(textToSpeechGatewayProvider).speakDiagnostic(l10n.voiceSampleText);
+    } catch (e) {
+      // The contract says implementations do not throw; if one does, that is
+      // still a failure we could not attribute — never a silent success.
+      outcome = VoiceTestFailed(VoiceTestFailure.unknown, detail: '$e');
+    }
+    if (!mounted) return;
+
+    setState(() => _testing = false);
+    _reportOutcome(outcome);
   }
+
+  /// Turns the outcome into one SnackBar: the plain-language sentence, plus the
+  /// recovery the failure itself dictates (never chosen by hand here).
+  void _reportOutcome(VoiceTestOutcome outcome) {
+    final l10n = AppLocalizations.of(context);
+
+    final (String message, VoiceTestRecovery recovery) = switch (outcome) {
+      VoiceTestSpoke(engine: VoiceTestEngine.neural) => (
+          l10n.voiceTestSpokeNeural,
+          VoiceTestRecovery.none,
+        ),
+      // The system voice answered. Say so, and say why — the neural download is
+      // Wi-Fi-only, so "pending" can last forever without a word.
+      VoiceTestSpoke(:final neuralFailure) => (
+          neuralFailure == VoiceTestFailure.voiceMissing
+              ? l10n.voiceTestSpokeSystemVoiceMissing
+              : l10n.voiceTestSpokeSystem,
+          neuralFailure?.recovery ?? VoiceTestRecovery.none,
+        ),
+      VoiceTestFailed(:final failure) => (_failureMessage(failure, l10n), failure.recovery),
+    };
+
+    final action = switch (recovery) {
+      VoiceTestRecovery.downloadVoice => SnackBarAction(
+          label: l10n.voiceDownloadButton,
+          onPressed: () => ref
+              .read(voiceCatalogControllerProvider.notifier)
+              .download(ref.read(selectedVoiceProvider)),
+        ),
+      VoiceTestRecovery.chooseAnotherVoice => SnackBarAction(
+          label: l10n.voiceCatalogNavTitle,
+          onPressed: () => context.push('/settings/voice/catalog'),
+        ),
+      VoiceTestRecovery.retry => SnackBarAction(
+          label: l10n.voiceRetryButton,
+          onPressed: _testVoice,
+        ),
+      VoiceTestRecovery.none => null,
+    };
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(message), action: action));
+  }
+
+  /// One sentence per observed cause. Exhaustive on purpose: a new failure must
+  /// be given its own words, not folded into a generic "inténtalo de nuevo".
+  String _failureMessage(VoiceTestFailure failure, AppLocalizations l10n) => switch (failure) {
+        VoiceTestFailure.voiceMissing => l10n.voiceTestFailedVoiceMissing,
+        VoiceTestFailure.voiceIncompatible => l10n.voiceTestFailedVoiceIncompatible,
+        VoiceTestFailure.synthesisFailed => l10n.voiceTestFailedSynthesis,
+        VoiceTestFailure.emptySynthesis => l10n.voiceTestFailedEmpty,
+        VoiceTestFailure.playbackFailed => l10n.voiceTestFailedPlayback,
+        VoiceTestFailure.noEngine => l10n.voiceTestFailedNoEngine,
+        VoiceTestFailure.unknown => l10n.voiceTestFailedUnknown,
+      };
 }
 
 /// The voice-status card: reflects [TtsVoiceStatus] (absent / downloading /

@@ -56,7 +56,7 @@ class _PassphraseDialogState extends State<PassphraseDialog> {
   void _submit() {
     final phrase = _phrase.text;
     if (phrase.isEmpty) {
-      setState(() => _error = 'Escribí una frase.');
+      setState(() => _error = 'Escribe una frase.');
       return;
     }
     if (widget.confirm && phrase != _repeat.text) {
@@ -79,7 +79,7 @@ class _PassphraseDialogState extends State<PassphraseDialog> {
               padding: EdgeInsets.only(bottom: 12),
               child: Text(
                 'Esta frase es lo único que abre el respaldo. No se guarda en '
-                'ningún lado: si la olvidás, no hay forma de recuperarlo.',
+                'ningún lado: si la olvidas, no hay forma de recuperarlo.',
               ),
             ),
           TextField(

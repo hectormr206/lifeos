@@ -18,19 +18,19 @@ class AppLocalizationsEs extends AppLocalizations {
   String get dictateTitle => 'Dictar';
 
   @override
-  String get dictateTagline => 'Hablá y Axi te escucha';
+  String get dictateTagline => 'Habla y Axi te escucha';
 
   @override
-  String get dictateIdleHint => 'Tocá el micrófono y hablá';
+  String get dictateIdleHint => 'Toca el micrófono y habla';
 
   @override
-  String get dictateRecordingHint => 'Te escucho… tocá para terminar';
+  String get dictateRecordingHint => 'Te escucho… toca para terminar';
 
   @override
   String get dictateTranscribingHint => 'Transcribiendo en este dispositivo…';
 
   @override
-  String get dictateReviewHint => 'Revisá el texto antes de enviarlo';
+  String get dictateReviewHint => 'Revisa el texto antes de enviarlo';
 
   @override
   String get dictateSend => 'Enviar a Axi';
@@ -186,7 +186,8 @@ class AppLocalizationsEs extends AppLocalizations {
   String get updatesNavTitle => 'Actualizaciones';
 
   @override
-  String get updatesNavSubtitle => 'Buscar e instalar nuevas versiones';
+  String get updatesNavSubtitle =>
+      'Buscar, instalar y avisar de nuevas versiones';
 
   @override
   String get updateBannerDismissTooltip => 'Recordármelo mañana';
@@ -220,12 +221,6 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get desktopUpdateNotConfirmedUnnamed =>
       'No pude confirmar que la actualización se aplicara. Vuelve a intentarlo, o ejecuta install-linux.sh desde una terminal para ver por qué falló.';
-
-  @override
-  String get notificationsNavTitle => 'Notificaciones';
-
-  @override
-  String get notificationsNavSubtitle => 'Avisos de nuevas versiones';
 
   @override
   String get permissionsNavTitle => 'Permisos';
@@ -320,6 +315,45 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get voiceSampleText =>
       'Hola, soy Axi. Así sonará mi voz cuando te lea tus respuestas.';
+
+  @override
+  String get voiceTestSpokeNeural =>
+      'Listo. Reproduje la muestra con la voz natural.';
+
+  @override
+  String get voiceTestSpokeSystemVoiceMissing =>
+      'Sonó la voz del dispositivo: la voz natural aún no está descargada.';
+
+  @override
+  String get voiceTestSpokeSystem =>
+      'Sonó la voz del dispositivo: la voz natural no pudo reproducirse esta vez.';
+
+  @override
+  String get voiceTestFailedVoiceMissing =>
+      'La voz natural no está descargada en este dispositivo.';
+
+  @override
+  String get voiceTestFailedVoiceIncompatible =>
+      'Esta voz no funciona en este dispositivo. Elige otra.';
+
+  @override
+  String get voiceTestFailedSynthesis =>
+      'La voz natural falló al generar el audio.';
+
+  @override
+  String get voiceTestFailedEmpty => 'La voz se ejecutó, pero no generó audio.';
+
+  @override
+  String get voiceTestFailedPlayback =>
+      'El audio se generó, pero este dispositivo no pudo reproducirlo.';
+
+  @override
+  String get voiceTestFailedNoEngine =>
+      'Ninguna voz respondió: ni la natural ni la del dispositivo.';
+
+  @override
+  String get voiceTestFailedUnknown =>
+      'La prueba falló y no pude identificar la causa.';
 
   @override
   String get voiceLanguageNote =>
@@ -577,6 +611,9 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get homeBrain => 'Cerebro';
+
+  @override
+  String get homeBrainEngine => 'Cerebro del motor';
 
   @override
   String get homeSettings => 'Ajustes';

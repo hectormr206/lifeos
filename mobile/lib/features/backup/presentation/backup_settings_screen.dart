@@ -139,7 +139,7 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
         // still said out loud rather than swallowed.
         _say('Se desactivó el respaldo automático, pero el sistema no '
             'confirmó la cancelación de la tarea programada. No se hará '
-            'ningún respaldo (la opción está apagada); si querés, reiniciá '
+            'ningún respaldo (la opción está apagada); si quieres, reinicia '
             'la app para que quede limpio.');
       }
       return;
@@ -308,7 +308,7 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
       final opened = await PassphraseBackupSealer()
           .open(sealed, passphrase: passphrase);
       if (opened == null) {
-        _say('Esa frase no abre el respaldo. Revisala e intentá de nuevo.');
+        _say('Esa frase no abre el respaldo. Revísala e inténtalo de nuevo.');
         return;
       }
 
@@ -467,9 +467,9 @@ class _PassphraseWarning extends StatelessWidget {
             const SizedBox(height: 8),
             Text(
               'Tus respaldos se cifran en este dispositivo con una frase que solo '
-              'vos conocés. Ni el servidor ni nosotros podemos abrirlos.\n\n'
-              'Si olvidás esa frase, los respaldos se pierden para siempre. '
-              'No hay forma de recuperarlos. Anotala en un lugar seguro.',
+              'tú conoces. Ni el servidor ni nosotros podemos abrirlos.\n\n'
+              'Si olvidas esa frase, los respaldos se pierden para siempre. '
+              'No hay forma de recuperarlos. Anótala en un lugar seguro.',
               style: Theme.of(context)
                   .textTheme
                   .bodyMedium

@@ -437,7 +437,7 @@ abstract class AppLocalizations {
   /// No description provided for @updatesNavSubtitle.
   ///
   /// In en, this message translates to:
-  /// **'Check for and install new versions'**
+  /// **'Check for, install and get notified about new versions'**
   String get updatesNavSubtitle;
 
   /// Close button on the in-app update reminder. Dismissing is a snooze until the next calendar day, not a mute, and the label says so.
@@ -487,18 +487,6 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'I could not confirm that the update was applied. Try again, or run install-linux.sh from a terminal to see why it failed.'**
   String get desktopUpdateNotConfirmedUnnamed;
-
-  /// No description provided for @notificationsNavTitle.
-  ///
-  /// In en, this message translates to:
-  /// **'Notifications'**
-  String get notificationsNavTitle;
-
-  /// No description provided for @notificationsNavSubtitle.
-  ///
-  /// In en, this message translates to:
-  /// **'New-version alerts'**
-  String get notificationsNavSubtitle;
 
   /// No description provided for @permissionsNavTitle.
   ///
@@ -667,6 +655,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Hi, I\'m Axi. This is how my voice will sound when I read your replies.'**
   String get voiceSampleText;
+
+  /// No description provided for @voiceTestSpokeNeural.
+  ///
+  /// In en, this message translates to:
+  /// **'Done. Played the sample with the natural voice.'**
+  String get voiceTestSpokeNeural;
+
+  /// No description provided for @voiceTestSpokeSystemVoiceMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'That was the device voice: the natural voice isn\'t downloaded yet.'**
+  String get voiceTestSpokeSystemVoiceMissing;
+
+  /// No description provided for @voiceTestSpokeSystem.
+  ///
+  /// In en, this message translates to:
+  /// **'That was the device voice: the natural voice couldn\'t play this time.'**
+  String get voiceTestSpokeSystem;
+
+  /// No description provided for @voiceTestFailedVoiceMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'The natural voice isn\'t downloaded on this device.'**
+  String get voiceTestFailedVoiceMissing;
+
+  /// No description provided for @voiceTestFailedVoiceIncompatible.
+  ///
+  /// In en, this message translates to:
+  /// **'This voice doesn\'t work on this device. Choose another one.'**
+  String get voiceTestFailedVoiceIncompatible;
+
+  /// No description provided for @voiceTestFailedSynthesis.
+  ///
+  /// In en, this message translates to:
+  /// **'The natural voice failed while generating the audio.'**
+  String get voiceTestFailedSynthesis;
+
+  /// No description provided for @voiceTestFailedEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice ran, but produced no audio.'**
+  String get voiceTestFailedEmpty;
+
+  /// No description provided for @voiceTestFailedPlayback.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio was generated, but this device couldn\'t play it.'**
+  String get voiceTestFailedPlayback;
+
+  /// No description provided for @voiceTestFailedNoEngine.
+  ///
+  /// In en, this message translates to:
+  /// **'No voice answered: neither the natural one nor the device\'s.'**
+  String get voiceTestFailedNoEngine;
+
+  /// No description provided for @voiceTestFailedUnknown.
+  ///
+  /// In en, this message translates to:
+  /// **'The test failed and I couldn\'t identify the cause.'**
+  String get voiceTestFailedUnknown;
 
   /// No description provided for @voiceLanguageNote.
   ///
@@ -1135,6 +1183,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Brain'**
   String get homeBrain;
+
+  /// No description provided for @homeBrainEngine.
+  ///
+  /// In en, this message translates to:
+  /// **'Engine brain'**
+  String get homeBrainEngine;
 
   /// No description provided for @homeSettings.
   ///

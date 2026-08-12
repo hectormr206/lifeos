@@ -41,7 +41,7 @@ void main() {
     await tester.tap(find.text('Continuar'));
     await tester.pumpAndSettle();
 
-    expect(find.text('Escribí una frase.'), findsOneWidget);
+    expect(find.text('Escribe una frase.'), findsOneWidget);
     // Still open: nothing was returned to the caller.
     expect(find.byType(PassphraseDialog), findsOneWidget);
   });

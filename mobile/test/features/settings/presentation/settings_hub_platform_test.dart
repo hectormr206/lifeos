@@ -113,7 +113,10 @@ void main() {
 
         expect(find.text('Modelo local'), findsOneWidget);
         expect(find.text('Actualizaciones'), findsOneWidget);
-        expect(find.text('Notificaciones'), findsOneWidget);
+        // The duplicate "Notificaciones" row is gone on EVERY platform — it
+        // pushed the identical route as "Actualizaciones". Pinned here too so
+        // a platform-conditional edit cannot quietly bring it back on one.
+        expect(find.text('Notificaciones'), findsNothing);
         expect(find.text('Voz'), findsOneWidget);
         expect(find.text('Configuración del motor'), findsOneWidget);
         expect(find.text('Zona de peligro'), findsOneWidget);

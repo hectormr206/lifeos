@@ -54,8 +54,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Dictar'), findsWidgets);
-    expect(find.text('Hablá y Axi te escucha'), findsOneWidget);
-    expect(find.text('Tocá el micrófono y hablá'), findsOneWidget);
+    expect(find.text('Habla y Axi te escucha'), findsOneWidget);
+    expect(find.text('Toca el micrófono y habla'), findsOneWidget);
     expect(find.byKey(DictateScreen.micButtonKey), findsOneWidget);
   });
 
@@ -69,7 +69,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await _tapMic(tester);
-    expect(find.text('Te escucho… tocá para terminar'), findsOneWidget);
+    expect(find.text('Te escucho… toca para terminar'), findsOneWidget);
     expect(recorder.startCount, 1);
 
     await _tapMic(tester);
@@ -160,7 +160,7 @@ void main() {
       await tester.tap(find.text('Probar de nuevo'));
       await tester.pumpAndSettle();
 
-      expect(find.text('Tocá el micrófono y hablá'), findsOneWidget);
+      expect(find.text('Toca el micrófono y habla'), findsOneWidget);
     });
   });
 
@@ -177,7 +177,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(TextField), findsNothing);
-    expect(find.text('Tocá el micrófono y hablá'), findsOneWidget);
+    expect(find.text('Toca el micrófono y habla'), findsOneWidget);
   });
 
   testWidgets('leaving the screen mid-take releases the microphone',

@@ -73,7 +73,7 @@
   "webSearchTestSuccess": "Connection successful",
   "webSearchTestFailure": "Could not connect",
   "updatesNavTitle": "Updates",
-  "updatesNavSubtitle": "Check for and install new versions",
+  "updatesNavSubtitle": "Check for, install and get notified about new versions",
   "updateBannerDismissTooltip": "Remind me tomorrow",
   "@updateBannerDismissTooltip": {
     "description": "Close button on the in-app update reminder. Dismissing is a snooze until the next calendar day, not a mute, and the label says so."
@@ -108,8 +108,6 @@
   "@desktopUpdateNotConfirmedUnnamed": {
     "description": "Same as desktopUpdateNotConfirmed when the installed version could not be read at all."
   },
-  "notificationsNavTitle": "Notifications",
-  "notificationsNavSubtitle": "New-version alerts",
   "permissionsNavTitle": "Permissions",
   "permissionsNavSubtitle": "Review and manage the app's permissions",
   "timezoneNavTitle": "Time zone",
@@ -146,6 +144,16 @@
   "voiceRateFast": "Fast",
   "voiceTestButton": "Test voice",
   "voiceSampleText": "Hi, I'm Axi. This is how my voice will sound when I read your replies.",
+  "voiceTestSpokeNeural": "Done. Played the sample with the natural voice.",
+  "voiceTestSpokeSystemVoiceMissing": "That was the device voice: the natural voice isn't downloaded yet.",
+  "voiceTestSpokeSystem": "That was the device voice: the natural voice couldn't play this time.",
+  "voiceTestFailedVoiceMissing": "The natural voice isn't downloaded on this device.",
+  "voiceTestFailedVoiceIncompatible": "This voice doesn't work on this device. Choose another one.",
+  "voiceTestFailedSynthesis": "The natural voice failed while generating the audio.",
+  "voiceTestFailedEmpty": "The voice ran, but produced no audio.",
+  "voiceTestFailedPlayback": "The audio was generated, but this device couldn't play it.",
+  "voiceTestFailedNoEngine": "No voice answered: neither the natural one nor the device's.",
+  "voiceTestFailedUnknown": "The test failed and I couldn't identify the cause.",
   "voiceLanguageNote": "The voice follows the app language (Region / Language).",
   "voiceCatalogNavTitle": "Choose a voice",
   "voiceCatalogNavSubtitle": "Browse, preview and download more voices",
@@ -268,6 +276,7 @@
   "homeBulletins": "Bulletins",
   "homeTodaySummary": "Today's summary",
   "homeBrain": "Brain",
+  "homeBrainEngine": "Engine brain",
   "homeSettings": "Settings",
   "homeLocalModel": "Local model",
   "homeMeetings": "Meetings",

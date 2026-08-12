@@ -130,7 +130,7 @@ class _BackupsScreenState extends ConsumerState<BackupsScreen> {
                 leading: const Icon(Icons.cloud_upload_outlined),
                 title: const Text('Guardar en mi servidor'),
                 subtitle: const Text(
-                  'Estas copias viven solo en este dispositivo. Enviá una copia '
+                  'Estas copias viven solo en este dispositivo. Envía una copia '
                   'cifrada a un servidor tuyo.',
                 ),
                 trailing: const Icon(Icons.chevron_right),

@@ -212,9 +212,27 @@ class _HomeSections extends ConsumerWidget {
             onPressed: () => context.push('/body'),
           ),
           const SizedBox(height: 12),
+          // "Cerebro" is the ON-DEVICE 3D memory graph (/brain3d): a native
+          // force layout over the local encrypted store, no network, no
+          // pairing. It used to be reachable ONLY by tapping an unlabelled
+          // region on the mascot's forehead, while this label pointed at the
+          // engine-backed browser below — so the working, autonomous feature
+          // was undiscoverable and the discoverable one was blocked. Pairing is
+          // a sync relationship, not a licence, so the plain label belongs to
+          // the surface that works on this device's own data.
           _NavButton(
             icon: Icons.hub_outlined,
             label: l10n.homeBrain,
+            onPressed: () => context.push('/brain3d'),
+          ),
+          const SizedBox(height: 12),
+          // The engine's knowledge-graph SEARCH (GET /api/v1/graph/*) — a
+          // genuinely different capability, and genuinely remote, so it keeps
+          // its pairing gate. It now says whose brain it is instead of
+          // competing for the same word.
+          _NavButton(
+            icon: Icons.travel_explore_outlined,
+            label: l10n.homeBrainEngine,
             onPressed: () => context.push('/graph'),
           ),
           const SizedBox(height: 12),

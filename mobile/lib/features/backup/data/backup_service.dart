@@ -62,7 +62,7 @@ class BackupService {
     if (!config.isComplete) {
       throw const BackupHostException(
         BackupHostState.notConfigured,
-        'Configurá primero la dirección y la clave del servidor.',
+        'Configura primero la dirección y la clave del servidor.',
       );
     }
     if (passphrase.isEmpty) {

@@ -157,7 +157,7 @@ Future<void> _notifyVpnUndetermined() => AppNotifications.instance.show(
           'la VPN para el respaldo automático.',
       title: 'No se pudo comprobar la VPN',
       body: 'El respaldo automático no se hizo porque no se pudo confirmar '
-          'la conexión a tu VPN. Revisá «Respaldos» en Ajustes.',
+          'la conexión a tu VPN. Revisa «Respaldos» en Ajustes.',
       payload: 'automatic_backup_vpn_undetermined',
     );
 

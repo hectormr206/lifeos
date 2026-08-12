@@ -36,7 +36,7 @@ class DictationHotkeyTile extends ConsumerWidget {
       title: const Text('Atajo para dictar'),
       subtitle: Text(
         state.error ??
-            'Presioná ${state.hotkey.label} desde cualquier lado para empezar '
+            'Presiona ${state.hotkey.label} desde cualquier lado para empezar '
                 'o detener el dictado.',
         style: state.error == null ? null : TextStyle(color: scheme.error),
       ),
@@ -123,7 +123,7 @@ class _HotkeyCaptureDialogState extends State<_HotkeyCaptureDialog> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Presioná la combinación que querés usar.'),
+            const Text('Presiona la combinación que quieres usar.'),
             const SizedBox(height: 16),
             Text(
               candidate?.label ?? '—',

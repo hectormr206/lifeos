@@ -25,7 +25,7 @@ class RemoteBackupPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: const Text('¿Cuál querés restaurar?'),
+      title: const Text('¿Cuál quieres restaurar?'),
       content: SizedBox(
         width: double.maxFinite,
         child: ListView.builder(

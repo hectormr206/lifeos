@@ -40,8 +40,24 @@ class PiperPreferredTextToSpeechGateway implements TextToSpeechGateway {
     if (!_completions.isClosed) _completions.add(null);
   }
 
+  /// Fire-and-forget for the chat flow: it DELEGATES to [speakDiagnostic] and
+  /// discards the report, so the try/fallback decision lives in exactly one
+  /// place. Two copies of it is how the two paths drift apart.
   @override
   Future<void> speak(String text) async {
+    await speakDiagnostic(text);
+  }
+
+  /// The real classifier. Returns:
+  ///  * [VoiceTestSpoke] `neural` — Piper spoke;
+  ///  * [VoiceTestSpoke] `system` — Piper failed, the OS voice covered it, and
+  ///    [VoiceTestSpoke.neuralFailure] carries WHY (the user is entitled to
+  ///    know he just heard the robotic voice, and because of what);
+  ///  * [VoiceTestFailed] — both engines failed. The neural cause is kept when
+  ///    it is the informative one; a dead OS engine on top of it is
+  ///    [VoiceTestFailure.noEngine].
+  @override
+  Future<VoiceTestOutcome> speakDiagnostic(String text) async {
     // A previous utterance may be on the OTHER engine — stop the system voice
     // before Piper starts (Piper's own speak stops its previous playback).
     try {
@@ -49,23 +65,34 @@ class PiperPreferredTextToSpeechGateway implements TextToSpeechGateway {
     } catch (_) {
       // A dead fallback channel must never block Piper speech.
     }
-    try {
-      await _preferred.speak(text);
-    } on PiperVoiceUnavailableException {
+
+    final preferred = await _preferred.speakDiagnostic(text);
+    if (preferred is VoiceTestSpoke) return preferred;
+
+    final failure = (preferred as VoiceTestFailed).failure;
+    if (failure == VoiceTestFailure.voiceMissing) {
       _onVoiceAbsent?.call(); // kick the lazy download; Piper next time
-      await _speakWithFallback(text);
-    } catch (_) {
-      // Synthesis/playback failed with the voice present — files are fine,
-      // downloading again would not help. Just keep the button working.
-      await _speakWithFallback(text);
     }
+    // Any other neural failure means the files are already there — downloading
+    // again would not help, so we only cover this utterance.
+
+    final fallback = await _speakWithFallback(text);
+    return switch (fallback) {
+      VoiceTestSpoke() => VoiceTestSpoke(VoiceTestEngine.system, neuralFailure: failure),
+      // Nothing spoke at all. The neural cause is still the useful one unless
+      // it was merely "not downloaded" — then the honest report is that this
+      // device has no working voice engine.
+      VoiceTestFailed(:final detail) => failure == VoiceTestFailure.voiceMissing
+          ? VoiceTestFailed(VoiceTestFailure.noEngine, detail: detail)
+          : VoiceTestFailed(failure, detail: (preferred).detail),
+    };
   }
 
-  Future<void> _speakWithFallback(String text) async {
+  Future<VoiceTestOutcome> _speakWithFallback(String text) async {
     try {
       await _preferred.stop(); // cancel any pending synthesis/playback
     } catch (_) {/* best effort */}
-    await _fallback.speak(text);
+    return _fallback.speakDiagnostic(text);
   }
 
   @override

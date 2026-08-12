@@ -62,7 +62,7 @@ class BackupHostClient {
     } on DioException {
       return const BackupHostDiagnosis(
         state: BackupHostState.unreachable,
-        message: 'No se pudo contactar el servidor. Revisá que este dispositivo '
+        message: 'No se pudo contactar el servidor. Revisa que este dispositivo '
             'esté conectado a la VPN y que la dirección sea correcta.',
       );
     }
@@ -71,7 +71,7 @@ class BackupHostClient {
       return const BackupHostDiagnosis(
         state: BackupHostState.notABackupHost,
         message: 'Algo respondió en esa dirección, pero no es un servidor de '
-            'respaldo de LifeOS. Revisá la dirección y el puerto.',
+            'respaldo de LifeOS. Revisa la dirección y el puerto.',
       );
     }
 

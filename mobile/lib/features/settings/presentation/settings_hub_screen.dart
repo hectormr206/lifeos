@@ -78,17 +78,16 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/web-search'),
           ),
+          // One row, one destination. There used to be a second "Notificaciones"
+          // row right here pushing this exact same route — a duplicate that
+          // promised a notifications surface and delivered the top of the
+          // updates screen. The only notification setting the app has ("avísame
+          // cuando haya una nueva versión") lives INSIDE this screen, and this
+          // subtitle now says so, so nothing became less findable.
           ListTile(
             leading: const Icon(Icons.system_update),
             title: Text(l10n.updatesNavTitle),
             subtitle: Text(l10n.updatesNavSubtitle),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/updates'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.notifications_outlined),
-            title: Text(l10n.notificationsNavTitle),
-            subtitle: Text(l10n.notificationsNavSubtitle),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/updates'),
           ),

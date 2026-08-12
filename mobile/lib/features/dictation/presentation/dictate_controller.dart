@@ -119,7 +119,7 @@ class DictateController extends Notifier<DictationStatus> {
       // still drops a bubble so the note is visibly not lost — there is nothing
       // to show here, so say it plainly.
       state = const DictationFailed(
-        'No se capturó audio. Probá de nuevo y hablá un poco más.',
+        'No se capturó audio. Prueba de nuevo y habla un poco más.',
       );
       return;
     }
@@ -143,7 +143,7 @@ class DictateController extends Notifier<DictationStatus> {
       // Handing back a blank field with no explanation is exactly the quiet
       // degradation the repo forbids.
       state = const DictationFailed(
-        'No se entendió nada. Probá de nuevo, más cerca del micrófono.',
+        'No se entendió nada. Prueba de nuevo, más cerca del micrófono.',
       );
       return;
     }

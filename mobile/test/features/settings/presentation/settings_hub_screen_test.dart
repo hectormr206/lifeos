@@ -86,7 +86,13 @@ void main() {
     expect(find.text('English'), findsOneWidget);
     expect(find.text('Modelo local'), findsOneWidget);
     expect(find.text('Actualizaciones'), findsOneWidget);
-    expect(find.text('Notificaciones'), findsOneWidget);
+    // "Notificaciones" was a DUPLICATE of the "Actualizaciones" row directly
+    // above it — same `push('/settings/updates')`, byte for byte — promising a
+    // notification surface it could not deliver (the route has no anchor, so
+    // it landed at the top of the same screen). Its own subtitle, "Avisos de
+    // nuevas versiones", says it only ever meant the update-notification
+    // toggle, which lives inside that screen. Removed rather than deep-linked.
+    expect(find.text('Notificaciones'), findsNothing);
     expect(find.text('Voz'), findsOneWidget);
     expect(find.text('Configuración del motor'), findsOneWidget);
     expect(find.text('Acerca de'), findsOneWidget);

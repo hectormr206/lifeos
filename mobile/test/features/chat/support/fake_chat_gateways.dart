@@ -115,8 +115,17 @@ class FakeTextToSpeechGateway implements TextToSpeechGateway {
   int stopCount = 0;
   final _completions = StreamController<void>.broadcast();
 
+  /// Scripted diagnostic report; defaults to "the neural voice spoke".
+  VoiceTestOutcome? nextOutcome;
+
   @override
   Future<void> speak(String text) async => spoken.add(text);
+
+  @override
+  Future<VoiceTestOutcome> speakDiagnostic(String text) async {
+    await speak(text);
+    return nextOutcome ?? const VoiceTestSpoke(VoiceTestEngine.neural);
+  }
 
   @override
   Future<void> stop() async => stopCount++;

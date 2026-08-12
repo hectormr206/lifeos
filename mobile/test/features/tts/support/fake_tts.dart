@@ -135,6 +135,16 @@ class FakeTextToSpeechGateway implements TextToSpeechGateway {
 
   final Object? speakError;
   final Object? stopError;
+
+  /// Scripted diagnostic report. When null, [speakDiagnostic] really calls
+  /// [speak] and classifies whatever [speakError] throws — so the composite
+  /// tests keep exercising the real fallback decision.
+  VoiceTestOutcome? nextOutcome;
+
+  /// When set, [speakDiagnostic] parks here BEFORE speaking, so a widget test
+  /// can assert the in-flight frame (spinner shown, button disabled).
+  Completer<void>? diagnosticGate;
+
   final List<String> spoken = [];
   int stops = 0;
   bool disposed = false;
@@ -147,6 +157,28 @@ class FakeTextToSpeechGateway implements TextToSpeechGateway {
     final e = speakError;
     if (e != null) throw e;
     spoken.add(text);
+  }
+
+  @override
+  Future<VoiceTestOutcome> speakDiagnostic(String text) async {
+    final gate = diagnosticGate;
+    if (gate != null) await gate.future;
+    final scripted = nextOutcome;
+    if (scripted != null) return scripted;
+    try {
+      await speak(text);
+    } catch (e) {
+      return VoiceTestFailed(
+        switch (e) {
+          PiperVoiceUnavailableException() => VoiceTestFailure.voiceMissing,
+          UnsupportedVoiceException() => VoiceTestFailure.voiceIncompatible,
+          PiperSynthesisException() => VoiceTestFailure.synthesisFailed,
+          _ => VoiceTestFailure.unknown,
+        },
+        detail: '$e',
+      );
+    }
+    return const VoiceTestSpoke(VoiceTestEngine.neural);
   }
 
   @override

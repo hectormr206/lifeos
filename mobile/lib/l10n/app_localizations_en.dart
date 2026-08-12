@@ -184,7 +184,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get updatesNavTitle => 'Updates';
 
   @override
-  String get updatesNavSubtitle => 'Check for and install new versions';
+  String get updatesNavSubtitle =>
+      'Check for, install and get notified about new versions';
 
   @override
   String get updateBannerDismissTooltip => 'Remind me tomorrow';
@@ -218,12 +219,6 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get desktopUpdateNotConfirmedUnnamed =>
       'I could not confirm that the update was applied. Try again, or run install-linux.sh from a terminal to see why it failed.';
-
-  @override
-  String get notificationsNavTitle => 'Notifications';
-
-  @override
-  String get notificationsNavSubtitle => 'New-version alerts';
 
   @override
   String get permissionsNavTitle => 'Permissions';
@@ -317,6 +312,45 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get voiceSampleText =>
       'Hi, I\'m Axi. This is how my voice will sound when I read your replies.';
+
+  @override
+  String get voiceTestSpokeNeural =>
+      'Done. Played the sample with the natural voice.';
+
+  @override
+  String get voiceTestSpokeSystemVoiceMissing =>
+      'That was the device voice: the natural voice isn\'t downloaded yet.';
+
+  @override
+  String get voiceTestSpokeSystem =>
+      'That was the device voice: the natural voice couldn\'t play this time.';
+
+  @override
+  String get voiceTestFailedVoiceMissing =>
+      'The natural voice isn\'t downloaded on this device.';
+
+  @override
+  String get voiceTestFailedVoiceIncompatible =>
+      'This voice doesn\'t work on this device. Choose another one.';
+
+  @override
+  String get voiceTestFailedSynthesis =>
+      'The natural voice failed while generating the audio.';
+
+  @override
+  String get voiceTestFailedEmpty => 'The voice ran, but produced no audio.';
+
+  @override
+  String get voiceTestFailedPlayback =>
+      'The audio was generated, but this device couldn\'t play it.';
+
+  @override
+  String get voiceTestFailedNoEngine =>
+      'No voice answered: neither the natural one nor the device\'s.';
+
+  @override
+  String get voiceTestFailedUnknown =>
+      'The test failed and I couldn\'t identify the cause.';
 
   @override
   String get voiceLanguageNote =>
@@ -574,6 +608,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get homeBrain => 'Brain';
+
+  @override
+  String get homeBrainEngine => 'Engine brain';
 
   @override
   String get homeSettings => 'Settings';
