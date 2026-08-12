@@ -1664,6 +1664,48 @@ abstract class AppLocalizations {
   /// **'The summary failed, and the reason could not be identified.'**
   String get briefingSummaryErrorUnknown;
 
+  /// Collapsed affordance under a model-failure message. The plain-language sentence stays the headline; this reveals the underlying exception (which call threw, its type, its message) so the user can read and quote it. Never expanded by default.
+  ///
+  /// In en, this message translates to:
+  /// **'Show technical details'**
+  String get engineErrorDetailsShow;
+
+  /// No description provided for @engineErrorDetailsHide.
+  ///
+  /// In en, this message translates to:
+  /// **'Hide technical details'**
+  String get engineErrorDetailsHide;
+
+  /// No description provided for @engineErrorDetailsCopy.
+  ///
+  /// In en, this message translates to:
+  /// **'Copy details'**
+  String get engineErrorDetailsCopy;
+
+  /// No description provided for @engineErrorDetailsCopied.
+  ///
+  /// In en, this message translates to:
+  /// **'Technical details copied.'**
+  String get engineErrorDetailsCopied;
+
+  /// No description provided for @engineErrorDetailsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The details could not be copied.'**
+  String get engineErrorDetailsFailed;
+
+  /// Translation runs on the same on-device model as the summaries, so one unusable model breaks both. Items are never blanked or dropped — they keep their original text — but the reason used to go unsaid.
+  ///
+  /// In en, this message translates to:
+  /// **'Some items are shown in their original language: the model could not translate them.'**
+  String get briefingTranslationFailed;
+
+  /// Shown while a summary is queued or running when the model had to fall back to a slower backend. Without it, a summary that takes minutes is indistinguishable from one that has hung.
+  ///
+  /// In en, this message translates to:
+  /// **'The model is running without hardware acceleration, so this will take considerably longer than usual.'**
+  String get briefingModelSlowBackend;
+
   /// No description provided for @briefingSummaryRetryAction.
   ///
   /// In en, this message translates to:

@@ -92,6 +92,12 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   bool disposed = false;
   LocalLlmBackend? loadedBackend;
 
+  /// Scriptable stand-in for the real engine's GPU→CPU fallback signal, so the
+  /// "running without hardware acceleration" notice is testable without a
+  /// device. Mutable: a test can flip it between loads.
+  @override
+  bool usesFallbackBackend = false;
+
   @override
   Future<bool> isModelInstalled() async => _installed;
 

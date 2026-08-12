@@ -5,20 +5,32 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
+import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_notifier.dart'
+    show hnFrontPageUrl;
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_providers.dart';
 import 'package:lifeos/features/morning_briefing/presentation/morning_briefing_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/l10n/locale_providers.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:url_launcher_platform_interface/url_launcher_platform_interface.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 import '../support/fakes.dart';
+
+/// RFC-822 timestamp so a feed item lands inside the freshness window.
+String _rfc822(DateTime dt) {
+  const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  final u = dt.toUtc();
+  String two(int n) => n.toString().padLeft(2, '0');
+  return '${two(u.day)} ${months[u.month - 1]} ${u.year} ${two(u.hour)}:${two(u.minute)}:00 GMT';
+}
 
 class _FixedClock implements Clock {
   const _FixedClock(this._now);
@@ -84,17 +96,24 @@ Widget _scoped(
   OnDeviceBriefing? briefing,
   FakeLocalLlmEngine? engine,
   FakeSourceFetcher? fetcher,
+  List<String> sources = const [],
 }) =>
     ProviderScope(
       overrides: [
         morningBriefingPreferencesProvider.overrideWithValue(
-          FakeMorningBriefingPreferences(initialBriefing: briefing ?? _briefing()),
+          FakeMorningBriefingPreferences(
+            initialBriefing: briefing ?? _briefing(),
+            initialSources: sources,
+          ),
         ),
         localLlmEngineProvider.overrideWithValue(engine ?? FakeLocalLlmEngine(installed: true)),
         sourceFetcherProvider.overrideWithValue(fetcher ?? FakeSourceFetcher()),
         briefingNotificationsProvider.overrideWithValue(FakeBriefingNotifications()),
         briefingSchedulerProvider.overrideWithValue(FakeBriefingScheduler()),
         clockProvider.overrideWithValue(_FixedClock(DateTime(2026, 7, 22, 9))),
+        // The screen renders Spanish copy; pin the pipeline's target language
+        // to match, so an English feed is genuinely something to translate.
+        appLanguageCodeProvider.overrideWithValue('es'),
       ],
       child: app,
     );
@@ -103,6 +122,7 @@ Widget _app([
   OnDeviceBriefing? briefing,
   FakeLocalLlmEngine? engine,
   FakeSourceFetcher? fetcher,
+  List<String> sources = const [],
 ]) =>
     _scoped(
       const MaterialApp(
@@ -114,6 +134,7 @@ Widget _app([
       briefing: briefing,
       engine: engine,
       fetcher: fetcher,
+      sources: sources,
     );
 
 /// The same screen behind a real [GoRouter], so a deep link out of the card
@@ -388,6 +409,194 @@ void main() {
       // red line reads as a tap that did nothing.
       expect(fetcher.fetched.where((u) => u == 'https://a.com/1').length, 2);
       expect(find.text('Volvió a fallar (intento 2).'), findsOneWidget);
+    });
+  });
+
+  // ─── THE EVIDENCE, ONE TAP AWAY ─────────────────────────────────────────
+  //
+  // "Hay un modelo instalado, pero no se pudo usar…" is the right headline and
+  // stays the headline. But it was also the END of the evidence: the real
+  // exception died in a `catch (_)`, and on the device where this happens
+  // there is no way to recover it. It now survives to a COLLAPSED affordance
+  // the user can expand and quote back.
+  group('the underlying exception is reachable, and never the headline', () {
+    Future<void> requestFirstSummary(WidgetTester tester) async {
+      await tester.tap(find.text('Fuente A (2)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ver resumen completo').first);
+      await tester.pumpAndSettle();
+    }
+
+    testWidgets('a load failure hides its details behind one collapsed tap', (tester) async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      await tester.pumpWidget(_app(_briefing(), engine));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      // The plain-language sentence is the headline…
+      expect(find.textContaining('no se pudo usar'), findsOneWidget);
+      // …and the exception is NOT shown by default.
+      expect(find.textContaining('load boom'), findsNothing);
+      expect(find.text('Ver detalles técnicos'), findsOneWidget);
+
+      await tester.tap(find.text('Ver detalles técnicos'));
+      await tester.pumpAndSettle();
+
+      // Which call threw, its type, and what it said.
+      expect(find.textContaining('load'), findsWidgets);
+      expect(find.textContaining('load boom'), findsOneWidget);
+      expect(find.text('Ocultar detalles técnicos'), findsOneWidget);
+      // The headline never moved.
+      expect(find.textContaining('no se pudo usar'), findsOneWidget);
+    });
+
+    testWidgets('a generate failure names generate, not load', (tester) async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      const page = '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>';
+      await tester.pumpWidget(
+        _app(_briefing(), engine, FakeSourceFetcher(bodies: {'https://a.com/1': page})),
+      );
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      await tester.tap(find.text('Ver detalles técnicos'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('generate boom'), findsOneWidget);
+    });
+
+    testWidgets('the details can be copied, and the copy is confirmed', (tester) async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final copied = <String>[];
+      tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        (call) async {
+          if (call.method == 'Clipboard.setData') {
+            copied.add((call.arguments as Map)['text'] as String);
+          }
+          return null;
+        },
+      );
+      addTearDown(() => tester.binding.defaultBinaryMessenger
+          .setMockMethodCallHandler(SystemChannels.platform, null));
+
+      await tester.pumpWidget(_app(_briefing(), engine));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+      await tester.tap(find.text('Ver detalles técnicos'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Copiar detalles'));
+      await tester.pumpAndSettle();
+
+      expect(copied, hasLength(1));
+      expect(copied.single, contains('load boom'));
+      expect(find.text('Detalles técnicos copiados.'), findsOneWidget);
+    });
+
+    // A cause identified without ever touching the model has no exception to
+    // show, and an empty "details" affordance would promise evidence that does
+    // not exist.
+    testWidgets('a non-model failure offers no details affordance', (tester) async {
+      final fetcher = FakeSourceFetcher(bodies: {'https://a.com/1': '<html><body></body></html>'});
+      await tester.pumpWidget(_app(_briefing(), FakeLocalLlmEngine(installed: true), fetcher));
+      await tester.pumpAndSettle();
+      await requestFirstSummary(tester);
+
+      expect(find.textContaining('no tiene texto legible'), findsOneWidget);
+      expect(find.text('Ver detalles técnicos'), findsNothing);
+    });
+  });
+
+  // ─── THE SAME SILENCE, IN THE TRANSLATION ───────────────────────────────
+  group('untranslated items say why', () {
+    testWidgets('an engine that will not load explains the original-language items',
+        (tester) async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      // An English feed the model would have to translate, and an engine that
+      // cannot load: the items survive in English, and the reason is said.
+      final fetcher = FakeSourceFetcher(bodies: {
+        'https://en.com/rss': '<rss version="2.0"><channel><title>English Source</title>'
+            '<item><title>The Future of AI</title><link>https://en.com/1</link>'
+            '<description>A look at the future</description>'
+            '<pubDate>${_rfc822(DateTime(2026, 7, 22, 6))}</pubDate></item>'
+            '</channel></rss>',
+        hnFrontPageUrl: '{"hits":[]}',
+      });
+      await tester.pumpWidget(
+        _app(_briefing(), engine, fetcher, const ['https://en.com/rss']),
+      );
+      await tester.pumpAndSettle();
+      // Regenerate so the translation stage actually runs against the engine.
+      await tester.tap(find.byType(FloatingActionButton));
+      await tester.pumpAndSettle();
+
+      // Sanity: the regenerated briefing really is the English feed.
+      expect(find.text('English Source (1)'), findsOneWidget);
+      expect(find.textContaining('idioma original'), findsOneWidget);
+      expect(find.text('Ver detalles técnicos'), findsOneWidget);
+
+      await tester.tap(find.text('Ver detalles técnicos'));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('load boom'), findsOneWidget);
+    });
+  });
+
+  // ─── THE COST OF THE FALLBACK, WHERE THE WAITING HAPPENS ────────────────
+  group('a model on the fallback backend says the wait is longer', () {
+    testWidgets('the notice rides the RUNNING panel, not a settings screen', (tester) async {
+      final gate = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        generateGate: gate,
+        reply: (_) => 'Resumen listo',
+      )..usesFallbackBackend = true;
+      const page = '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>';
+      await tester.pumpWidget(
+        _app(_briefing(), engine, FakeSourceFetcher(bodies: {'https://a.com/1': page})),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fuente A (2)'));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.text('Ver resumen completo').first);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Resumiendo…'), findsOneWidget);
+      expect(find.textContaining('sin aceleración por hardware'), findsOneWidget);
+
+      gate.complete();
+      await tester.pumpAndSettle();
+
+      // Once the summary is there, the wait is over and so is the notice.
+      expect(find.text('Resumen listo'), findsOneWidget);
+      expect(find.textContaining('sin aceleración por hardware'), findsNothing);
+    });
+
+    testWidgets('an ordinary load says nothing about acceleration', (tester) async {
+      final gate = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        generateGate: gate,
+        reply: (_) => 'Resumen listo',
+      );
+      const page = '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>';
+      await tester.pumpWidget(
+        _app(_briefing(), engine, FakeSourceFetcher(bodies: {'https://a.com/1': page})),
+      );
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Fuente A (2)'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Ver resumen completo').first);
+      await tester.pump();
+      await tester.pump();
+
+      expect(find.text('Resumiendo…'), findsOneWidget);
+      expect(find.textContaining('sin aceleración por hardware'), findsNothing);
+
+      gate.complete();
+      await tester.pumpAndSettle();
     });
   });
 }

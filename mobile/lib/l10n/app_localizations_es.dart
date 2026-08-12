@@ -881,6 +881,29 @@ class AppLocalizationsEs extends AppLocalizations {
       'El resumen falló y no se pudo identificar el motivo.';
 
   @override
+  String get engineErrorDetailsShow => 'Ver detalles técnicos';
+
+  @override
+  String get engineErrorDetailsHide => 'Ocultar detalles técnicos';
+
+  @override
+  String get engineErrorDetailsCopy => 'Copiar detalles';
+
+  @override
+  String get engineErrorDetailsCopied => 'Detalles técnicos copiados.';
+
+  @override
+  String get engineErrorDetailsFailed => 'No se pudieron copiar los detalles.';
+
+  @override
+  String get briefingTranslationFailed =>
+      'Algunos elementos se muestran en su idioma original: el modelo no pudo traducirlos.';
+
+  @override
+  String get briefingModelSlowBackend =>
+      'El modelo se está ejecutando sin aceleración por hardware, así que tardará bastante más de lo normal.';
+
+  @override
   String get briefingSummaryRetryAction => 'Reintentar';
 
   @override

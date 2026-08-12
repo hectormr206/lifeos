@@ -1,3 +1,4 @@
+import 'engine_failure_detail.dart';
 import 'local_llm_engine.dart';
 
 /// Reusable on-device batch translator: renders a list of short strings into a
@@ -46,19 +47,38 @@ class OnDeviceTranslator {
   /// Translates [inputs] into [languageCode]'s language, in bounded batches,
   /// retrying any slot that came back missing ON ITS OWN before giving up on
   /// it. See the class contract for the per-slot fallback semantics.
+  ///
+  /// [onEngineFailure] receives the FIRST engine failure, if any — the real
+  /// exception behind an all-original result. It fires at most once per call:
+  /// one broken engine is one cause, however many slots it took down. It does
+  /// NOT fire when the model ran and merely returned something unusable; that
+  /// is a different fact and naming it an engine failure would be a wrong
+  /// diagnosis. Reporting never changes the outcome: this method still never
+  /// throws, and unknown slots still keep their original text.
   Future<List<String?>> translate(
     List<String> inputs, {
     required String languageCode,
     double temperature = defaultTemperature,
     int topK = defaultTopK,
     double topP = defaultTopP,
+    void Function(EngineFailureDetail detail)? onEngineFailure,
   }) async {
     if (inputs.isEmpty) return const [];
     final out = List<String?>.filled(inputs.length, null);
+    var reported = false;
+    void report(LlmEngineCall call, Object error) {
+      if (reported) return;
+      reported = true;
+      onEngineFailure?.call(EngineFailureDetail.from(call, error));
+    }
+
     try {
       await _engine.load();
-    } catch (_) {
-      // No model: keep every original (all-null result).
+    } catch (error) {
+      // No usable model: keep every original (all-null result) — but say WHY,
+      // because untranslated items with no explanation is exactly the silence
+      // this seam exists to break.
+      report(LlmEngineCall.load, error);
       return out;
     }
 
@@ -74,8 +94,9 @@ class OnDeviceTranslator {
         for (var j = 0; j < batch.length; j++) {
           out[batch[j]] = _nonEmpty(parsed[j + 1]);
         }
-      } catch (_) {
+      } catch (error) {
         // This batch produced nothing; its slots fall to the retry below.
+        report(LlmEngineCall.generate, error);
       }
     }
 
@@ -84,7 +105,7 @@ class OnDeviceTranslator {
       if (out[i] != null) continue;
       if (inputs[i].trim().isEmpty) continue; // nothing to translate
       retries++;
-      out[i] = await _translateOne(inputs[i], languageCode, temperature, topK, topP);
+      out[i] = await _translateOne(inputs[i], languageCode, temperature, topK, topP, report);
     }
     return out;
   }
@@ -118,6 +139,7 @@ class OnDeviceTranslator {
     double temperature,
     int topK,
     double topP,
+    void Function(LlmEngineCall call, Object error) report,
   ) async {
     try {
       final result = await _engine.generate(
@@ -127,7 +149,8 @@ class OnDeviceTranslator {
         topP: topP,
       );
       return _firstUsableLine(result.text);
-    } catch (_) {
+    } catch (error) {
+      report(LlmEngineCall.generate, error);
       return null;
     }
   }

@@ -11,6 +11,12 @@
 /// Each value is a cause we actually OBSERVED at a specific step. Nothing here
 /// is a guess: when the step that failed cannot be identified, that is
 /// [unknown] and it says so, rather than naming the most likely suspect.
+library;
+
+import '../../local_model/domain/engine_failure_detail.dart';
+
+export '../../local_model/domain/engine_failure_detail.dart' show EngineFailureDetail, LlmEngineCall;
+
 enum SummaryFailure {
   /// There is no model on the device at all. Nothing can be summarized until
   /// one is downloaded.
@@ -69,10 +75,17 @@ extension SummaryFailureRecovery on SummaryFailure {
 
 /// Thrown inside the on-demand summary job to carry the identified cause out
 /// to the one place that records it. Internal to the summary pipeline.
+///
+/// [detail] carries the underlying engine exception when the cause was
+/// identified BY one — the evidence [SummaryFailure.modelUnavailable]'s merge
+/// would otherwise destroy. Null for causes identified without touching the
+/// model (an unreadable page, a thread with no comments): there is no engine
+/// exception there, and inventing one would be a fabricated observation.
 class SummaryFailureException implements Exception {
-  const SummaryFailureException(this.failure);
+  const SummaryFailureException(this.failure, {this.detail});
 
   final SummaryFailure failure;
+  final EngineFailureDetail? detail;
 
   @override
   String toString() => 'SummaryFailureException(${failure.name})';
@@ -84,19 +97,32 @@ class SummaryFailureException implements Exception {
 /// The attempt count exists because the retry is instant: without it, a second
 /// failure repaints the identical red line and the tap looks swallowed.
 class SummaryAttemptFailure {
-  const SummaryAttemptFailure({required this.failure, required this.attempt});
+  const SummaryAttemptFailure({
+    required this.failure,
+    required this.attempt,
+    this.detail,
+  });
 
   final SummaryFailure failure;
 
   /// 1 for the first failure, 2 for the first retry, and so on.
   final int attempt;
 
-  @override
-  bool operator ==(Object other) =>
-      other is SummaryAttemptFailure && other.failure == failure && other.attempt == attempt;
+  /// The underlying engine exception, when the cause came from one. The card
+  /// keeps it COLLAPSED — the plain-language sentence stays the headline — but
+  /// it must be reachable and copyable, because it is the only evidence that
+  /// exists on the device where the failure actually happens.
+  final EngineFailureDetail? detail;
 
   @override
-  int get hashCode => Object.hash(failure, attempt);
+  bool operator ==(Object other) =>
+      other is SummaryAttemptFailure &&
+      other.failure == failure &&
+      other.attempt == attempt &&
+      other.detail == detail;
+
+  @override
+  int get hashCode => Object.hash(failure, attempt, detail);
 
   @override
   String toString() => 'SummaryAttemptFailure(${failure.name}, attempt: $attempt)';

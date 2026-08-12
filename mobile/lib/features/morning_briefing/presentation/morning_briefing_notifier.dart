@@ -54,6 +54,8 @@ class MorningBriefingState {
     this.queuedComments = const {},
     this.articleFailures = const {},
     this.commentFailures = const {},
+    this.translationFailure,
+    this.modelOnFallbackBackend = false,
   });
 
   /// Configured news-source URLs (the user adds/removes these).
@@ -97,6 +99,18 @@ class MorningBriefingState {
   /// Per-article on-demand comments-summary failures (see [articleFailures]).
   final Map<String, SummaryAttemptFailure> commentFailures;
 
+  /// The engine failure behind items that stayed in their original language,
+  /// when there was one. Translation drives the SAME engine as the summaries,
+  /// so an unusable model breaks both — but only the summaries used to say so,
+  /// and untranslated headlines just looked like a translator that had quietly
+  /// skipped them. Null when the model ran (however imperfectly).
+  final EngineFailureDetail? translationFailure;
+
+  /// Whether the loaded model ended up on a slower fallback backend. Surfaced
+  /// so a summary that suddenly takes minutes is legible as "slow" rather than
+  /// "hung". See [LocalLlmEngine.usesFallbackBackend].
+  final bool modelOnFallbackBackend;
+
   bool get isGenerating => phase == BriefingPhase.fetching;
 
   bool isSummarizingArticle(String key) => summarizingArticles.contains(key);
@@ -127,6 +141,13 @@ class MorningBriefingState {
     Set<String>? queuedComments,
     Map<String, SummaryAttemptFailure>? articleFailures,
     Map<String, SummaryAttemptFailure>? commentFailures,
+    EngineFailureDetail? translationFailure,
+    // The translation failure PERSISTS across the many unrelated copyWith calls
+    // a summary makes (queued → running → done), unlike `error`/`progressLabel`
+    // which are per-transition. Clearing it is therefore an explicit act — a
+    // new generation that translated fine.
+    bool clearTranslationFailure = false,
+    bool? modelOnFallbackBackend,
   }) =>
       MorningBriefingState(
         sources: sources ?? this.sources,
@@ -141,6 +162,9 @@ class MorningBriefingState {
         queuedComments: queuedComments ?? this.queuedComments,
         articleFailures: articleFailures ?? this.articleFailures,
         commentFailures: commentFailures ?? this.commentFailures,
+        translationFailure:
+            clearTranslationFailure ? null : (translationFailure ?? this.translationFailure),
+        modelOnFallbackBackend: modelOnFallbackBackend ?? this.modelOnFallbackBackend,
       );
 }
 
@@ -472,7 +496,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             );
             _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
           } on SummaryFailureException catch (e) {
-            _setArticleFailure(key, e.failure);
+            _setArticleFailure(key, e.failure, detail: e.detail);
           } catch (_) {
             // A failure we cannot attribute to any step: say exactly that,
             // instead of naming the most plausible suspect.
@@ -505,9 +529,31 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     }
     try {
       await engine.load();
-    } catch (_) {
-      throw const SummaryFailureException(SummaryFailure.modelUnavailable);
+    } catch (error) {
+      // The headline stays "a model is installed but could not be used" — the
+      // reader cannot act on load-vs-generate. The exception rides along so a
+      // human CAN, since nothing else on the device can recover it.
+      throw SummaryFailureException(
+        SummaryFailure.modelUnavailable,
+        detail: EngineFailureDetail.from(LlmEngineCall.load, error),
+      );
     }
+    _noteBackend(engine);
+  }
+
+  /// Records whether the model that just loaded is running on a slower fallback
+  /// backend, so the panel can explain a summary that suddenly takes minutes.
+  /// Read after every successful load: the notice describes the CURRENT load,
+  /// and a stale warning about slowness that is over is its own wrong claim.
+  void _noteBackend(LocalLlmEngine engine) {
+    if (_disposed) return;
+    final fallback = engine.usesFallbackBackend;
+    if (fallback == state.modelOnFallbackBackend) return;
+    state = state.copyWith(
+      phase: state.phase,
+      briefing: state.briefing,
+      modelOnFallbackBackend: fallback,
+    );
   }
 
   /// The article page's readable text, separating "could not be downloaded"
@@ -536,8 +582,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             topK: longsumTopK,
             topP: longsumTopP,
           );
-    } catch (_) {
-      throw const SummaryFailureException(SummaryFailure.modelUnavailable);
+    } catch (error) {
+      throw SummaryFailureException(
+        SummaryFailure.modelUnavailable,
+        detail: EngineFailureDetail.from(LlmEngineCall.generate, error),
+      );
     }
     final text = result.text.trim();
     if (text.isEmpty) {
@@ -570,7 +619,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             final summary = await _generate(_commentsSummaryPrompt(comments));
             _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
           } on SummaryFailureException catch (e) {
-            _setCommentsFailure(key, e.failure);
+            _setCommentsFailure(key, e.failure, detail: e.detail);
           } catch (_) {
             _setCommentsFailure(key, SummaryFailure.unknown);
           }
@@ -610,18 +659,33 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     OnDeviceBriefing assembled,
     SourceContentExtractor extractor,
   ) async {
+    final engine = ref.read(localLlmEngineProvider);
     final pipeline = BriefingTranslationPipeline(
-      translator: OnDeviceTranslator(ref.read(localLlmEngineProvider)),
+      translator: OnDeviceTranslator(engine),
       extractor: extractor,
     );
-    return pipeline.translateAll(
+    EngineFailureDetail? failure;
+    final translated = await pipeline.translateAll(
       assembled,
       languageCode: _languageCode,
       onSource: (i, total) => state = state.copyWith(
         phase: BriefingPhase.fetching,
         progressLabel: 'Traduciendo noticias ${i + 1} de $total…',
       ),
+      onEngineFailure: (detail) => failure = detail,
     );
+    if (!_disposed) {
+      // Set OR CLEAR: a run that translated fine must not leave the previous
+      // run's explanation standing over items that are now translated.
+      state = state.copyWith(
+        phase: state.phase,
+        briefing: state.briefing,
+        translationFailure: failure,
+        clearTranslationFailure: failure == null,
+      );
+      _noteBackend(engine);
+    }
+    return translated;
   }
 
   // --- per-item state transitions -------------------------------------------
@@ -661,7 +725,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setArticleFailure(String key, SummaryFailure failure) {
+  void _setArticleFailure(String key, SummaryFailure failure, {EngineFailureDetail? detail}) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
@@ -670,7 +734,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       summarizingArticles: {...state.summarizingArticles}..remove(key),
       articleFailures: {
         ...state.articleFailures,
-        key: SummaryAttemptFailure(failure: failure, attempt: _articleAttempts[key] ?? 1),
+        key: SummaryAttemptFailure(
+          failure: failure,
+          attempt: _articleAttempts[key] ?? 1,
+          detail: detail,
+        ),
       },
     );
   }
@@ -708,7 +776,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setCommentsFailure(String key, SummaryFailure failure) {
+  void _setCommentsFailure(String key, SummaryFailure failure, {EngineFailureDetail? detail}) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
@@ -717,7 +785,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       summarizingComments: {...state.summarizingComments}..remove(key),
       commentFailures: {
         ...state.commentFailures,
-        key: SummaryAttemptFailure(failure: failure, attempt: _commentAttempts[key] ?? 1),
+        key: SummaryAttemptFailure(
+          failure: failure,
+          attempt: _commentAttempts[key] ?? 1,
+          detail: detail,
+        ),
       },
     );
   }

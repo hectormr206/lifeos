@@ -6,7 +6,19 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 
+import '../domain/engine_failure_detail.dart';
 import '../domain/local_llm_engine.dart';
+
+/// How the engine obtains a native [InferenceModel]. Production is
+/// [FlutterGemma.getActiveModel]; kept as a seam so the BACKEND FALLBACK — which
+/// backend is asked for, in which order, and when a second attempt is worth its
+/// cost — is testable on the host, where there is no plugin channel at all.
+typedef ActiveModelLoader = Future<InferenceModel> Function({
+  required int maxTokens,
+  required PreferredBackend preferredBackend,
+  required bool supportImage,
+  required int maxNumImages,
+});
 
 /// Production plugin bootstrap: registers the `.litertlm` on-device inference
 /// engine with flutter_gemma. flutter_gemma's core ships NO engine, so this
@@ -103,11 +115,16 @@ Future<void> _registerLiteRtLmEngine() => FlutterGemma.initialize(
 ///     `TextResponse.token`)
 ///   dispose: `model.close()`
 class FlutterGemmaLlmEngine implements LocalLlmEngine {
-  FlutterGemmaLlmEngine(this._config, {Future<void> Function()? initializer})
-      : _initializer = initializer ?? _registerLiteRtLmEngine;
+  FlutterGemmaLlmEngine(
+    this._config, {
+    Future<void> Function()? initializer,
+    ActiveModelLoader? modelLoader,
+  })  : _initializer = initializer ?? _registerLiteRtLmEngine,
+        _modelLoader = modelLoader ?? FlutterGemma.getActiveModel;
 
   final LocalModelConfig _config;
   final Future<void> Function() _initializer;
+  final ActiveModelLoader _modelLoader;
 
   /// Special/control tokens that LiteRT-LM can DETOKENIZE to literal text on the
   /// Android FFI path (e.g. a sampled `<pad>` surfacing as the literal string
@@ -215,9 +232,58 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   }
 
   @override
+  bool get usesFallbackBackend => _usesFallbackBackend;
+  bool _usesFallbackBackend = false;
+
+  @override
   Future<void> load({LocalLlmBackend? backend}) async {
     await _ensureInitialized();
-    _loadedBackend = backend ?? _config.backend;
+    if (_model != null) return; // already loaded; keep the handle and its notice
+    final requested = backend ?? _config.backend;
+    _usesFallbackBackend = false;
+
+    try {
+      await _loadOn(requested);
+      return;
+    } catch (error) {
+      // ── The bounded retry ────────────────────────────────────────────────
+      // Loading a 2.6 GB model is expensive, so a second attempt has to be
+      // worth it. It is skipped when there is nothing to fall back TO (the
+      // request was already CPU), and when the failure is about the FILE
+      // rather than the accelerator — a missing or corrupt file fails
+      // identically on every backend, so retrying only delays the error the
+      // user needs to read.
+      if (requested == LocalLlmBackend.cpu || !_couldBeBackendRelated(error)) {
+        throw LlmEngineException(
+          EngineFailureDetail.from(LlmEngineCall.load, error, backend: requested),
+        );
+      }
+      try {
+        await _loadOn(LocalLlmBackend.cpu);
+        _usesFallbackBackend = true;
+      } catch (cpuError) {
+        // BOTH attempts failed: report both. Which one is the real cause is
+        // not ours to decide, and dropping either loses the evidence.
+        throw LlmEngineException(
+          EngineFailureDetail(
+            call: LlmEngineCall.load,
+            errorType: error.runtimeType.toString(),
+            backend: requested,
+            message: EngineFailureDetail.truncate(
+              '$error\n\nfallback (cpu) · ${cpuError.runtimeType}\n$cpuError',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  /// One load attempt on [backend]. Records the backend the runtime ACTUALLY
+  /// initialized (flutter_gemma documents that an FFI runtime may fall back
+  /// from the requested accelerator silently, without failing) — that silent
+  /// fallback is the same slowness with no error at all, so it raises the same
+  /// notice as our own explicit retry.
+  Future<void> _loadOn(LocalLlmBackend backend) async {
     // VISION FIX (root cause): the native session's vision modality has to be
     // enabled when the InferenceModel is CREATED, not later at chat time.
     // flutter_gemma's `getActiveModel` builds the model with
@@ -230,13 +296,47 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // visión". gemma-4-E2B DOES support vision, so we load it vision-capable.
     // Text-only `generate()` still works: it just creates a text-only chat on
     // the same vision-capable model.
-    _model ??= await FlutterGemma.getActiveModel(
+    final model = await _modelLoader(
       maxTokens: _config.maxTokens,
-      preferredBackend: _toPreferredBackend(_loadedBackend!),
+      preferredBackend: _toPreferredBackend(backend),
       supportImage: true,
       maxNumImages: LocalModelConfig.maxImagesPerMessage,
     );
+    _model = model;
+    final actual = _fromPreferredBackend(model.activeBackend) ?? backend;
+    _loadedBackend = actual;
+    if (actual != backend) _usesFallbackBackend = true;
   }
+
+  /// Whether [error] could plausibly be the ACCELERATOR's fault, and therefore
+  /// whether a CPU retry is worth a second multi-second load.
+  ///
+  /// HONEST LIMIT: flutter_gemma / LiteRT-LM surface load failures as ordinary
+  /// exceptions with free-form native text, so there is no error code to key
+  /// on. This is message matching, and it is deliberately a DENY-list rather
+  /// than an allow-list of GPU phrases: an unrecognised message retries.
+  ///
+  /// That direction is the safer default. A wrong retry costs one wasted load
+  /// (seconds, once) and the user still gets the error with its details; a
+  /// wrong refusal permanently blocks every model feature on that device.
+  static bool _couldBeBackendRelated(Object error) =>
+      !_fileIntegrityFailure.hasMatch(error.toString());
+
+  /// Failures that name the model FILE — absent, unreadable, or damaged. These
+  /// fail the same way on every backend.
+  static final RegExp _fileIntegrityFailure = RegExp(
+    r'no such file'
+    r'|file not found'
+    r'|not found at path'
+    r'|no longer installed'
+    r'|file paths not found'
+    r'|does not exist'
+    r'|cannot open|unable to open|failed to open'
+    r'|permission denied'
+    r'|corrupt|truncat|checksum'
+    r'|malformed|invalid (model|file|format)',
+    caseSensitive: false,
+  );
 
   @override
   Future<GenerationResult> generate(
@@ -404,6 +504,10 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   Future<void> dispose() async {
     final model = _model;
     _model = null;
+    // Nothing is loaded any more, so the "running without acceleration" notice
+    // describes nothing. Leaving it set would keep warning about a slowness
+    // the next load may not have.
+    _usesFallbackBackend = false;
     await model?.close();
   }
 
@@ -425,5 +529,15 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
         LocalLlmBackend.cpu => PreferredBackend.cpu,
         LocalLlmBackend.gpu => PreferredBackend.gpu,
         LocalLlmBackend.npu => PreferredBackend.npu,
+      };
+
+  /// The runtime's reported backend mapped back to our domain enum. Null when
+  /// the runtime exposed nothing (or something we do not model) — the caller
+  /// then keeps the backend it asked for rather than inventing an observation.
+  static LocalLlmBackend? _fromPreferredBackend(PreferredBackend? backend) => switch (backend) {
+        PreferredBackend.cpu => LocalLlmBackend.cpu,
+        PreferredBackend.gpu => LocalLlmBackend.gpu,
+        PreferredBackend.npu => LocalLlmBackend.npu,
+        _ => null,
       };
 }

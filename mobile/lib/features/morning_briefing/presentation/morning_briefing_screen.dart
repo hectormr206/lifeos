@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../../../theme/lifeos_theme.dart';
+import '../../local_model/presentation/engine_failure_details.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/summary_failure.dart';
 import 'morning_briefing_notifier.dart';
@@ -45,6 +46,11 @@ class MorningBriefingScreen extends ConsumerWidget {
             _ErrorCard(message: state.error!),
           if (state.briefing != null) ...[
             _BriefingHeader(briefing: state.briefing!),
+            // Untranslated items are no longer silent: the same engine failure
+            // that stops a summary stops every translation, and this is where
+            // that shows up as symptoms with no cause.
+            if (state.translationFailure != null)
+              _TranslationFailedNote(detail: state.translationFailure!),
             const SizedBox(height: 12),
             for (final group in state.briefing!.groups)
               _SourceSection(
@@ -265,11 +271,43 @@ class _SourceSection extends StatelessWidget {
                 isSummarizingComments: state.isSummarizingComments(article.key),
                 isCommentsQueued: state.isQueuedComments(article.key),
                 commentsFailure: state.commentFailures[article.key],
+                modelOnFallbackBackend: state.modelOnFallbackBackend,
                 onRequestSummary: () => notifier.summarizeArticle(article),
                 onRequestComments: () => notifier.summarizeComments(article),
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// "Some items are in their original language, and here is why."
+///
+/// It sits under the briefing header rather than on each untranslated card: one
+/// engine failure is ONE cause, and repeating it per item would bury the news
+/// under the same sentence a dozen times. The items themselves are untouched —
+/// they keep their original text, never blanked, never dropped.
+class _TranslationFailedNote extends StatelessWidget {
+  const _TranslationFailedNote({required this.detail});
+
+  final EngineFailureDetail detail;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = AppLocalizations.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(top: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.briefingTranslationFailed,
+            style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink),
+          ),
+          EngineFailureDetails(detail: detail),
+        ],
       ),
     );
   }
@@ -309,6 +347,7 @@ class _ArticleCard extends StatefulWidget {
     required this.isSummarizingComments,
     required this.isCommentsQueued,
     required this.commentsFailure,
+    required this.modelOnFallbackBackend,
     required this.onRequestSummary,
     required this.onRequestComments,
   });
@@ -329,6 +368,12 @@ class _ArticleCard extends StatefulWidget {
   final bool isSummarizingComments;
   final bool isCommentsQueued;
   final SummaryAttemptFailure? commentsFailure;
+
+  /// The model is loaded on a slower fallback backend, so anything it writes
+  /// will take considerably longer. Shown WHILE waiting (queued/running),
+  /// because that is the moment "slow" and "hung" become indistinguishable.
+  final bool modelOnFallbackBackend;
+
   final VoidCallback onRequestSummary;
   final VoidCallback onRequestComments;
 
@@ -405,6 +450,8 @@ class _ArticleCardState extends State<_ArticleCard> {
                 failureMessage: widget.summaryFailure == null
                     ? null
                     : _failureMessage(l10n, widget.summaryFailure!.failure, comments: false),
+                slowBackend: widget.modelOnFallbackBackend,
+                slowBackendLabel: l10n.briefingModelSlowBackend,
                 onRetry: widget.onRequestSummary,
                 onInstallModel: () => _openModelScreen(context),
                 text: article.fullSummary,
@@ -429,6 +476,8 @@ class _ArticleCardState extends State<_ArticleCard> {
                 failureMessage: widget.commentsFailure == null
                     ? null
                     : _failureMessage(l10n, widget.commentsFailure!.failure, comments: true),
+                slowBackend: widget.modelOnFallbackBackend,
+                slowBackendLabel: l10n.briefingModelSlowBackend,
                 onRetry: widget.onRequestComments,
                 onInstallModel: () => _openModelScreen(context),
                 text: article.commentsSummary,
@@ -593,6 +642,8 @@ class _SummaryPanel extends StatelessWidget {
     required this.queuedHint,
     required this.failure,
     required this.failureMessage,
+    required this.slowBackend,
+    required this.slowBackendLabel,
     required this.onRetry,
     required this.onInstallModel,
     required this.text,
@@ -605,6 +656,13 @@ class _SummaryPanel extends StatelessWidget {
   final String queuedHint;
   final SummaryAttemptFailure? failure;
   final String? failureMessage;
+
+  /// The model fell back to a slower backend. Announced in the WAITING and
+  /// RUNNING looks only: that is when the user is deciding whether this is
+  /// still working, and it is not news worth repeating over a finished summary.
+  final bool slowBackend;
+  final String slowBackendLabel;
+
   final VoidCallback onRetry;
   final VoidCallback onInstallModel;
   final String? text;
@@ -630,6 +688,7 @@ class _SummaryPanel extends StatelessWidget {
                   queuedHint,
                   style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
                 ),
+                if (slowBackend) _slowBackendLine(theme),
               ],
             ),
           ),
@@ -637,10 +696,19 @@ class _SummaryPanel extends StatelessWidget {
       );
     } else if (loading) {
       child = Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
           const SizedBox(width: 12),
-          Text(loadingLabel, style: theme.textTheme.bodySmall),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(loadingLabel, style: theme.textTheme.bodySmall),
+                if (slowBackend) _slowBackendLine(theme),
+              ],
+            ),
+          ),
         ],
       );
     } else if (failure != null) {
@@ -666,6 +734,19 @@ class _SummaryPanel extends StatelessWidget {
       child: child,
     );
   }
+
+  /// The "this is slow, not stuck" line. Deliberately part of the WAIT itself
+  /// rather than a settings-screen note or a one-time dialog: the question
+  /// ("why is nothing happening?") is asked here, at this moment, and a notice
+  /// the user has to go looking for — or one shown once and forgotten — does
+  /// not answer it.
+  Widget _slowBackendLine(ThemeData theme) => Padding(
+        padding: const EdgeInsets.only(top: 4),
+        child: Text(
+          slowBackendLabel,
+          style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+        ),
+      );
 }
 
 /// The FAILED look: the cause in words, the repeat-failure count once there is
@@ -731,6 +812,12 @@ class _FailurePanel extends StatelessWidget {
               ),
             ),
         },
+        // COLLAPSED, and last: the sentence above stays the headline. This is
+        // the underlying exception, kept because it is the only evidence of
+        // WHY the model could not be used — and there is no way to recover it
+        // from the device afterwards. Absent for causes that never touched the
+        // model, where there is no exception to show.
+        if (failure.detail != null) EngineFailureDetails(detail: failure.detail!),
       ],
     );
   }

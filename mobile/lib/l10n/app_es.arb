@@ -342,6 +342,22 @@
   "@briefingSummaryErrorUnknown": {
     "description": "A failure that could not be attributed to any step. Says so plainly rather than guessing the most likely cause."
   },
+  "engineErrorDetailsShow": "Ver detalles técnicos",
+  "@engineErrorDetailsShow": {
+    "description": "Collapsed affordance under a model-failure message. The plain-language sentence stays the headline; this reveals the underlying exception (which call threw, its type, its message) so the user can read and quote it. Never expanded by default."
+  },
+  "engineErrorDetailsHide": "Ocultar detalles técnicos",
+  "engineErrorDetailsCopy": "Copiar detalles",
+  "engineErrorDetailsCopied": "Detalles técnicos copiados.",
+  "engineErrorDetailsFailed": "No se pudieron copiar los detalles.",
+  "briefingTranslationFailed": "Algunos elementos se muestran en su idioma original: el modelo no pudo traducirlos.",
+  "@briefingTranslationFailed": {
+    "description": "Translation runs on the same on-device model as the summaries, so one unusable model breaks both. Items are never blanked or dropped — they keep their original text — but the reason used to go unsaid."
+  },
+  "briefingModelSlowBackend": "El modelo se está ejecutando sin aceleración por hardware, así que tardará bastante más de lo normal.",
+  "@briefingModelSlowBackend": {
+    "description": "Shown while a summary is queued or running when the model had to fall back to a slower backend. Without it, a summary that takes minutes is indistinguishable from one that has hung."
+  },
   "briefingSummaryRetryAction": "Reintentar",
   "briefingSummaryRetryFailedAgain": "Volvió a fallar (intento {attempt}).",
   "@briefingSummaryRetryFailedAgain": {

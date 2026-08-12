@@ -42,6 +42,11 @@ class SerialLlmEngine implements LocalLlmEngine {
   Future<void> installModelFromFile(String path) =>
       _queue.add(() => _inner.installModelFromFile(path), label: 'install');
 
+  /// Straight through: this is a property of the loaded model, not an
+  /// operation on the native session, so it never needs a queue slot.
+  @override
+  bool get usesFallbackBackend => _inner.usesFallbackBackend;
+
   @override
   Future<void> load({LocalLlmBackend? backend}) =>
       _queue.add(() => _inner.load(backend: backend), label: 'load');

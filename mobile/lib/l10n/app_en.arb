@@ -404,6 +404,22 @@
   "@briefingSummaryErrorUnknown": {
     "description": "A failure that could not be attributed to any step. Says so plainly rather than guessing the most likely cause."
   },
+  "engineErrorDetailsShow": "Show technical details",
+  "@engineErrorDetailsShow": {
+    "description": "Collapsed affordance under a model-failure message. The plain-language sentence stays the headline; this reveals the underlying exception (which call threw, its type, its message) so the user can read and quote it. Never expanded by default."
+  },
+  "engineErrorDetailsHide": "Hide technical details",
+  "engineErrorDetailsCopy": "Copy details",
+  "engineErrorDetailsCopied": "Technical details copied.",
+  "engineErrorDetailsFailed": "The details could not be copied.",
+  "briefingTranslationFailed": "Some items are shown in their original language: the model could not translate them.",
+  "@briefingTranslationFailed": {
+    "description": "Translation runs on the same on-device model as the summaries, so one unusable model breaks both. Items are never blanked or dropped — they keep their original text — but the reason used to go unsaid."
+  },
+  "briefingModelSlowBackend": "The model is running without hardware acceleration, so this will take considerably longer than usual.",
+  "@briefingModelSlowBackend": {
+    "description": "Shown while a summary is queued or running when the model had to fall back to a slower backend. Without it, a summary that takes minutes is indistinguishable from one that has hung."
+  },
   "briefingSummaryRetryAction": "Try again",
   "briefingSummaryRetryFailedAgain": "Failed again (attempt {attempt}).",
   "@briefingSummaryRetryFailedAgain": {

@@ -807,6 +807,229 @@ void main() {
       expect(container.read(morningBriefingNotifierProvider).commentFailures[hn.key]!.failure,
           SummaryFailure.modelMissing);
     });
+
+    // ─── THE EVIDENCE ────────────────────────────────────────────────────
+    //
+    // `modelUnavailable` merges "load() threw" and "generate() threw" on
+    // purpose: the reader cannot act differently on the two, so one sentence
+    // is the right headline and it STAYS the headline. What it must not do any
+    // more is destroy the underlying exception, because on the device where
+    // this happens there is no other way to recover it — `flutter test` has no
+    // plugin channel, adb logcat from a terminal app shows only that app, and
+    // there is no second device. The detail rides along so a human can expand
+    // it and quote it back.
+    test('a load failure carries the real exception, attributed to load', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.modelUnavailable, reason: 'headline unchanged');
+      expect(failure.detail, isNotNull);
+      expect(failure.detail!.call, LlmEngineCall.load);
+      expect(failure.detail!.message, contains('load boom'));
+    });
+
+    test('a generate failure is attributed to generate, not to load', () async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.modelUnavailable);
+      expect(failure.detail!.call, LlmEngineCall.generate);
+      expect(failure.detail!.message, contains('generate boom'));
+    });
+
+    test('the comments summary carries the same evidence', () async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      final container = _container(
+        engine: engine,
+        fetcher: FakeSourceFetcher(bodies: {
+          hnFrontPageUrl: '{"hits":[{"objectID":"42",'
+              '"title":"La economía de España crece hoy",'
+              '"url":"https://ext.com/story",'
+              '"created_at":"${today.toUtc().toIso8601String()}"}]}',
+          '${hnItemUrlPrefix}42': '{"children":[{"author":"alice","text":"Gran punto"}]}',
+        }),
+        prefs: FakeMorningBriefingPreferences(initialSources: const []),
+        notifications: FakeBriefingNotifications(),
+        now: now,
+        languageCode: 'es',
+      );
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      final hn = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .articles
+          .firstWhere((a) => a.isHackerNews);
+
+      await notifier.summarizeComments(hn);
+
+      final failure = container.read(morningBriefingNotifierProvider).commentFailures[hn.key]!;
+      expect(failure.detail!.call, LlmEngineCall.generate);
+      expect(failure.detail!.message, contains('generate boom'));
+    });
+
+    // A cause identified WITHOUT touching the model has no engine exception to
+    // show. Attaching one would be a fabricated observation.
+    test('a non-model cause carries no engine detail', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+      final container = articleContainer(engine, page: '<html><body></body></html>');
+      final (notifier, _, article) = await ready(container);
+
+      await notifier.summarizeArticle(article);
+
+      final failure = container.read(morningBriefingNotifierProvider).articleFailures[article.key]!;
+      expect(failure.failure, SummaryFailure.pageUnreadable);
+      expect(failure.detail, isNull);
+    });
+  });
+
+  // ─── TRANSLATION: THE SAME ENGINE, THE SAME SILENCE ────────────────────
+  //
+  // Translation drives the same engine as the summaries, so an unusable model
+  // breaks both. The summaries said so; translation just left items in their
+  // original language with nothing to explain it. The degradation is still the
+  // right one (never blank a source, never drop it) — what changes is that the
+  // reason is now recorded.
+  group('translation reports the engine failure behind untranslated items', () {
+    ProviderContainer englishContainer(FakeLocalLlmEngine engine) => _container(
+          engine: engine,
+          fetcher: FakeSourceFetcher(bodies: {
+            'https://en.com/rss': _englishRss(
+              'English Source',
+              const [('The new build of the app', 'It is a story about the new build')],
+              today,
+            ),
+            hnFrontPageUrl: '{"hits":[]}',
+          }),
+          prefs: FakeMorningBriefingPreferences(initialSources: ['https://en.com/rss']),
+          notifications: FakeBriefingNotifications(),
+          now: now,
+          languageCode: 'es',
+        );
+
+    test('an engine that will not load leaves the items native AND says why', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final container = englishContainer(engine);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.generate();
+
+      final state = container.read(morningBriefingNotifierProvider);
+      expect(state.briefing!.articles.first.translatedTitle, isNull,
+          reason: 'the item is still shown, in its original language');
+      expect(state.translationFailure, isNotNull);
+      expect(state.translationFailure!.call, LlmEngineCall.load);
+      expect(state.translationFailure!.message, contains('load boom'));
+    });
+
+    test('a working engine reports no translation failure', () async {
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: (_) => '1. La nueva versión de la app ||| Es una historia sobre la nueva versión',
+      );
+      final container = englishContainer(engine);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.generate();
+
+      expect(container.read(morningBriefingNotifierProvider).translationFailure, isNull);
+    });
+
+    test('a later successful run clears a stale translation failure', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final container = englishContainer(engine);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      expect(container.read(morningBriefingNotifierProvider).translationFailure, isNotNull);
+
+      engine.loadShouldFail = false;
+      await notifier.generate();
+
+      expect(container.read(morningBriefingNotifierProvider).translationFailure, isNull);
+    });
+  });
+
+  // ─── THE COST OF THE CPU FALLBACK, SAID OUT LOUD ───────────────────────
+  //
+  // The engine now falls back to CPU when the preferred backend cannot host
+  // the model, which keeps every model feature alive on a device that would
+  // otherwise lose all of them. A 2.6 GB model decoding on CPU is dramatically
+  // slower, though, and a user who is not told cannot tell "slow" from "hung".
+  group('the backend fallback is visible in the state', () {
+    /// One Spanish source (so nothing but the on-demand summary touches the
+    /// model) with one readable article page.
+    ProviderContainer articleContainer(FakeLocalLlmEngine engine) => _container(
+          engine: engine,
+          fetcher: FakeSourceFetcher(bodies: {
+            'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
+            hnFrontPageUrl: '{"hits":[]}',
+            'https://ex.com/${'Noticia A1'.hashCode}':
+                '<html><body><p>Cuerpo del artículo largo y legible.</p></body></html>',
+          }),
+          prefs: FakeMorningBriefingPreferences(initialSources: ['https://a.com/rss']),
+          notifications: FakeBriefingNotifications(),
+          now: now,
+          languageCode: 'es',
+        );
+
+    Future<(MorningBriefingNotifier, ProviderContainer, BriefingArticle)> ready(
+      ProviderContainer container,
+    ) async {
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.generate();
+      final article = container
+          .read(morningBriefingNotifierProvider)
+          .briefing!
+          .articles
+          .firstWhere((a) => a.title == 'Noticia A1');
+      return (notifier, container, article);
+    }
+
+    test('a summary run on the fallback backend flags it', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => 'Resumen')
+        ..usesFallbackBackend = true;
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      expect(container.read(morningBriefingNotifierProvider).modelOnFallbackBackend, isTrue);
+    });
+
+    test('an ordinary run does not flag it', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => 'Resumen');
+      final (notifier, container, article) = await ready(articleContainer(engine));
+
+      await notifier.summarizeArticle(article);
+
+      expect(container.read(morningBriefingNotifierProvider).modelOnFallbackBackend, isFalse);
+    });
+
+    // The notice describes the CURRENT load, so it has to come back down: a
+    // stale warning about slowness that is over is a lie in the other
+    // direction.
+    test('the flag follows the engine back down when the fallback stops', () async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true)
+        ..usesFallbackBackend = true;
+      final (notifier, container, article) = await ready(articleContainer(engine));
+      await notifier.summarizeArticle(article);
+      expect(container.read(morningBriefingNotifierProvider).modelOnFallbackBackend, isTrue);
+
+      engine.usesFallbackBackend = false;
+      await notifier.summarizeArticle(article);
+
+      expect(container.read(morningBriefingNotifierProvider).modelOnFallbackBackend, isFalse);
+    });
   });
 
   test('addSource + removeSource persist through the preferences', () async {

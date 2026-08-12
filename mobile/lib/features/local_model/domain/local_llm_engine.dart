@@ -121,6 +121,17 @@ abstract class LocalLlmEngine {
   /// [backend] overrides the engine's configured default for this load.
   Future<void> load({LocalLlmBackend? backend});
 
+  /// Whether the currently-loaded model ended up on a SLOWER backend than the
+  /// one that was asked for — either because [load] fell back after the
+  /// preferred backend refused the model, or because the runtime itself fell
+  /// back silently.
+  ///
+  /// This exists so the fallback is never silent. A 2.6 GB model decoding on
+  /// CPU is dramatically slower, and a user who is not told cannot tell "slow"
+  /// from "hung" — a degraded app that feels broken is its own kind of failure.
+  /// False whenever nothing is loaded.
+  bool get usesFallbackBackend;
+
   /// Runs one non-streaming completion for [prompt] and returns the reply
   /// text together with its [GenerationMetrics] (tokens/s, latency, backend).
   /// SLICE 1 is single-turn (no retained conversation history).

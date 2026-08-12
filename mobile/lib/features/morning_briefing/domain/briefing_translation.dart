@@ -1,3 +1,4 @@
+import '../../local_model/domain/engine_failure_detail.dart';
 import '../../local_model/domain/on_device_translator.dart';
 import '../data/source_content_extractor.dart';
 import 'morning_briefing.dart';
@@ -30,11 +31,25 @@ class BriefingTranslationPipeline {
   /// Translates EVERY source's titles + briefs into [languageCode] up front,
   /// one batched model call per source, with PER-SOURCE isolation. [onSource]
   /// fires before each source's model call (UI-progress seam).
+  ///
+  /// [onEngineFailure] fires AT MOST ONCE for the whole briefing, with the real
+  /// exception behind an engine that could not run. Untranslated items with no
+  /// explanation is the exact silence this reports: the model failure that
+  /// stops a summary stops every translation too, and the reader used to see
+  /// only the symptom.
   Future<OnDeviceBriefing> translateAll(
     OnDeviceBriefing assembled, {
     required String languageCode,
     void Function(int index, int total)? onSource,
+    void Function(EngineFailureDetail detail)? onEngineFailure,
   }) async {
+    var reported = false;
+    void report(EngineFailureDetail detail) {
+      if (reported) return;
+      reported = true;
+      onEngineFailure?.call(detail);
+    }
+
     try {
       // DE-DUPLICATED by name: [OnDeviceBriefing.groups] merges only
       // CONSECUTIVE same-source runs, so a source name split across
@@ -50,7 +65,12 @@ class BriefingTranslationPipeline {
       var briefing = assembled;
       for (var i = 0; i < sourceNames.length; i++) {
         onSource?.call(i, sourceNames.length);
-        briefing = await translateSource(briefing, sourceNames[i], languageCode);
+        briefing = await translateSource(
+          briefing,
+          sourceNames[i],
+          languageCode,
+          onEngineFailure: report,
+        );
       }
       return briefing;
     } catch (_) {
@@ -69,8 +89,9 @@ class BriefingTranslationPipeline {
   Future<OnDeviceBriefing> translateSource(
     OnDeviceBriefing briefing,
     String sourceName,
-    String languageCode,
-  ) async {
+    String languageCode, {
+    void Function(EngineFailureDetail detail)? onEngineFailure,
+  }) async {
     final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
     if (articles.isEmpty) return briefing;
 
@@ -102,6 +123,7 @@ class BriefingTranslationPipeline {
       temperature: translateTemperature,
       topK: translateTopK,
       topP: translateTopP,
+      onEngineFailure: onEngineFailure,
     );
 
     var updated = briefing;

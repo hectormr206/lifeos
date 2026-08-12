@@ -11,6 +11,7 @@
 // slot that still comes back missing is retried ON ITS OWN before anyone
 // settles for the original text.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/local_model/domain/engine_failure_detail.dart';
 import 'package:lifeos/features/local_model/domain/on_device_translator.dart';
 
 import '../support/fake_local_llm_engine.dart';
@@ -106,5 +107,94 @@ void main() {
 
     expect(await translator.translate(const [], languageCode: 'es'), isEmpty);
     expect(engine.generateCount, 0);
+  });
+
+  // ─── ENGINE FAILURE IS NOT THE SAME AS "NOTHING TO TRANSLATE" ────────────
+  //
+  // Degrading to the original text is the RIGHT behaviour: a source is never
+  // blanked and never dropped. But it was also indistinguishable from a model
+  // that was never usable at all — the same engine failure that stops a summary
+  // stops every translation, and the reader saw only untranslated headlines
+  // with nothing to explain them. The failure is reported OUT (never thrown);
+  // what to do with it belongs to the caller.
+  group('engine failure reporting', () {
+    test('reports a load() failure, with the real exception attached', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final translator = OnDeviceTranslator(engine);
+      final reported = <EngineFailureDetail>[];
+
+      final out = await translator.translate(
+        ['Hello'],
+        languageCode: 'es',
+        onEngineFailure: reported.add,
+      );
+
+      expect(out, [null], reason: 'still degrades to the original text');
+      expect(reported, hasLength(1));
+      expect(reported.single.call, LlmEngineCall.load);
+      expect(reported.single.message, contains('load boom'));
+    });
+
+    test('reports a generate() failure as generate, not as load', () async {
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      final translator = OnDeviceTranslator(engine);
+      final reported = <EngineFailureDetail>[];
+
+      await translator.translate(
+        ['Hello', 'World'],
+        languageCode: 'es',
+        onEngineFailure: reported.add,
+      );
+
+      expect(reported, isNotEmpty);
+      expect(reported.first.call, LlmEngineCall.generate);
+      expect(reported.first.message, contains('generate boom'));
+    });
+
+    test('reports the FIRST failure only — one cause, however many slots', () async {
+      // Six items produce several batches plus per-slot retries. A caller that
+      // showed one notice per failed call would paper the screen with the same
+      // cause repeated.
+      final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
+      final translator = OnDeviceTranslator(engine);
+      final reported = <EngineFailureDetail>[];
+
+      await translator.translate(
+        ['a', 'b', 'c', 'd', 'e', 'f'],
+        languageCode: 'es',
+        onEngineFailure: reported.add,
+      );
+
+      expect(reported, hasLength(1));
+    });
+
+    test('stays silent when the model worked', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => '1. Hola');
+      final translator = OnDeviceTranslator(engine);
+      final reported = <EngineFailureDetail>[];
+
+      await translator.translate(['Hello'], languageCode: 'es', onEngineFailure: reported.add);
+
+      expect(reported, isEmpty);
+    });
+
+    test('stays silent when the model answered but a slot came back unusable', () async {
+      // Not an engine failure: the model ran and simply gave nothing for that
+      // line. Calling it an engine failure would name the wrong cause.
+      final engine = FakeLocalLlmEngine(installed: true, reply: (_) => 'no numbering here');
+      final translator = OnDeviceTranslator(engine);
+      final reported = <EngineFailureDetail>[];
+
+      final out = await translator.translate(
+        ['Hello'],
+        languageCode: 'es',
+        onEngineFailure: reported.add,
+      );
+
+      // The per-slot retry recovers it (a single-line answer needs no
+      // numbering) — and nothing about that is an engine failure.
+      expect(out, ['no numbering here']);
+      expect(reported, isEmpty);
+    });
   });
 }
