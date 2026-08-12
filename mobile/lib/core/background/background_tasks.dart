@@ -15,8 +15,8 @@ import '../../features/backups/data/workmanager_automatic_backup_work.dart';
 import '../../features/backups/domain/automatic_backup_runner.dart';
 import '../../features/data_control/data/graph_backup_service.dart';
 import '../../features/data_control/domain/backup_info.dart';
+import '../../features/local_model/data/brain_model_location.dart';
 import '../../features/local_model/data/flutter_gemma_llm_engine.dart';
-import '../../features/local_model/domain/brain_model_manifest.dart';
 import '../../features/local_model/domain/llm_request_queue.dart';
 import '../../features/local_model/domain/local_llm_engine.dart';
 import '../../features/local_model/domain/serial_llm_engine.dart';
@@ -169,14 +169,7 @@ Future<void> _notifyVpnUndetermined() => AppNotifications.instance.show(
 ///   2. flutter_gemma's own installation registry (covers a legacy in-engine
 ///      network install on dev builds). Metadata only — no fetch.
 Future<bool> isBrainModelOnDisk(LocalLlmEngine engine) async {
-  try {
-    final dir = await getApplicationSupportDirectory();
-    final file = File(
-      '${dir.path}${Platform.pathSeparator}brain_model'
-      '${Platform.pathSeparator}$kBrainModelFileName',
-    );
-    if (file.existsSync()) return true;
-  } catch (_) {/* no support dir — fall through to the registry check */}
+  if (await brainModelWeightsPath() != null) return true;
   try {
     return await engine.isModelInstalled();
   } catch (_) {

@@ -8,6 +8,7 @@ import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 
 import '../domain/engine_failure_detail.dart';
 import '../domain/local_llm_engine.dart';
+import 'brain_model_location.dart';
 
 /// How the engine obtains a native [InferenceModel]. Production is
 /// [FlutterGemma.getActiveModel]; kept as a seam so the BACKEND FALLBACK — which
@@ -19,6 +20,25 @@ typedef ActiveModelLoader = Future<InferenceModel> Function({
   required bool supportImage,
   required int maxNumImages,
 });
+
+/// flutter_gemma's PERSISTED "this model is installed" record (a
+/// SharedPreferences key that outlives both the weights and the active-model
+/// identity). Production is [FlutterGemma.isModelInstalled].
+typedef InstalledRecordProbe = Future<bool> Function(String modelId);
+
+/// Whether THIS PROCESS currently has an active inference model. Production is
+/// [FlutterGemma.hasActiveModel] — a boolean the plugin exposes for exactly
+/// this question, so the check never depends on matching an error message.
+typedef ActiveModelProbe = bool Function();
+
+/// Absolute path of the already-downloaded weights on this device, or null when
+/// nothing is on disk. Production is [brainModelWeightsPath].
+typedef WeightsLocator = Future<String?> Function();
+
+/// Registers the weights at a path as the ACTIVE inference model. Production is
+/// flutter_gemma's `installModel().fromFile(path).install()`, which neither
+/// downloads nor copies anything (see [FlutterGemmaLlmEngine._installFromFile]).
+typedef ModelActivator = Future<void> Function(String path);
 
 /// Production plugin bootstrap: registers the `.litertlm` on-device inference
 /// engine with flutter_gemma. flutter_gemma's core ships NO engine, so this
@@ -119,12 +139,42 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     this._config, {
     Future<void> Function()? initializer,
     ActiveModelLoader? modelLoader,
+    InstalledRecordProbe? installedRecordProbe,
+    ActiveModelProbe? activeModelProbe,
+    WeightsLocator? weightsLocator,
+    ModelActivator? modelActivator,
   })  : _initializer = initializer ?? _registerLiteRtLmEngine,
-        _modelLoader = modelLoader ?? FlutterGemma.getActiveModel;
+        _modelLoader = modelLoader ?? FlutterGemma.getActiveModel,
+        _installedRecordProbe =
+            installedRecordProbe ?? FlutterGemma.isModelInstalled,
+        _activeModelProbe = activeModelProbe ?? FlutterGemma.hasActiveModel,
+        _weightsLocator = weightsLocator ?? brainModelWeightsPath,
+        _modelActivator = modelActivator ?? _installFromFile;
 
   final LocalModelConfig _config;
   final Future<void> Function() _initializer;
   final ActiveModelLoader _modelLoader;
+  final InstalledRecordProbe _installedRecordProbe;
+  final ActiveModelProbe _activeModelProbe;
+  final WeightsLocator _weightsLocator;
+  final ModelActivator _modelActivator;
+
+  /// Production activation: re-registers an EXISTING file as the active
+  /// inference model.
+  ///
+  /// This cannot re-download the 2.6 GB weights, and that is a property of the
+  /// call, not a hope (verified in flutter_gemma 1.3.1 sources):
+  ///   * the source is a [FileSource] — a `NetworkSource` is never constructed
+  ///     here, so no downloader is ever reachable from this path;
+  ///   * `InferenceInstallationBuilder.install()` checks the installed record
+  ///     FIRST and, when the model is already installed, skips straight to
+  ///     `setActiveModel` ("Model already installed … skipping download");
+  ///   * even with no record, `FileSourceHandler` only registers the path —
+  ///     "No copying (uses external path directly)".
+  static Future<void> _installFromFile(String path) => FlutterGemma.installModel(
+        modelType: ModelType.gemma4,
+        fileType: ModelFileType.litertlm,
+      ).fromFile(path).install();
 
   /// Special/control tokens that LiteRT-LM can DETOKENIZE to literal text on the
   /// Android FFI path (e.g. a sampled `<pad>` surfacing as the literal string
@@ -158,10 +208,26 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
   /// identity so [load] can find already-installed weights across launches).
   Future<void> _ensureInitialized() => _initFuture ??= _initializer();
 
+  /// Whether the model is installed AND actually usable.
+  ///
+  /// flutter_gemma's install record is a SharedPreferences key: it survives an
+  /// app restart, an OTA that removed the file, and the loss of the active
+  /// identity described in [_ensureModelActive]. The whole app believes this
+  /// bool — the model screen renders "Instalado", the briefing refuses to
+  /// retry with `modelMissing`, and the download button disappears — so a true
+  /// here about something that cannot answer a single prompt is a lie every
+  /// one of those repeats.
+  ///
+  /// It therefore means: the record exists AND the model is either already
+  /// active in this process, or re-activatable from weights that are on this
+  /// device right now. Anything else reports NOT installed, which routes the
+  /// user to a download — the honest outcome when the weights are gone.
   @override
   Future<bool> isModelInstalled() async {
     await _ensureInitialized();
-    return FlutterGemma.isModelInstalled(_config.modelId);
+    if (!await _installedRecordProbe(_config.modelId)) return false;
+    if (_activeModelProbe()) return true;
+    return await _weightsLocator() != null;
   }
 
   /// The `background_downloader` task group flutter_gemma runs ALL model
@@ -225,10 +291,50 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // the EXTERNAL path (no copy) and sets the model active. The file keeps
     // the stable name `gemma-4-E2B-it.litertlm`, so `isModelInstalled`
     // (keyed on the last path segment) keeps matching `_config.modelId`.
-    await FlutterGemma.installModel(
-      modelType: ModelType.gemma4,
-      fileType: ModelFileType.litertlm,
-    ).fromFile(path).install();
+    //
+    // Because nothing is copied, the registration is only as durable as this
+    // PROCESS — see [_ensureModelActive], which repeats it after a restart.
+    await _modelActivator(path);
+  }
+
+  /// Makes sure this process has an ACTIVE inference model before anything asks
+  /// for one, re-registering the weights already on disk when it does not.
+  ///
+  /// WHY THIS EXISTS (flutter_gemma 1.3.1, traced from a Pixel 7 Pro failure
+  /// that read, identically on GPU and on the CPU fallback:
+  /// "StateError: Bad state: No active inference model set. Use
+  /// FlutterGemma.installModel() first."):
+  ///
+  ///   1. the OTA install hands flutter_gemma an EXTERNAL path
+  ///      (`<app-support>/brain_model/<name>`) and `FileSourceHandler` does
+  ///      "No copying (uses external path directly)" — the plugin's own model
+  ///      directory stays empty;
+  ///   2. `MobileModelManager.setActiveModel` persists the model type, file
+  ///      type and FILENAME (plus a source string it never reads back);
+  ///   3. on the next launch `_restoreActiveInferenceModel` rebuilds the spec
+  ///      as `FileSource(getTargetPath(filename))` — i.e. the file under the
+  ///      app's DOCUMENTS dir, where an external install never wrote — finds
+  ///      no file, and leaves `activeInferenceModel` null;
+  ///   4. the installed RECORD survived, so the app skips installing and calls
+  ///      `getActiveModel()`, which throws the StateError above — for good,
+  ///      until something installs again.
+  ///
+  /// The repair is proactive rather than a catch-and-retry on that message:
+  /// [FlutterGemma.hasActiveModel] answers the exact question as a bool, and
+  /// this codebase has been burned before by keying behaviour off free-form
+  /// native error text (see [_couldBeBackendRelated], which has to). It also
+  /// keeps the failure path clean — when the weights really are missing, the
+  /// user still gets the load error that says so, not a retry that hides it.
+  ///
+  /// Costs nothing when there is nothing to fix: with a model already active
+  /// this is one synchronous bool. It NEVER downloads — see [_installFromFile].
+  Future<void> _ensureModelActive() async {
+    if (_activeModelProbe()) return;
+    final path = await _weightsLocator();
+    // No weights on disk: there is nothing to re-activate and nothing to
+    // pretend. Let the load proceed and fail with its own, truthful error.
+    if (path == null) return;
+    await _modelActivator(path);
   }
 
   @override
@@ -241,6 +347,17 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     if (_model != null) return; // already loaded; keep the handle and its notice
     final requested = backend ?? _config.backend;
     _usesFallbackBackend = false;
+
+    try {
+      await _ensureModelActive();
+    } catch (error) {
+      // Re-activation failed (e.g. the file vanished between the check and the
+      // call). Report THAT, with its own cause — retrying on another backend
+      // would only replace it with a misleading "no active model".
+      throw LlmEngineException(
+        EngineFailureDetail.from(LlmEngineCall.load, error, backend: requested),
+      );
+    }
 
     try {
       await _loadOn(requested);

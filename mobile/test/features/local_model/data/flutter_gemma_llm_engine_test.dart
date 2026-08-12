@@ -310,4 +310,193 @@ void main() {
       expect(engine.usesFallbackBackend, isFalse);
     });
   });
+
+  // ── Re-activation across an app restart ───────────────────────────────────
+  //
+  // THE BUG (reported from a Pixel 7 Pro, verbatim on BOTH backends):
+  //   load · gpu · StateError: Bad state: No active inference model set.
+  //       Use FlutterGemma.installModel() first.
+  //   fallback (cpu) · StateError: … (identical)
+  //
+  // Traced through flutter_gemma 1.3.1's own sources:
+  //   * the app installs the OTA weights with `installModel().fromFile(path)`.
+  //     `FileSourceHandler` documents "No copying (uses external path
+  //     directly)" — the file stays at `<app-support>/brain_model/<name>`.
+  //   * `MobileModelManager.setActiveModel` persists modelType + fileType +
+  //     FILENAME (and a source string it never reads back).
+  //   * on the next launch `_restoreActiveInferenceModel` rebuilds the spec as
+  //     `FileSource(getTargetPath(filename))` = `<app-documents>/<name>` — a
+  //     path an external install NEVER wrote to — finds no file, logs
+  //     "file missing — skipping", and leaves `activeInferenceModel` null.
+  //   * `FlutterGemma.isModelInstalled` reads a SharedPreferences record that
+  //     survived the restart, so the app skips installing and calls
+  //     `getActiveModel()`, which throws the StateError above.
+  //
+  // So the weights are on disk and registered, but the process has no ACTIVE
+  // model. `load` must repair that itself — from the file already on disk,
+  // never by downloading 2.6 GB again.
+  group('re-activating an installed-but-inactive model', () {
+    test('load re-activates the on-disk weights when nothing is active', () async {
+      final activation = _FakeActivation(weightsPath: _weightsPath);
+      final engine = _engineWithActivation(activation);
+
+      await engine.load();
+
+      expect(activation.activated, [_weightsPath]);
+    });
+
+    test('the re-activation happens BEFORE the model is asked for', () async {
+      final activation = _FakeActivation(weightsPath: _weightsPath);
+      final seenAtLoad = <bool>[];
+      final engine = _engineWithActivation(
+        activation,
+        loader: ({
+          required int maxTokens,
+          required PreferredBackend preferredBackend,
+          required bool supportImage,
+          required int maxNumImages,
+        }) async {
+          seenAtLoad.add(activation.hasActive());
+          return _FakeModel(preferredBackend);
+        },
+      );
+
+      await engine.load();
+
+      expect(seenAtLoad, [isTrue],
+          reason: 'getActiveModel must never be reached without an active model');
+    });
+
+    test('an already-active model is NOT re-registered', () async {
+      final activation = _FakeActivation(active: true, weightsPath: _weightsPath);
+      final engine = _engineWithActivation(activation);
+
+      await engine.load();
+
+      expect(activation.activated, isEmpty);
+    });
+
+    test('no weights on disk → nothing is invented, the real load error stands',
+        () async {
+      final activation = _FakeActivation(weightsPath: null);
+      final engine = _engineWithActivation(
+        activation,
+        loader: _ScriptedLoader([
+          StateError('No active inference model set.'),
+          StateError('No active inference model set.'),
+        ]).call,
+      );
+
+      await expectLater(engine.load(), throwsA(isA<LlmEngineException>()));
+      expect(activation.activated, isEmpty);
+    });
+
+    test('a failed re-activation surfaces as a load failure, with its cause',
+        () async {
+      final activation = _FakeActivation(weightsPath: _weightsPath)
+        ..activationError = Exception('external file does not exist');
+      final engine = _engineWithActivation(activation);
+
+      await expectLater(
+        engine.load(),
+        throwsA(
+          isA<LlmEngineException>().having(
+            (e) => e.detail.message,
+            'message',
+            contains('external file does not exist'),
+          ),
+        ),
+      );
+    });
+  });
+
+  // ── "Installed" has to mean "usable" ──────────────────────────────────────
+  //
+  // flutter_gemma's installed-record is a SharedPreferences key that outlives
+  // the weights and the active identity alike. The whole app believes that
+  // bool: the model screen renders "Instalado", the briefing refuses to retry
+  // with `modelMissing`, and the download button disappears. If it can say
+  // "installed" about something that cannot answer a single prompt, every one
+  // of those is a lie. Here "installed" means: the record exists AND the model
+  // is either already active or re-activatable from weights on this device.
+  group('isModelInstalled honesty', () {
+    test('no install record → not installed', () async {
+      final activation = _FakeActivation(installedRecord: false);
+
+      expect(await _engineWithActivation(activation).isModelInstalled(), isFalse);
+    });
+
+    test('record + an active model → installed', () async {
+      final activation = _FakeActivation(active: true);
+
+      expect(await _engineWithActivation(activation).isModelInstalled(), isTrue);
+    });
+
+    test('record + inactive but the weights are on disk → installed', () async {
+      final activation = _FakeActivation(weightsPath: _weightsPath);
+
+      expect(await _engineWithActivation(activation).isModelInstalled(), isTrue);
+    });
+
+    test('record + no active model + no weights → NOT installed', () async {
+      final activation = _FakeActivation(weightsPath: null);
+
+      expect(
+        await _engineWithActivation(activation).isModelInstalled(),
+        isFalse,
+        reason: 'a record with nothing behind it must not read as ready',
+      );
+    });
+  });
 }
+
+/// The OTA install location every published build writes to
+/// (`<app-support>/brain_model/gemma-4-E2B-it.litertlm`).
+const String _weightsPath = '/data/user/0/com.lifeos.lifeos/files/brain_model/'
+    'gemma-4-E2B-it.litertlm';
+
+/// Stands in for flutter_gemma's model-registry surface: the persisted
+/// installed-record, the PROCESS-LOCAL active-model identity, the weights on
+/// disk, and the re-registration call. Scripted so the engine's recovery logic
+/// is exercised on the host, where there is no plugin channel at all.
+class _FakeActivation {
+  _FakeActivation({
+    this.installedRecord = true,
+    this.active = false,
+    this.weightsPath,
+  });
+
+  bool installedRecord;
+  bool active;
+  String? weightsPath;
+  Object? activationError;
+
+  /// Every path handed to the activation call, in order.
+  final List<String> activated = [];
+
+  Future<bool> isInstalled(String modelId) async => installedRecord;
+
+  bool hasActive() => active;
+
+  Future<String?> locateWeights() async => weightsPath;
+
+  Future<void> activate(String path) async {
+    if (activationError != null) throw activationError!;
+    activated.add(path);
+    active = true;
+  }
+}
+
+FlutterGemmaLlmEngine _engineWithActivation(
+  _FakeActivation activation, {
+  ActiveModelLoader? loader,
+}) =>
+    FlutterGemmaLlmEngine(
+      LocalModelConfig(),
+      initializer: () async {},
+      modelLoader: loader ?? _ScriptedLoader([PreferredBackend.gpu]).call,
+      installedRecordProbe: activation.isInstalled,
+      activeModelProbe: activation.hasActive,
+      weightsLocator: activation.locateWeights,
+      modelActivator: activation.activate,
+    );

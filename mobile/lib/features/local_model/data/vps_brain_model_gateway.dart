@@ -8,6 +8,7 @@ import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import '../domain/brain_model_manifest.dart';
 import '../domain/brain_model_update_gateway.dart';
+import 'brain_model_location.dart';
 import 'brain_model_source_config.dart';
 import '../../app_update/domain/update_source_config.dart';
 
@@ -41,7 +42,9 @@ class VpsBrainModelGateway implements BrainModelUpdateGateway {
   FileDownloader get _downloader => _injectedDownloader ?? FileDownloader();
 
   static const String _group = 'brain_model';
-  static const String _directory = 'brain_model';
+  /// Shared with the engine's re-activation lookup: both have to name the SAME
+  /// directory or a restart cannot find the weights this gateway parked.
+  static const String _directory = kBrainModelDirName;
 
   /// Temp name the in-flight download lands under; renamed to
   /// [kBrainModelFileName] only after the SHA-256 check passes, so the stable
