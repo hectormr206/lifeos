@@ -221,7 +221,14 @@ void main() {
     expect(find.text('DOMAINS'), findsOneWidget);
   });
 
-  testWidgets('on-device (unpaired): shows the "visible soul" CTAs (body/reminders/insights)',
+  // "¿Cómo está Axi?" (`/body`) and "Resumen" (`/insights`) were engine-only
+  // windows: the first reports the ENGINE's own process health, the second is
+  // its digest preview. Neither renders anything the device owns, and on an
+  // unpaired device both bounced to the pairing screen. They are gone — and
+  // gone for a PAIRED device too, because a button whose whole subject is the
+  // other machine does not belong on this one. "Recordatorios" stays: it is
+  // local and always was.
+  testWidgets('on-device (unpaired): no engine-only "visible soul" CTAs, reminders stays',
       (tester) async {
     await tester.pumpWidget(
       ProviderScope(
@@ -231,12 +238,12 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('¿Cómo está Axi?'), findsOneWidget);
+    expect(find.text('¿Cómo está Axi?'), findsNothing);
+    expect(find.text('Resumen'), findsNothing);
     expect(find.text('Recordatorios'), findsOneWidget);
-    expect(find.text('Resumen'), findsOneWidget);
   });
 
-  testWidgets('shows the "visible soul" CTAs (body/reminders/insights) when paired', (tester) async {
+  testWidgets('paired: the engine-only CTAs are gone there too', (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -252,9 +259,9 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('¿Cómo está Axi?'), findsOneWidget);
+    expect(find.text('¿Cómo está Axi?'), findsNothing);
+    expect(find.text('Resumen'), findsNothing);
     expect(find.text('Recordatorios'), findsOneWidget);
-    expect(find.text('Resumen'), findsOneWidget);
   });
 
   testWidgets('on-device (unpaired): shows the "Axi intelligence" CTAs (boletines/digest)',
@@ -322,7 +329,10 @@ void main() {
     expect(find.text('Ajustes'), findsOneWidget);
   });
 
-  testWidgets('on-device (unpaired): shows the "Reuniones" CTA', (tester) async {
+  // "Reuniones" was a READ-ONLY viewer of recordings the laptop makes — the
+  // phone is not the recorder. With nothing to view on an unpaired device it
+  // was a link to the pairing screen wearing a feature's name.
+  testWidgets('on-device (unpaired): no "Reuniones" CTA', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -331,7 +341,7 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Reuniones'), findsOneWidget);
+    expect(find.text('Reuniones'), findsNothing);
   });
 
   testWidgets('on-device (unpaired): key routes are reachable from the grouped menu',
@@ -361,7 +371,7 @@ void main() {
     }
   });
 
-  testWidgets('shows the "Reuniones" CTA when paired', (tester) async {
+  testWidgets('paired: "Reuniones" is gone there too', (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -377,7 +387,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('Reuniones'), findsOneWidget);
+    expect(find.text('Reuniones'), findsNothing);
   });
 
   testWidgets('unpaired + model NOT installed: shows the "Usar modelo local" button, not the chat one',

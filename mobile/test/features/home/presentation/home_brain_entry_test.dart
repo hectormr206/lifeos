@@ -86,7 +86,7 @@ void main() {
     expect(find.text('Conectar con tu motor'), findsNothing);
   });
 
-  testWidgets('unpaired: the engine graph browser keeps its own labelled row, still gated',
+  testWidgets('unpaired: the engine graph browser no longer has a home row at all',
       (tester) async {
     final container = ProviderContainer(overrides: [
       localeProvider.overrideWithValue(const Locale('es')),
@@ -96,19 +96,17 @@ void main() {
 
     await _pumpHome(tester, container);
 
-    // The remote twin is still reachable BY NAME — removing it would hide a
-    // real capability from a paired user — but it says whose brain it is.
-    expect(find.text('Cerebro del motor'), findsOneWidget);
+    // The remote twin USED to keep its own labelled row ("Cerebro del motor"),
+    // gated. That row is now gone: LifeOS is autonomous per device, and a row
+    // whose only outcome on an unpaired device is the pairing screen is not a
+    // capability this device has. `/graph` remains a route — a paired user who
+    // deep-links still reaches it — it simply is not advertised on home.
+    expect(find.text('Cerebro del motor'), findsNothing);
 
-    await _pressRow(tester, 'Cerebro del motor');
-
-    // It genuinely needs the engine (GET /api/v1/graph/search), so unpaired it
-    // must still route to pairing rather than open and then error. The engine
-    // browser's own AppBar ("Cerebro") must therefore NOT be on screen.
-    expect(
-      find.descendant(of: find.byType(AppBar), matching: find.text('Cerebro 3D')),
-      findsNothing,
-    );
-    expect(find.byType(ConnectionScreen), findsOneWidget);
+    // ...and the LOCAL one is the only "Cerebro" left, still unpaired-reachable.
+    expect(find.text('Cerebro'), findsOneWidget);
+    // ConnectionScreen is imported for this negative: nothing on home routes
+    // there by itself any more.
+    expect(find.byType(ConnectionScreen), findsNothing);
   });
 }

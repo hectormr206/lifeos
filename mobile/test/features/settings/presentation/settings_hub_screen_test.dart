@@ -94,7 +94,11 @@ void main() {
     // toggle, which lives inside that screen. Removed rather than deep-linked.
     expect(find.text('Notificaciones'), findsNothing);
     expect(find.text('Voz'), findsOneWidget);
-    expect(find.text('Configuración del motor'), findsOneWidget);
+    // "Configuración del motor" edited the REMOTE engine's config — the other
+    // machine's settings, shown inside this device's settings. Removed: pairing
+    // setup itself still lives at `/settings/connection`, which is where a user
+    // who actually has an engine goes.
+    expect(find.text('Configuración del motor'), findsNothing);
     expect(find.text('Acerca de'), findsOneWidget);
     expect(find.text('LifeOS'), findsOneWidget);
   });
@@ -164,14 +168,15 @@ void main() {
     expect(find.text('VOICE'), findsOneWidget);
   });
 
-  testWidgets('tapping "Configuración del motor" navigates to the engine editor', (tester) async {
+  testWidgets('the hub can no longer reach the engine editor at all', (tester) async {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Configuración del motor'));
-    await tester.pumpAndSettle();
-
-    expect(find.text('ENGINE'), findsOneWidget);
+    // There is nothing left to tap, and — the part worth pinning — no OTHER row
+    // quietly inherited the destination. A row that still landed on the engine
+    // editor under a different name would defeat the whole removal.
+    expect(find.text('Configuración del motor'), findsNothing);
+    expect(find.text('ENGINE'), findsNothing);
   });
 
   testWidgets('tapping "Zona de peligro" pushes the danger-zone MENU', (tester) async {

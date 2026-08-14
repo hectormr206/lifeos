@@ -29,11 +29,29 @@ class VpsBrainModelGateway implements BrainModelUpdateGateway {
     this.config = const BrainModelSourceConfig(),
     Dio? dio,
     FileDownloader? downloader,
-  })  : _dio = dio ?? Dio(BaseOptions(baseUrl: config.baseUrl)),
+  })  : _dio = dio ??
+            Dio(BaseOptions(
+              baseUrl: config.baseUrl,
+              // The MANIFEST needs the access key exactly as much as the weight
+              // download below does. The update host key-gates every path it
+              // serves, so a bare GET here returns 403 — and [fetchManifest]
+              // deliberately swallows DioException into `null` ("offline /
+              // nothing published"), which would turn a permanent 403 into a
+              // permanently silent "no update info". Set on the client's
+              // defaults so no future request on this Dio can forget it.
+              headers: {kUpdateAccessKeyHeader: kUpdateAccessKey},
+            )),
         _injectedDownloader = downloader;
 
   final BrainModelSourceConfig config;
   final Dio _dio;
+
+  /// The default headers this gateway's own Dio was built with. Exposed so a
+  /// test can prove the PRODUCTION construction (`VpsBrainModelGateway()`, no
+  /// injected Dio — what `localModelProviders` actually calls) carries the key,
+  /// which an injected-Dio test can never show.
+  @visibleForTesting
+  Map<String, dynamic> get debugDefaultHeaders => _dio.options.headers;
 
   /// Lazily resolved so merely CONSTRUCTING the gateway (e.g. in a unit test
   /// that only exercises manifest fetch / verification) never touches the
@@ -59,7 +77,15 @@ class VpsBrainModelGateway implements BrainModelUpdateGateway {
   Future<BrainModelManifest?> fetchManifest() async {
     if (!config.isConfigured) return null;
     try {
-      final response = await _dio.get<Map<String, Object?>>('/manifest.json');
+      // Sent per-request as well as on the client defaults above: an INJECTED
+      // Dio (tests, and anything that wires its own) would otherwise reach the
+      // key-gated host bare and get a 403 that this method turns into a silent
+      // null. The header belongs to the request, not to one way of building
+      // the client.
+      final response = await _dio.get<Map<String, Object?>>(
+        '/manifest.json',
+        options: Options(headers: {kUpdateAccessKeyHeader: kUpdateAccessKey}),
+      );
       final data = response.data;
       if (data == null) return null;
       return BrainModelManifest.fromJson(data);

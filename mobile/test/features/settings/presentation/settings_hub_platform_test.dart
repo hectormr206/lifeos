@@ -118,7 +118,11 @@ void main() {
         // a platform-conditional edit cannot quietly bring it back on one.
         expect(find.text('Notificaciones'), findsNothing);
         expect(find.text('Voz'), findsOneWidget);
-        expect(find.text('Configuración del motor'), findsOneWidget);
+        // "Configuración del motor" is NOT device-neutral — it edits the remote
+        // engine's config, so it is a window onto the other machine and is gone
+        // on every platform. Pinned as a negative here, next to the positives,
+        // so a platform-conditional edit cannot bring it back on just one.
+        expect(find.text('Configuración del motor'), findsNothing);
         expect(find.text('Zona de peligro'), findsOneWidget);
         expect(find.text('Acerca de'), findsOneWidget);
       });

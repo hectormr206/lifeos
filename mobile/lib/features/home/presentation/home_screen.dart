@@ -206,12 +206,6 @@ class _HomeSections extends ConsumerWidget {
               onPressed: () => context.push('/dictate'),
             ),
           if (supportsDictation(operatingSystem)) const SizedBox(height: 12),
-          _NavButton(
-            icon: Icons.favorite_border,
-            label: l10n.homeHowIsAxi,
-            onPressed: () => context.push('/body'),
-          ),
-          const SizedBox(height: 12),
           // "Cerebro" is the ON-DEVICE 3D memory graph (/brain3d): a native
           // force layout over the local encrypted store, no network, no
           // pairing. It used to be reachable ONLY by tapping an unlabelled
@@ -225,22 +219,21 @@ class _HomeSections extends ConsumerWidget {
             label: l10n.homeBrain,
             onPressed: () => context.push('/brain3d'),
           ),
+          // The engine's knowledge-graph SEARCH (`/graph`), the meetings viewer
+          // (`/meetings`) and Axi's organ health (`/body`) used to sit here.
+          // All three are windows onto the OTHER machine: they render nothing a
+          // device owns, and on an unpaired one they bounced straight to the
+          // pairing screen. LifeOS is autonomous per device — a button that
+          // only works when a laptop is reachable is not a feature of this
+          // device. Removed rather than gated; see
+          // `home_autonomy_contract_test.dart`.
+          //
+          // The spacer stays even though the buttons went: it is the gap between
+          // the last button of this section and the NEXT section header, and
+          // every other section boundary in this file has one. Removing the
+          // buttons took their trailing spacer with them and left "Cerebro"
+          // flush against the following header.
           const SizedBox(height: 12),
-          // The engine's knowledge-graph SEARCH (GET /api/v1/graph/*) — a
-          // genuinely different capability, and genuinely remote, so it keeps
-          // its pairing gate. It now says whose brain it is instead of
-          // competing for the same word.
-          _NavButton(
-            icon: Icons.travel_explore_outlined,
-            label: l10n.homeBrainEngine,
-            onPressed: () => context.push('/graph'),
-          ),
-          const SizedBox(height: 12),
-          _NavButton(
-            icon: Icons.groups_outlined,
-            label: l10n.homeMeetings,
-            onPressed: () => context.push('/meetings'),
-          ),
 
           // 3) Notices & summaries.
           _SectionHeader(label: l10n.homeSectionNotices),
@@ -250,22 +243,27 @@ class _HomeSections extends ConsumerWidget {
             onPressed: () => context.push('/reminders'),
           ),
           const SizedBox(height: 12),
-          _NavButton(
-            icon: Icons.insights_outlined,
-            label: l10n.homeSummary,
-            onPressed: () => context.push('/insights'),
-          ),
-          const SizedBox(height: 12),
+          // "Boletines" and "Resumen de hoy" now open the ON-DEVICE screens
+          // (`MorningBriefingScreen` / `DailyDigestScreen`), which were already
+          // built and working but reachable only by digging into Settings,
+          // while these prominent labels pointed at the engine's read-only
+          // mirrors and bounced an unpaired device to the pairing screen. Same
+          // defect as "Cerebro", same fix: the plain label belongs to the
+          // surface that works on this device's own data.
+          //
+          // The engine's `/insights` digest preview was removed outright — it
+          // has no on-device twin, it is not "Mi vida"'s summary, and it
+          // synthesizes nothing locally.
           _NavButton(
             icon: Icons.campaign_outlined,
             label: l10n.homeBulletins,
-            onPressed: () => context.push('/briefings'),
+            onPressed: () => context.push('/settings/briefing'),
           ),
           const SizedBox(height: 12),
           _NavButton(
             icon: Icons.today_outlined,
             label: l10n.homeTodaySummary,
-            onPressed: () => context.push('/digest'),
+            onPressed: () => context.push('/settings/daily-digest'),
           ),
 
           // 4) Settings & system — least prominent, at the bottom.

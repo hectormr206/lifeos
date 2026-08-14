@@ -169,13 +169,11 @@ class SettingsHubScreen extends ConsumerWidget {
           ),
           const Divider(),
           _SectionHeader(l10n.sectionAdvanced),
-          ListTile(
-            leading: const Icon(Icons.tune),
-            title: Text(l10n.engineConfigTitle),
-            subtitle: Text(l10n.engineConfigSubtitle),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/engine'),
-          ),
+          // The remote engine's config editor (laptop `/config` parity) used to
+          // sit here. It configures the OTHER machine, so it is meaningless on a
+          // device that is not paired to one — and it bounced to the pairing
+          // screen. Pairing setup itself remains at `/settings/connection`,
+          // which is where a user who does have an engine goes.
           // DATA-CONTROL KIT: the danger zone is NOT exposed inline at the
           // bottom of the hub (too easy to tap by accident). A discreet tile
           // pushes the "Zona de peligro" MENU screen, which in turn holds the
