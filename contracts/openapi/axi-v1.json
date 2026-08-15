@@ -1,6 +1,20 @@
 {
   "components": {
     "schemas": {
+      "GameModeRequest": {
+        "description": "Body of `POST /api/v1/game-mode`.\n\nDeliberately `active: bool` and not a `toggle` verb. Two clients (the app\nand the tray) can disagree about the current state, and a toggle would then\ndo the opposite of what the user asked. Stating the target is idempotent.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "GameModeRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -14,8 +28,22 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "MeetingRequest": {
+        "description": "Body of `POST /api/v1/meeting`.\n\nThe TARGET state, not a toggle: the tray and the app can disagree about\nwhether one is running, and a toggle would then stop the meeting the user\nmeant to start.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "active"
+        ],
+        "title": "MeetingRequest",
+        "type": "object"
+      },
       "PairRequest": {
-        "description": "Body of `POST /api/v1/pair` (design D6).\n\n`device_pubkey` is optional and currently stored verbatim (opaque\nstring) for a later milestone (M3 sync, D9's sealed-box K_sync\ntransport) to consume — this batch does not seal or use it for\nanything yet, per the M0-5 scope (device-token exchange only).",
+        "description": "Body of `POST /api/v1/pair` (design D6, hardened by spec\n`mesh-trust-hardening`).\n\n`device_pubkey` is optional, stored verbatim (opaque string) for a later\nmilestone (M3 sync, D9's sealed-box K_sync transport) to consume — this\nbatch does not seal or use it for anything yet. When `device_pubkey` IS\ngiven, `pubkey_proof` + `pubkey_proof_payload` are REQUIRED: proof the\ncaller holds the matching private key, reusing the mesh trust core's\nEd25519 scheme (`mesh_trust.build_signed_payload`/`sign_request`) rather\nthan inventing a second one.\n\n`pubkey_proof_payload` is the base64 of the exact\n`build_signed_payload({\"code\": code, \"device_pubkey\": device_pubkey})`\nbytes the caller signed (server can't reconstruct it — it embeds a\ncaller-chosen nonce); `pubkey_proof` is the hex Ed25519 signature over\nthose bytes by `device_pubkey`.",
         "properties": {
           "code": {
             "title": "Code",
@@ -36,6 +64,28 @@
               }
             ],
             "title": "Device Pubkey"
+          },
+          "pubkey_proof": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pubkey Proof"
+          },
+          "pubkey_proof_payload": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pubkey Proof Payload"
           }
         },
         "required": [
@@ -113,6 +163,66 @@
         "summary": "Capabilities"
       }
     },
+    "/api/v1/game-mode": {
+      "get": {
+        "description": "Current game-mode state plus whether it is available at all.\n\nReads only. Running a status probe must never relocate anything — a status\ncall with side effects is how \"automatic\" behaviour arrives by accident,\nand the user's rule is that HE activates this, never the software.",
+        "operationId": "game_mode_status_api_v1_game_mode_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Game Mode Status Api V1 Game Mode Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Game Mode Status"
+      },
+      "post": {
+        "description": "Turn game mode on or off. The only way it ever changes.\n\n409 when the machine has no GPU: the caller asked for something this box\ncannot do, and saying so beats running a script that would stop the\nco-pilot for no gain. 500 when the relocation itself failed — half-applied\nis a state the user must be told about, not left to discover mid-game.",
+        "operationId": "game_mode_set_api_v1_game_mode_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GameModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Game Mode Set Api V1 Game Mode Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Game Mode Set"
+      }
+    },
     "/api/v1/infer": {
       "post": {
         "description": "Authenticate a signed peer request, then forward it to the local model.",
@@ -128,6 +238,66 @@
           }
         },
         "summary": "Remote Infer"
+      }
+    },
+    "/api/v1/meeting": {
+      "get": {
+        "description": "Whether a meeting can be recorded here, and whether one is running.\n\nReads only. A meeting that started on its own would be recording a room\nnobody agreed to record.",
+        "operationId": "meeting_status_api_v1_meeting_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Meeting Status Api V1 Meeting Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Meeting Status"
+      },
+      "post": {
+        "description": "Start or stop the recording.\n\n409 when no daemon answers: this machine has nothing that records, and\nsaying so beats a request that hangs. 500 when the daemon refused — a full\ndisk is a real refusal meeting.py makes on purpose, and reporting success\nwould leave the user believing a meeting is being captured when none is.",
+        "operationId": "meeting_set_api_v1_meeting_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MeetingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Meeting Set Api V1 Meeting Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Meeting Set"
       }
     },
     "/api/v1/mesh/catalog": {
@@ -166,7 +336,7 @@
     },
     "/api/v1/pair": {
       "post": {
-        "description": "Exchange a valid, unexpired, unused pairing code for a device token.\n\nAuth: this route is in `axi.api_auth.PUBLIC_V1_PATHS` — reachable with\nno bearer token even when `api_auth_enabled=true` (it is the mechanism\nthat BOOTSTRAPS a device's first token). The pairing code itself is the\nsecurity boundary: it can only be obtained from `/setup`'s\n`GET /api/setup/pairing_code`, an owner-facing legacy route (spec\n`api-auth-pairing`), is single-use, and expires after 5 minutes\n(`axi.pairing`, design D6).\n\nRaises 410 if the code is missing/unknown/expired/already-used — no\ndevice is created and no token is issued in that case (spec: \"Expired\ncode rejected\").",
+        "description": "Exchange a valid, unexpired, unused pairing code for a device token.\n\nAuth: this route is in `axi.api_auth.PUBLIC_V1_PATHS` — reachable with\nno bearer token even when `api_auth_enabled=true` (it is the mechanism\nthat BOOTSTRAPS a device's first token). The pairing code itself is the\nsecurity boundary: it can only be obtained from `/setup`'s\n`GET /api/setup/pairing_code`, an owner-facing legacy route (spec\n`api-auth-pairing`), is single-use, and expires after 5 minutes\n(`axi.pairing`, design D6).\n\nRaises 410 if the code is missing/unknown/expired/already-used — no\ndevice is created and no token is issued in that case (spec: \"Expired\ncode rejected\"). Raises 400 if `device_pubkey` is given without valid\nproof of possession (spec `mesh-trust-hardening`) — checked BEFORE the\ncode is redeemed so a failed-PoP attempt never burns the single-use code.",
         "operationId": "pair_api_v1_pair_post",
         "requestBody": {
           "content": {
