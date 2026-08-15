@@ -1,0 +1,71 @@
+{
+  "cases": [
+    {
+      "data_key": "06a04bfb65a31ca5518720223683621bc97b0514002d480388196aaf091de20b",
+      "entropy": "00000000000000000000000000000000",
+      "mailbox_auth_public": {
+        "0123456789abcdef0123456789abcdef": "39e5ebeded3f2007da41b69944cedae78f2e6fd28aff07f65c4e666c08a3c7d2",
+        "11111111111111111111111111111111": "4baa965ad771d230d0f799137fbbc2d6fedf4b76116ea58e2d09d923e08ffb90"
+      },
+      "mnemonic": "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+      "root_key": "24dea5120a528d791df8f24cdf9fb0ec53a63de03fae356251912b62ef6c2b5d"
+    },
+    {
+      "data_key": "9e729dc0afed99da241b6242cce2a2f477f7ebe505924982f3eeeb61d1235a61",
+      "entropy": "7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f7f",
+      "mailbox_auth_public": {
+        "0123456789abcdef0123456789abcdef": "7bb4f0e0f47948e13c4ecb42a86092a5c99c672b2c990eadcbce485442a377af",
+        "11111111111111111111111111111111": "f7b823877538931e8eb4cf629bf880e03b192fbfaba54a62da5bbec2b97935cf"
+      },
+      "mnemonic": "legal winner thank year wave sausage worth useful legal winner thank yellow",
+      "root_key": "2a1a7dc340e03b28d3265633a3fcb8f39fc7163c1f9b6dfaa88a123a1afd8c85"
+    },
+    {
+      "data_key": "e5d2d828c055809a378ba1c727b40a566236b7b80661484e2ff04e3585d4c2de",
+      "entropy": "80808080808080808080808080808080",
+      "mailbox_auth_public": {
+        "0123456789abcdef0123456789abcdef": "e2c98fdebbdd303b2d120f4adfc95324462ee5a3e93964967127c6aa50455c77",
+        "11111111111111111111111111111111": "f35a815cc007b90ae707347f39b8cf5f2eb7d0fbf324907e9c937db224b73d56"
+      },
+      "mnemonic": "letter advice cage absurd amount doctor acoustic avoid letter advice cage above",
+      "root_key": "b35fcbc822b04de90a97a9329b8af8d64c118bfef67054dcd101c42eee729708"
+    },
+    {
+      "data_key": "fcd3380bd03ff9087e4526005601412fa4ac6a8741a57acd16a16a5ccc9f4f27",
+      "entropy": "ffffffffffffffffffffffffffffffff",
+      "mailbox_auth_public": {
+        "0123456789abcdef0123456789abcdef": "845ef46b92055152a4ad56e104137285f7c4943b26b725239baa2ccfa957fb62",
+        "11111111111111111111111111111111": "244ad3db5b550a581ab1bd35f081e7a27515e6dae63d3134c7096af31e037ade"
+      },
+      "mnemonic": "zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo zoo wrong",
+      "root_key": "f4c72b190aa85731aa32ac15a5dce0d8387df803520e568ab71babbf7c1cf365"
+    },
+    {
+      "data_key": "30d96ce1c65d842096a5c3afb018b4a0b14785ad4f932fe120b55c058045cee2",
+      "entropy": "9e885d952ad362caeb4efe34a8e91bd2",
+      "mailbox_auth_public": {
+        "0123456789abcdef0123456789abcdef": "6b9a763ad4928aacd3f5351160935e99acf35b3400fa40a5c7019a5bcb29884d",
+        "11111111111111111111111111111111": "e5d511d1e5fa950399a79fa47e6a9ec6dd3539c1c848072b8be425f70661229b"
+      },
+      "mnemonic": "ozone drill grab fiber curtain grace pudding thank cruise elder eight picnic",
+      "root_key": "ee23c739cfa0d080a068ebd34fca9e5b89f0de8b4e856741a6157ae3df35b357"
+    }
+  ],
+  "covers": [
+    "bip39-mnemonic",
+    "hkdf-key-hierarchy",
+    "ed25519-mailbox-auth"
+  ],
+  "domain_separation": {
+    "data": "lifeos/sync/data/v1",
+    "mailbox_auth": "lifeos/sync/mbauth/v1",
+    "root": "lifeos/sync/root/v1"
+  },
+  "format_version": 1,
+  "generated_by": "axi.sync.vectors",
+  "not_yet_covered": [
+    "envelope-framing",
+    "relay-signature-preimage"
+  ],
+  "wordlist_sha256": "2f5eed53a4727b4bf8880d8f3f199efc90e58503646d9ff8eff3a2ed3b24dbda"
+}
