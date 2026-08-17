@@ -23,6 +23,7 @@ import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
 import 'features/connection/domain/connection_status.dart';
 import 'features/data_control/presentation/backups_screen.dart';
+import 'features/sync/presentation/sync_routes.dart';
 import 'features/data_control/presentation/danger_zone_menu_screen.dart';
 import 'features/data_control/presentation/danger_zone_screen.dart';
 import 'features/data_control/presentation/data_control_providers.dart';
@@ -243,6 +244,20 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
           path: '/settings/voice/catalog',
           builder: (context, state) => const VoiceCatalogScreen()),
+      // DEVICE SYNC. Deliberately NOT pairing-gated, and deliberately not
+      // gated on the VPN either: sync reaches the relay over ordinary HTTPS,
+      // and a device that has never been paired to an engine is exactly the
+      // one that most needs to set this up. The gate that DOES exist is inside
+      // the feature — nothing syncs until the user enables it and confirms a
+      // recovery phrase (`SyncEnablement`).
+      GoRoute(
+        path: '/settings/sync',
+        builder: (context, state) => const SyncSettingsRoute(),
+      ),
+      GoRoute(
+        path: '/settings/sync/conflicts',
+        builder: (context, state) => const ConflictHistoryRoute(),
+      ),
       // DATA-CONTROL KIT: on-device backups + the protected full wipe. Both
       // operate on LOCAL data only, so neither is pairing-gated.
       GoRoute(path: '/settings/backups', builder: (context, state) => const BackupsScreen()),

@@ -1,0 +1,109 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../data/sync_key_store.dart';
+import '../domain/phrase_ceremony.dart';
+import '../domain/sync_conflict.dart';
+import '../domain/sync_connectivity.dart';
+import '../domain/sync_enablement.dart';
+import 'conflict_history_screen.dart';
+import 'phrase_ceremony_screen.dart';
+import 'sync_settings_screen.dart';
+
+/// Wiring only. The screens themselves take plain values and callbacks so they
+/// can be widget-tested without Riverpod, a keystore or a network — the same
+/// separation the rest of the feature uses, and the reason those tests run in
+/// milliseconds and assert real behaviour instead of mocking a container.
+
+final syncKeyStoreProvider = Provider<SyncKeyStore>((ref) => SecureSyncKeyStore());
+
+final syncEnablementProvider = Provider<SyncEnablement>(
+  (ref) => SyncEnablement(store: ref.watch(syncKeyStoreProvider)),
+);
+
+/// Whether sync is on, re-read from the keystore.
+///
+/// Derived from the presence of key material rather than a separate flag, so a
+/// stored "enabled = true" can never disagree with whether we can actually
+/// decrypt anything.
+final syncEnabledProvider = FutureProvider<bool>(
+  (ref) => ref.watch(syncEnablementProvider).isEnabled(),
+);
+
+/// Whether the relay answered. NOT the VPN — see `sync_connectivity.dart`.
+///
+/// Overridden in tests and, for now, optimistic in production: the real probe
+/// lands with the sync engine wiring. Stated as a provider rather than a
+/// hardcoded `true` so that wiring is a one-line change in one place.
+final relayReachableProvider = FutureProvider<bool>((ref) async => true);
+
+/// Conflicts awaiting the user's attention. Empty until the engine is wired.
+final syncConflictsProvider = FutureProvider<List<SyncConflict>>(
+  (ref) async => const [],
+);
+
+/// Device uuid -> nickname, for the conflict list. Never leaves the device.
+final deviceNicknamesProvider = FutureProvider<Map<String, String>>(
+  (ref) async => const {},
+);
+
+class SyncSettingsRoute extends ConsumerWidget {
+  const SyncSettingsRoute({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final enabled = ref.watch(syncEnabledProvider).value ?? false;
+    final reachable = ref.watch(relayReachableProvider).value ?? false;
+
+    return SyncSettingsScreen(
+      connectivity: resolveSyncConnectivity(
+        syncEnabled: enabled,
+        relayReachable: reachable,
+        // Wi-Fi state is only ever consulted for AUTOMATIC passes; the settings
+        // screen shows the steady state, and a manual tap ignores it anyway.
+        onUnmeteredNetwork: true,
+      ),
+      deviceNickname: 'Este dispositivo',
+      onEnable: () => _startCeremony(context, ref),
+      onDisable: () async {
+        await ref.read(syncEnablementProvider).disable();
+        ref.invalidate(syncEnabledProvider);
+      },
+      onSyncNow: () {},
+      onOpenConflicts: () => context.push('/settings/sync/conflicts'),
+    );
+  }
+
+  void _startCeremony(BuildContext context, WidgetRef ref) {
+    final ceremony = PhraseCeremony.generate();
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PhraseCeremonyScreen(
+          ceremony: ceremony,
+          onCancel: () => Navigator.of(context).pop(),
+          onConfirmed: (confirmed) async {
+            // `enable` refuses an unconfirmed ceremony, so this cannot turn
+            // sync on from a phrase the user never proved they wrote down.
+            await ref.read(syncEnablementProvider).enable(confirmed);
+            ref.invalidate(syncEnabledProvider);
+            if (context.mounted) Navigator.of(context).pop();
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class ConflictHistoryRoute extends ConsumerWidget {
+  const ConflictHistoryRoute({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return ConflictHistoryScreen(
+      conflicts: ref.watch(syncConflictsProvider).value ?? const [],
+      nicknamesByUuid: ref.watch(deviceNicknamesProvider).value ?? const {},
+      onRestore: (_) {},
+    );
+  }
+}

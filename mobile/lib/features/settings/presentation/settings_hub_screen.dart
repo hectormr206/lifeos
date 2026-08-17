@@ -149,6 +149,22 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/backups'),
           ),
+          // Sync sits next to backups because a user reads them as one subject
+          // ("dónde está mi información"), even though they are opposites: a
+          // backup is a copy you can restore FROM, sync is the same data living
+          // on more than one device at once.
+          //
+          // Hardcoded Spanish rather than an ARB key, matching the sync
+          // feature's other copy — and tuteo, which the l10n guard enforces.
+          ListTile(
+            leading: const Icon(Icons.devices_outlined),
+            title: const Text('Sincronizar dispositivos'),
+            subtitle: const Text(
+              'La misma información en todos tus dispositivos, cifrada.',
+            ),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => context.push('/settings/sync'),
+          ),
           ListTile(
             leading: const Icon(Icons.record_voice_over_outlined),
             title: Text(l10n.voiceNavTitle),
