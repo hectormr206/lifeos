@@ -46,6 +46,25 @@ Map<String, int> get _index =>
 String normalisePhrase(String text) =>
     text.toLowerCase().split(RegExp(r'\s+')).where((w) => w.isNotEmpty).join(' ');
 
+/// [normalisePhrase], plus forgiveness for what a KEYBOARD adds.
+///
+/// Separate from `normalisePhrase` on purpose. That function's exact behaviour
+/// is pinned by the shared Python vectors and defines what a phrase IS; this
+/// one defines what we accept from a human typing on glass, and only ever runs
+/// at the input boundary.
+///
+/// It exists because confirmation was rejecting words that were RIGHT. Gboard
+/// turns a double space into ". ", people separate lists with commas, and a
+/// wrapped line can leave a soft hyphen (U+00AD) the user cannot see. Telling
+/// someone their correct phrase is wrong is worse than a crash: a crash gets
+/// reported, this gets believed — they retype, fail again, and conclude they
+/// wrote the words down wrong.
+///
+/// Punctuation becomes a SPACE rather than being deleted, so "abandon,ability"
+/// reads as two words instead of the single invalid "abandonability".
+String sanitiseTypedPhrase(String text) =>
+    normalisePhrase(text.replaceAll(RegExp('[^A-Za-z\\s]'), ' '));
+
 /// 16 bytes of entropy -> the twelve words.
 String encodePhrase(List<int> entropy) {
   if (entropy.length != kEntropyBytes) {

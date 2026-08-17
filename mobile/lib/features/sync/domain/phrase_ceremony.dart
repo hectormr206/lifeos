@@ -76,7 +76,9 @@ class PhraseCeremony {
     for (final i in challengeIndices) {
       final given = answers[i];
       if (given == null) return _confirmed = false;
-      if (normalisePhrase(given) != words[i]) return _confirmed = false;
+      // `sanitiseTypedPhrase`, not `normalisePhrase`: the field holds whatever
+      // the keyboard produced, and a trailing period is not a wrong word.
+      if (sanitiseTypedPhrase(given) != words[i]) return _confirmed = false;
     }
     return _confirmed = true;
   }

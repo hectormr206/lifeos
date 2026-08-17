@@ -45,7 +45,9 @@ class _PhraseRestoreScreenState extends State<PhraseRestoreScreen> {
   }
 
   Future<void> _submit() async {
-    final typed = _controller.text;
+    // Sanitised before validating AND before storing, so the commas and stray
+    // period a keyboard adds never make a correct phrase look invalid.
+    final typed = sanitiseTypedPhrase(_controller.text);
     try {
       // Decoded purely to check the phrase; the entropy is deliberately
       // discarded so this screen never holds key material it does not store.
