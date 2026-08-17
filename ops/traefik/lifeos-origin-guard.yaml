@@ -1,0 +1,52 @@
+# Restringe el ORIGEN de las rutas sensibles servidas por este proxy.
+#
+# POR QUE EXISTE. La cadena PUBLIC-IN del firewall dejo de ser "solo Cloudflare"
+# el 2026-08-12: un dispositivo fuera de la VPN tiene que poder instalar LifeOS y
+# bajar los modelos, y el del cerebro pesa 2.6 GB, mas de lo que los terminos de
+# Cloudflare permiten servir por su CDN en plan gratuito. La consecuencia
+# aceptada fue que cualquiera puede llegar directo a la IP con una cabecera Host
+# falsificada y saltearse el WAF.
+#
+# Este archivo cierra esa puerta para lo que importa, sin cerrarla para OTA.
+#
+# POR QUE FILTRA POR IP Y NO POR CABECERA. Una cabecera tipo CF-Connecting-IP la
+# falsifica cualquiera; la IP de origen de una conexion TCP no. IPAllowList mira
+# la IP real, asi que es un filtro de verdad y no un adorno.
+#
+# POR QUE VIVE ACA Y NO EN ETIQUETAS DEL CONTENEDOR. Coolify regenera las
+# etiquetas de cada contenedor en cada redespliegue: un middleware puesto ahi
+# desaparece solo, sin error y sin aviso. Este directorio es de configuracion
+# dinamica, vigilado en caliente (providers.file.watch=true) y NO regenerado.
+#
+# NO cubre las rutas que genera Coolify por etiquetas. Esas necesitan sus
+# propias etiquetas y siguen expuestas; queda dicho para que nadie lea este
+# archivo como una proteccion total.
+http:
+  middlewares:
+    origen-confiable:
+      ipAllowList:
+        sourceRange:
+          # Rangos de Cloudflare: el camino normal para estos dominios.
+          - "173.245.48.0/20"
+          - "103.21.244.0/22"
+          - "103.22.200.0/22"
+          - "103.31.4.0/22"
+          - "141.101.64.0/18"
+          - "108.162.192.0/18"
+          - "190.93.240.0/20"
+          - "188.114.96.0/20"
+          - "197.234.240.0/22"
+          - "198.41.128.0/17"
+          - "162.158.0.0/15"
+          - "104.16.0.0/13"
+          - "104.24.0.0/14"
+          - "172.64.0.0/13"
+          - "131.0.72.0/22"
+          # La VPN del propio duenio: entrar por WireGuard tiene que seguir
+          # funcionando aunque Cloudflare este caido.
+          - "10.66.66.0/24"
+          # Redes internas de Docker y loopback: healthchecks y trafico entre
+          # contenedores del propio host.
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "127.0.0.0/8"

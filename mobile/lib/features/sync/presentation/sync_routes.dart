@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../data/relay_reachability.dart';
 import '../data/sync_key_store.dart';
 import '../domain/phrase_ceremony.dart';
 import '../domain/sync_conflict.dart';
@@ -31,12 +32,25 @@ final syncEnabledProvider = FutureProvider<bool>(
   (ref) => ref.watch(syncEnablementProvider).isEnabled(),
 );
 
-/// Whether the relay answered. NOT the VPN — see `sync_connectivity.dart`.
+/// Where the blind relay lives. Empty until one is configured, and an empty
+/// value means "unreachable" rather than "assume it works" — see
+/// `RelayReachability.check`.
 ///
-/// Overridden in tests and, for now, optimistic in production: the real probe
-/// lands with the sync engine wiring. Stated as a provider rather than a
-/// hardcoded `true` so that wiring is a one-line change in one place.
-final relayReachableProvider = FutureProvider<bool>((ref) async => true);
+/// Injected at build time the same way every other host in this app is
+/// (`--dart-define`), so a debug build can point at a local relay without
+/// editing source.
+const String kRelayBaseUrl = String.fromEnvironment('SYNC_RELAY_URL');
+
+final relayBaseUrlProvider = Provider<String>((ref) => kRelayBaseUrl);
+
+/// Whether the relay ANSWERED. NOT the VPN — see `sync_connectivity.dart`.
+///
+/// A real probe, not an optimistic `true`: a phone can be on excellent Wi-Fi
+/// with the relay down, and a captive portal reports itself as connected while
+/// swallowing every request.
+final relayReachableProvider = FutureProvider<bool>((ref) async {
+  return RelayReachability(baseUrl: ref.watch(relayBaseUrlProvider)).check();
+});
 
 /// Conflicts awaiting the user's attention. Empty until the engine is wired.
 final syncConflictsProvider = FutureProvider<List<SyncConflict>>(

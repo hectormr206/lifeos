@@ -1,0 +1,48 @@
+# El relevo ciego de la sincronizacion entre dispositivos de LifeOS.
+#
+# BAJO UN PREFIJO DE RUTA, NO UN DOMINIO PROPIO. Crear
+# relay.lifeos.hectormr.com necesita tocar el DNS de Cloudflare, y no hay token
+# con permisos de DNS. updates.lifeos.hectormr.com ya existe, ya resuelve a esta
+# maquina y ya esta abierto al internet publico por la regla de PUBLIC-IN — que
+# es exactamente lo que el relevo necesita. Un prefijo de ruta llega hoy; un
+# dominio propio queda para cuando haya token, y mover el servicio despues es un
+# cambio de configuracion, no de codigo.
+#
+# NO LLEVA origen-confiable@file, A PROPOSITO. Los paneles de administracion se
+# restringen a Cloudflare y a la VPN porque nadie mas tiene por que alcanzarlos.
+# El relevo es lo contrario: existe para que un telefono FUERA de la VPN pueda
+# sincronizar. Restringirlo por IP mataria su unica razon de ser.
+#
+# LO QUE LO PROTEGE EN SU LUGAR, y es mas fuerte que un filtro de IP:
+#   * cada peticion va firmada con Ed25519 sobre los bytes exactos enviados;
+#   * hay que reclamar el buzon antes de poder depositar (si no, 404);
+#   * los nonces no se pueden repetir;
+#   * limites de tamanio y de cantidad por buzon;
+#   * y sobre todo: solo guarda texto cifrado que no puede leer.
+#
+# Un atacante que llegue aca sin la llave no consigue nada. Uno que llegue a un
+# panel de administracion, si.
+http:
+  middlewares:
+    relay-strip:
+      stripPrefix:
+        prefixes:
+          - "/relay"
+  routers:
+    lifeos-relay:
+      # Mas especifico que la ruta del OTA, asi que Traefik lo elige primero
+      # para /relay/* y deja el resto del host al servidor de actualizaciones.
+      rule: "Host(`updates.lifeos.hectormr.com`) && PathPrefix(`/relay`)"
+      priority: 100
+      entryPoints:
+        - https
+      tls: {}
+      middlewares:
+        - relay-strip@file
+      service: lifeos-relay-svc
+  services:
+    lifeos-relay-svc:
+      loadBalancer:
+        passHostHeader: true
+        servers:
+          - url: "http://lifeos-relay:8080"

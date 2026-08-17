@@ -4,13 +4,16 @@
 # state is one SQLite file in a managed volume, holding transient ciphertext
 # that expires on its own.
 #
-# NOT YET EXPOSED. There is no domain label here on purpose. The `PUBLIC-IN`
-# firewall chain currently allows 80/443 from anywhere, which means any service
-# published through the Coolify proxy can be reached directly by IP with a
-# forged Host header, bypassing Cloudflare's WAF. That tradeoff was accepted
-# knowingly for the OTA host (see ops/vps/cf-firewall.sh), but this service
-# carries sync traffic, and it is a much better place to fix the problem than
-# to inherit it. Publish it only after the Traefik hostname restriction lands.
+# PUBLISHED, and routed by FILE rather than by a label here — see
+# `ops/traefik/lifeos-relay.yaml`. Coolify regenerates per-container labels on
+# every redeploy, so routing declared in this file would silently disappear; the
+# proxy's dynamic directory is not regenerated and is watched live.
+#
+# It is reachable from the whole internet on purpose: a phone OFF the VPN is
+# exactly who needs it. What protects it is not an IP filter but Ed25519
+# signatures over the exact bytes of every request, claim-before-deposit,
+# non-reusable nonces, per-mailbox size and count caps — and the fact that it
+# only ever holds ciphertext it cannot read.
 services:
   relay:
     build:
