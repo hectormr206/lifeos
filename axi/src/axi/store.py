@@ -1108,6 +1108,19 @@ def _tx_events() -> Iterator[sqlcipher3.Connection]:
         raise
 
 
+def _sync_stamping():
+    """The Lamport/origin stamper, imported lazily.
+
+    `axi.sync.stamping` imports this module for its connection, so a top-level
+    import here would be circular. Deferring it to call time is the cheapest
+    honest fix — the alternative, moving `_connect` out, would churn far more
+    of the codebase than a sync feature has any business touching.
+    """
+    from axi.sync import stamping
+
+    return stamping
+
+
 def init_db() -> None:
     with _init_lock:
         c = _connect()
@@ -1150,6 +1163,12 @@ def init_db() -> None:
         # columns on nodes/edges for pre-existing DBs (no-op on a fresh DB —
         # CREATE TABLE above already has them). Additive only, unread so far.
         migrate_nodes_edges_sync_columns()
+        # Device-sync slice 3a: the bookkeeping tables, then give every
+        # pre-clock row an origin. Both are idempotent and run at every
+        # startup; the backfill captures a parity reference first and refuses
+        # to finish if a row went missing.
+        _sync_stamping().ensure_sync_tables(c)
+        _sync_stamping().backfill(c)
         # Sync-over-vpn schema slice PR5 "Expand": edges.src_uuid/dst_uuid/
         # updated_at/relation for pre-existing DBs. UNLIKE the two migrations
         # above, this one is NOT a no-op on a fresh DB either: _SCHEMA's
@@ -1389,9 +1408,28 @@ def add_node(
             # uuids are NOT NULL in the rebuilt table and why
             # verify_edge_endpoint_convergence() raises on a NULL endpoint
             # rather than reading it as "converged".
-            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at, uuid) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (kind, label, payload, domain, now, now, tz, occurred_at, str(uuid.uuid4())),
+            # `lamport` and `origin_node` are stamped HERE for the same reason
+            # `uuid` is: a row written without them is invisible to conflict
+            # resolution. Every existing row in every database carries
+            # lamport = 0 / origin_node = NULL because nothing ever wrote them,
+            # and a merge engine fed rows that all claim clock 0 resolves every
+            # conflict by arrival order — the silent data loss the design set
+            # out to prevent.
+            "INSERT INTO nodes(kind, label, data, domain, created_at, updated_at, created_tz, occurred_at, uuid, lamport, origin_node) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                kind,
+                label,
+                payload,
+                domain,
+                now,
+                now,
+                tz,
+                occurred_at,
+                str(uuid.uuid4()),
+                _sync_stamping().next_lamport(c),
+                _sync_stamping().local_origin(c),
+            ),
         )
         node_id = cur.lastrowid
         c.execute(
@@ -1430,8 +1468,19 @@ def add_edge(
             # nullable; under mobile's `uuid NOT NULL UNIQUE` an edge written
             # without one does not exist at all.
             "INSERT INTO edges(uuid, src_uuid, dst_uuid, relation, data, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (str(uuid.uuid4()), src_uuid, dst_uuid, kind, payload, now, now),
+            "created_at, updated_at, lamport, origin_node) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                str(uuid.uuid4()),
+                src_uuid,
+                dst_uuid,
+                kind,
+                payload,
+                now,
+                now,
+                _sync_stamping().next_lamport(c),
+                _sync_stamping().local_origin(c),
+            ),
         )
         return cur.lastrowid
 
@@ -1535,9 +1584,14 @@ def delete_node(node_id: int) -> bool:
                 # handing the user back a memory they deleted. No observable
                 # change today — the row is invisible to every read from here
                 # on — which is precisely why it is cheap to get right now.
-                "UPDATE nodes SET deleted_at = ?, updated_at = ? "
+                #
+                # `lamport` advances too, for the same reason `updated_at`
+                # does — and it is the one the merge engine actually reads.
+                # A delete that left the clock where it was would lose to a
+                # concurrent edit that happened BEFORE it.
+                "UPDATE nodes SET deleted_at = ?, updated_at = ?, lamport = ? "
                 "WHERE id = ? AND deleted_at IS NULL",
-                (now, now, nid),
+                (now, now, _sync_stamping().next_lamport(tx), nid),
             )
         return cur.rowcount > 0
     except Exception:  # noqa: BLE001

@@ -438,11 +438,24 @@ def fresh_db(tmp_path, monkeypatch):
     # Stop the embed worker so it does not touch sqlcipher during interpreter
     # teardown (preventing SIGSEGV at test-suite shutdown).
     store.stop_embed_worker()
-    # Drain any in-flight axi-brain-metric daemon threads (spawned per call).
-    deadline = _time.time() + 1.0
+    # Drain in-flight per-call daemon threads.
+    #
+    # `axi-fact-extract` was MISSING from this list, and that omission is the
+    # whole explanation for `test_memory.py::test_clear_wipes_history_returns_count`
+    # failing only when it ran after certain other files. `ConversationMemory.add`
+    # spawns one of these per turn (memory.py, background fact extraction); if it
+    # is still alive at teardown it calls `store._connect()` AFTER monkeypatch has
+    # restored DB_PATH, so a thread belonging to one test writes into the next
+    # test's database. The victim test then sees rows it never created and fails
+    # for a reason that has nothing to do with what it is testing.
+    #
+    # Order-dependent failures like that get blamed on the test that fails, and
+    # the real culprit — whatever ran before it — is never suspected.
+    _leaky = ("axi-brain-metric", "axi-fact-extract")
+    deadline = _time.time() + 2.0
     while _time.time() < deadline:
         active = [t for t in threading.enumerate()
-                  if t.name == "axi-brain-metric" and t.is_alive()]
+                  if t.name in _leaky and t.is_alive()]
         if not active:
             break
         _time.sleep(0.02)

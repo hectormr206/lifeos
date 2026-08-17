@@ -1189,7 +1189,16 @@ def test_production_writers_speak_the_new_shape_end_to_end(pre_pr8_graph):
         "SELECT uuid FROM nodes WHERE id=?", (a,)).fetchone()[0]
     assert row["relation"] == "about"
     assert row["updated_at"] is not None
-    assert row["lamport"] == 0
+    # Used to assert `lamport == 0`, which was true only while NOTHING wrote the
+    # column. Slice 3a starts the clock: a row written by a production writer
+    # now carries a real Lamport value and this device's origin, and a 0 here
+    # would mean conflict resolution has nothing to order by — the exact
+    # silent-data-loss failure the stamping exists to prevent.
+    assert row["lamport"] > 0
+    origin = c.execute(
+        "SELECT origin_node FROM edges WHERE id=?", (e,)
+    ).fetchone()["origin_node"]
+    assert origin is not None
     assert store.delete_node(a) is True
     assert store.get_node(a) is None
     store.verify_edge_endpoint_convergence()
