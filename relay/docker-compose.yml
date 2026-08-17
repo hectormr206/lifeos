@@ -1,0 +1,39 @@
+# LifeOS blind relay — Coolify service definition.
+#
+# Everything lives in Coolify, nothing loose on the host: the relay's only
+# state is one SQLite file in a managed volume, holding transient ciphertext
+# that expires on its own.
+#
+# NOT YET EXPOSED. There is no domain label here on purpose. The `PUBLIC-IN`
+# firewall chain currently allows 80/443 from anywhere, which means any service
+# published through the Coolify proxy can be reached directly by IP with a
+# forged Host header, bypassing Cloudflare's WAF. That tradeoff was accepted
+# knowingly for the OTA host (see ops/vps/cf-firewall.sh), but this service
+# carries sync traffic, and it is a much better place to fix the problem than
+# to inherit it. Publish it only after the Traefik hostname restriction lands.
+services:
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - lifeos-relay-data:/data
+    environment:
+      - RELAY_DB_PATH=/data/relay.db
+    # Guardrails: the relay is a small, bounded service and should stay that
+    # way. If it ever needs more than this, something is storing more than it
+    # should.
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/healthz')"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  lifeos-relay-data:
