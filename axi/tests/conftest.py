@@ -459,6 +459,16 @@ def fresh_db(tmp_path, monkeypatch):
         if not active:
             break
         _time.sleep(0.02)
+    # Drop the sync origin/Lamport caches. `stamping.local_origin()` reads the
+    # device uuid from `meta` ONCE per process and keeps it, and `next_lamport`
+    # caches the counter the same way — both deliberate, because stamping every
+    # insert must not cost a query. Across tests that caching is a leak: test
+    # N+1 gets a fresh database with a DIFFERENT origin row and would keep
+    # stamping test N's uuid, and its clock would start above rows that no
+    # longer exist. Introduced with slice 3a; cleaned here rather than making
+    # production pay for a test-only concern.
+    from axi.sync import stamping as _stamping
+    _stamping.reset_cache()
     # Close the store connection BEFORE monkeypatch restores DB_PATH / STATE_DIR
     # so no background thread can reopen the previous test's DB via _connect().
     store.close()
