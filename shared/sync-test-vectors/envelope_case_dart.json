@@ -1,0 +1,22 @@
+{
+  "format_version": 1,
+  "note": "Sealed by DART with the same fixed inputs as envelope_case.json. Python opens this in test_sync_envelope_parity.py. The bytes differ from the Python fixture because the two JSON encoders order keys and pad separators differently — that is allowed; opening is the contract, not byte-identical sealing.",
+  "data_key": "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
+  "env_id": "05080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f62",
+  "recipient_uuid": "0123456789abcdef0123456789abcdef",
+  "payload": {
+    "origin_device": "aaaa",
+    "peer_cursor_echo": -1,
+    "rows": {
+      "edges": [],
+      "nodes": [
+        {
+          "label": "desayuno",
+          "uuid": "u-1"
+        }
+      ]
+    },
+    "schema_version": 1
+  },
+  "sealed": "0105080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f620123456789abcdef0123456789abcdefbd5268e8505a37081976a5eb354026f6279ca288be7687b96807089f0450984e5eac4691558d95f8fa00a220c117c61f4396f5d1bb1dda72b4ff66a4d2d412ae42448de1334493833d6ff690949060f3704e8f9bb10d857ec7d9271d4dfb0c00d9ce3f1671b2c11a7c78fcefd18c153695f3bb9eb37111d0806fb07ae3c6ced0cf608a9434b3178f788202c5a918bc4d3f"
+}

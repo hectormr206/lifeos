@@ -182,9 +182,19 @@ void main() {
     test('restoring with a mistyped phrase changes nothing at all', () async {
       final store = FakeSyncKeyStore();
       final sync = SyncEnablement(store: store);
-      final original = PhraseCeremony.generate();
-      final words = original.mnemonic.split(' ');
-      final broken = ([...words.take(11), 'zoo']).join(' ');
+      // A FIXED invalid phrase, not a generated one with a word swapped.
+      //
+      // The first version of this test took a random phrase and replaced the
+      // last word with 'zoo'. The checksum is FOUR BITS, so a wrong word lands
+      // on a valid checksum roughly one time in sixteen — a test that fails
+      // 6% of the time and looks like a real bug when it does.
+      //
+      // Twelve 'abandon's is the canonical invalid phrase: every word is real,
+      // and the checksum is deterministically wrong. The valid all-zeros phrase
+      // ends in 'about', which is exactly the near-miss a user would make.
+      const broken =
+          'abandon abandon abandon abandon abandon abandon '
+          'abandon abandon abandon abandon abandon abandon';
 
       await expectLater(() => sync.restore(broken), throwsA(isA<Object>()));
 

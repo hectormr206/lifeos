@@ -1,0 +1,22 @@
+{
+  "data_key": "01080f161d242b323940474e555c636a71787f868d949ba2a9b0b7bec5ccd3da",
+  "env_id": "05080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f62",
+  "format_version": 1,
+  "note": "One envelope sealed by Python with a FIXED env_id. Dart must produce the identical bytes AND be able to open it. Determinism here is the only way to compare two implementations byte for byte; production always uses a fresh random env_id.",
+  "payload": {
+    "origin_device": "aaaa",
+    "peer_cursor_echo": -1,
+    "rows": {
+      "edges": [],
+      "nodes": [
+        {
+          "label": "desayuno",
+          "uuid": "u-1"
+        }
+      ]
+    },
+    "schema_version": 1
+  },
+  "recipient_uuid": "0123456789abcdef0123456789abcdef",
+  "sealed": "0105080b0e1114171a1d202326292c2f3235383b3e4144474a4d505356595c5f620123456789abcdef0123456789abcdefbd5268e8505a37081976a5eb354026f6279ee188be76c4b766574f8a136a89644faa5b90659aa9f5f64af72fca1bc95c00c1a481ee118b35eab878f5958a2e961d44d9ae0c7ccc81255ae2d69d8220ac3c37ce9bb909947ad28e73524db34b06cdde2e5a24b298176f2ff4dbc8820d65d4eef3c2f0533ac8de3cfb66ee8c918cd318807bb6e0ad16fdb4ff49b1789e05bb70f02743ecd1ba6138a2c7c26a"
+}

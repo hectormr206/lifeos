@@ -64,8 +64,20 @@ def _envelope_key(data_key: bytes, env_id: bytes) -> bytes:
     ).derive(data_key)
 
 
-def seal(*, data_key: bytes, recipient_uuid: str, payload: dict[str, Any]) -> bytes:
-    """Encrypt one change set for one mailbox."""
+def seal(
+    *,
+    data_key: bytes,
+    recipient_uuid: str,
+    payload: dict[str, Any],
+    env_id: bytes | None = None,
+) -> bytes:
+    """Encrypt one change set for one mailbox.
+
+    `env_id` exists ONLY so the cross-language vectors can be deterministic —
+    Dart and Python cannot be shown to produce identical bytes while each picks
+    its own random id. Production never passes it; the default is 32 fresh
+    CSPRNG bytes, and that randomness is what makes the fixed nonce safe.
+    """
     if len(data_key) != 32:
         raise ValueError(f"the data key is 32 bytes; got {len(data_key)}")
 
@@ -73,7 +85,9 @@ def seal(*, data_key: bytes, recipient_uuid: str, payload: dict[str, Any]) -> by
     if len(recipient) != RECIPIENT_BYTES:
         raise ValueError("a recipient uuid is 16 bytes of hex")
 
-    env_id = os.urandom(ENV_ID_BYTES)
+    if env_id is not None and len(env_id) != ENV_ID_BYTES:
+        raise ValueError(f"env_id is {ENV_ID_BYTES} bytes; got {len(env_id)}")
+    env_id = env_id or os.urandom(ENV_ID_BYTES)
     header = bytes([VERSION]) + env_id + recipient
 
     body = json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
