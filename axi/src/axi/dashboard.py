@@ -7607,8 +7607,22 @@ def _advertised_urls(host: str, port: int) -> list[str]:
     configured host is advertised as-is. Fail-safe: on any enumeration
     error fall back to localhost so the payload is never empty.
     """
+    # The sync relay, when one is configured. Reachable from ANYWHERE over
+    # ordinary HTTPS, which is exactly what the URLs below are not: they are
+    # this machine's own VPN and LAN interfaces, so a phone outside the user's
+    # network sees a payload full of addresses it cannot use. Device sync does
+    # not need the engine at all, so offering the relay alongside gives that
+    # phone one entry it can actually reach.
+    #
+    # Additive on purpose: a laptop on the LAN is still the fastest path for
+    # everything the engine itself does.
+    extra: list[str] = []
+    relay = config.get("sync_relay_url", "")
+    if relay:
+        extra.append(str(relay).rstrip("/"))
+
     if host not in ("0.0.0.0", "::"):
-        return [f"https://{host}:{port}"]
+        return [f"https://{host}:{port}", *extra]
     ips: list[str] = []
     try:
         out = subprocess.check_output(
@@ -7625,7 +7639,7 @@ def _advertised_urls(host: str, port: int) -> list[str]:
         pass
     if not ips:
         ips = ["127.0.0.1"]
-    return [f"https://{ip}:{port}" for ip in ips]
+    return [f"https://{ip}:{port}" for ip in ips] + extra
 
 
 @app.get("/api/setup/status")
