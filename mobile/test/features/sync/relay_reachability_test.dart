@@ -17,7 +17,7 @@ class _Adapter implements HttpClientAdapter {
   void close({bool force = false}) {}
 
   @override
-  Future<ResponseBody> fetch(RequestOptions options, _, __) => respond(options);
+  Future<ResponseBody> fetch(RequestOptions options, _, _) => respond(options);
 }
 
 Dio _dioThat(Future<ResponseBody> Function(RequestOptions) respond) =>

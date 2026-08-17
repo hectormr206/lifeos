@@ -10,6 +10,7 @@ import '../domain/sync_connectivity.dart';
 import '../domain/sync_enablement.dart';
 import 'conflict_history_screen.dart';
 import 'phrase_ceremony_screen.dart';
+import 'phrase_restore_screen.dart';
 import 'sync_settings_screen.dart';
 
 /// Wiring only. The screens themselves take plain values and callbacks so they
@@ -79,13 +80,83 @@ class SyncSettingsRoute extends ConsumerWidget {
         onUnmeteredNetwork: true,
       ),
       deviceNickname: 'Este dispositivo',
-      onEnable: () => _startCeremony(context, ref),
+      onEnable: () => _startEnabling(context, ref),
       onDisable: () async {
         await ref.read(syncEnablementProvider).disable();
         ref.invalidate(syncEnabledProvider);
       },
       onSyncNow: () {},
       onOpenConflicts: () => context.push('/settings/sync/conflicts'),
+    );
+  }
+
+  /// Enabling asks WHICH device this is before it does anything.
+  ///
+  /// The question is not a courtesy. Generating unconditionally — which is what
+  /// this did until the second device was actually tried — gives every install
+  /// its own key. Both then report "sincronización activa" and neither can read
+  /// a single envelope the other wrote: no error, no failed request, just two
+  /// devices quietly alone. Asking is what makes joining possible at all.
+  void _startEnabling(BuildContext context, WidgetRef ref) {
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+              child: Text(
+                '¿Es tu primer dispositivo con LifeOS, o ya tienes otro '
+                'sincronizando?',
+                style: TextStyle(fontSize: 16),
+              ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_circle_outline),
+              title: const Text('Es el primero'),
+              subtitle: const Text(
+                'Se crea una frase nueva de doce palabras y la anotas.',
+              ),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _startCeremony(context, ref);
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.devices_other_outlined),
+              title: const Text('Ya tengo otro dispositivo'),
+              subtitle: const Text(
+                'Escribes la frase de ese dispositivo y los dos comparten la '
+                'misma información.',
+              ),
+              onTap: () {
+                Navigator.of(sheet).pop();
+                _startRestore(context, ref);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _startRestore(BuildContext context, WidgetRef ref) {
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => PhraseRestoreScreen(
+          onCancel: () => Navigator.of(context).pop(),
+          onRestore: (mnemonic) async {
+            // `restore` re-validates the checksum and throws before touching
+            // storage, so a phrase that somehow got here malformed cannot
+            // half-enable the device.
+            await ref.read(syncEnablementProvider).restore(mnemonic);
+            ref.invalidate(syncEnabledProvider);
+            if (context.mounted) Navigator.of(context).pop();
+          },
+        ),
+      ),
     );
   }
 
