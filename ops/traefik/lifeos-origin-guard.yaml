@@ -50,3 +50,47 @@ http:
           - "10.0.0.0/8"
           - "172.16.0.0/12"
           - "127.0.0.0/8"
+
+  # LOS ROUTERS VAN ACA, NO EN admin-vpn.yaml.
+  #
+  # Edite ese archivo para colgarles el middleware y una hora despues estaba
+  # revertido byte a byte a su contenido original: Coolify lo gestiona y lo
+  # reescribe desde su base de datos. Mis archivos propios sobrevivieron; la
+  # edicion a uno ajeno no.
+  #
+  # Asi que en vez de editarlo, defino los mismos hosts con prioridad MAS ALTA
+  # y el middleware puesto. Traefik elige el router de mayor prioridad, asi que
+  # estos ganan y siguen ganando aunque Coolify reescriba el otro archivo mil
+  # veces. Los servicios se reusan tal cual estan definidos alla.
+  #
+  # Lo verifique volviendo a probar una hora despues, y menos mal: la primera
+  # version daba 403 y habia vuelto a 200 sin que nada avisara.
+  routers:
+    umami-guard:
+      rule: "Host(`umami.hectormr.com`)"
+      priority: 200
+      entryPoints: [https]
+      tls: {}
+      middlewares: [origen-confiable@file]
+      service: umami-svc@file
+    kuma-guard:
+      rule: "Host(`kuma.hectormr.com`)"
+      priority: 200
+      entryPoints: [https]
+      tls: {}
+      middlewares: [origen-confiable@file]
+      service: kuma-svc@file
+    beszel-guard:
+      rule: "Host(`beszel.hectormr.com`)"
+      priority: 200
+      entryPoints: [https]
+      tls: {}
+      middlewares: [origen-confiable@file]
+      service: beszel-svc@file
+    searxng-guard:
+      rule: "Host(`searxng.hectormr.com`)"
+      priority: 200
+      entryPoints: [https]
+      tls: {}
+      middlewares: [origen-confiable@file]
+      service: searxng-svc@file
