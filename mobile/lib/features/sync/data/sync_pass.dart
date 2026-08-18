@@ -57,6 +57,7 @@ class SyncPass {
     required this.keys,
     required this.relayBaseUrl,
     this.dio,
+    this.waitForMail = 0,
   })  : _engine = GraphSyncEngine(db),
         _db = db;
 
@@ -68,6 +69,14 @@ class SyncPass {
   /// Injected so a test can drive a fake relay. Null in production, where
   /// `RelayClient` builds its own.
   final Dio? dio;
+
+  /// Seconds to let the relay HOLD an empty inbox fetch open.
+  ///
+  /// Zero for a background pass, which must finish and let the device sleep.
+  /// Non-zero only while the app is open and someone is looking at it — that
+  /// is the one moment where waiting a few seconds buys immediacy rather than
+  /// battery.
+  final int waitForMail;
 
   Future<SyncPassReport> run() async {
     if (relayBaseUrl.isEmpty) {
@@ -126,7 +135,11 @@ class SyncPass {
       var applied = 0;
       var conflicts = 0;
 
-      for (final pending in await inboxRelay.fetch()) {
+      // The inbox fetch is the one that WAITS. Our own board announcement and
+      // the peers' mailboxes are checked and left; this is the request that
+      // turns "the other device will find out on its next poll" into "the
+      // other device already knows".
+      for (final pending in await inboxRelay.fetch(waitSeconds: waitForMail)) {
         final payload =
             (await openEnvelope(dataKey: keys.dataKey, blob: pending.body))
                 .payload;

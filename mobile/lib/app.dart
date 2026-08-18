@@ -404,6 +404,11 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
           db: await ref.read(graphDatabaseHandleProvider.future),
           keys: await deriveSyncKeys(entropy),
           relayBaseUrl: ref.read(relayBaseUrlProvider),
+          // The app is OPEN, so the pass may wait for mail: this is what makes
+          // the other device's change appear without the user doing anything.
+          // The background pass never waits — it has to finish and let the
+          // phone sleep.
+          waitForMail: kForegroundMailWait,
         ).run();
       },
       // Recorded so the settings screen shows what the automatic pass did.

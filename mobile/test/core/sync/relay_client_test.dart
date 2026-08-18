@@ -169,4 +169,37 @@ void main() {
         .join();
     expect(utf8.decode(relay.claims[_mailbox]!), expected);
   });
+
+  group('long polling asks the relay to hold the line', () {
+    // Receiving used to wait for the next poll — up to half a minute of "casi
+    // de inmediato" that was really "pretty soon".
+
+    test('a long-polled fetch still AUTHENTICATES', () async {
+      // The trap, and the reason this test exists: the relay signs
+      // `request.url.path`, which excludes the query string. Signing the query
+      // here would make every long-polled fetch fail — as a 401, which reads
+      // like a broken key rather than a mismatched preimage, and costs whoever
+      // debugs it an evening.
+      //
+      // The fake verifies the signature exactly as the relay does (against the
+      // stripped path), so this passing IS the proof.
+      final relay = FakeRelay();
+      final client = await _client(relay);
+      await client.claim();
+      await client.deposit(_envelope());
+
+      final pending = await client.fetch(waitSeconds: 25);
+
+      expect(pending, hasLength(1));
+    });
+
+    test('an ordinary fetch is unchanged', () async {
+      final relay = FakeRelay();
+      final client = await _client(relay);
+      await client.claim();
+      await client.deposit(_envelope());
+
+      expect(await client.fetch(), hasLength(1));
+    });
+  });
 }

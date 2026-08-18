@@ -32,6 +32,12 @@ const Duration kAutoSyncInterval = Duration(seconds: 30);
 /// that "escribí algo" and "aparece en el otro" feel like the same action.
 const Duration kSyncChangeDebounce = Duration(seconds: 2);
 
+/// Seconds the FOREGROUND pass lets the relay hold an empty inbox open.
+///
+/// Just under the relay's own ceiling, so the request returns on its terms
+/// rather than being cut off by ours.
+const int kForegroundMailWait = 20;
+
 class SyncAutoRunner {
   SyncAutoRunner({
     required this.isEnabled,

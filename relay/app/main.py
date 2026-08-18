@@ -18,6 +18,9 @@ service exactly the thing the design promises it is not.
 
 from __future__ import annotations
 
+import asyncio
+import time
+
 import json
 from typing import Callable
 
@@ -39,6 +42,32 @@ def _json(status: int, payload: dict) -> Response:
         status_code=status,
         media_type="application/json",
     )
+
+
+# How long the relay will hold an empty fetch, at most.
+#
+# The CEILING is the relay's, never the caller's: a client asking to wait an
+# hour would hold a socket (and a worker) for an hour, and one bad client would
+# be enough to exhaust them.
+MAX_LONG_POLL_SECONDS = 25.0
+
+# How often a held request re-checks. Small enough to feel immediate, large
+# enough that a hundred idle devices are not a hundred busy loops.
+LONG_POLL_TICK = 0.25
+
+
+def _clamped_wait(raw: str | None) -> float:
+    """Seconds to hold this request. Never trusts the caller's number.
+
+    Garbage ("wait=abc") is treated as no wait rather than an error: a client
+    with a bad query string must lose its long poll, never its sync.
+    """
+    if raw is None:
+        return 0.0
+    try:
+        return max(0.0, min(float(raw), MAX_LONG_POLL_SECONDS))
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def build_app(*, store: RelayStore, now: Callable[[], float]) -> FastAPI:
@@ -143,15 +172,33 @@ def build_app(*, store: RelayStore, now: Callable[[], float]) -> FastAPI:
         if refusal is not None:
             return refusal
 
-        return _json(
-            200,
-            {
-                "envelopes": [
-                    {"env_id": e["env_id"], "body": e["body"].hex()}
-                    for e in store.pending(mailbox)
-                ]
-            },
-        )
+        # LONG POLL. Sync already pushed within seconds of a local write, but
+        # the other device only found out on its next poll — up to half a minute
+        # of "casi de inmediato" that was really "pretty soon".
+        #
+        # Holding an empty fetch open closes that half without a push service,
+        # an account, or anything new for the relay to learn: it still cannot
+        # read a byte of what it holds, and it still only ever answers a caller
+        # that proved it owns the mailbox.
+        #
+        # Polling rather than a condition variable on purpose: the store is
+        # SQLite and every worker may be a separate process, so a wake-up that
+        # lived in one process's memory would only work by luck.
+        wait = _clamped_wait(request.query_params.get("wait"))
+        deadline = time.monotonic() + wait
+        while True:
+            pending = store.pending(mailbox)
+            if pending or time.monotonic() >= deadline:
+                return _json(
+                    200,
+                    {
+                        "envelopes": [
+                            {"env_id": e["env_id"], "body": e["body"].hex()}
+                            for e in pending
+                        ]
+                    },
+                )
+            await asyncio.sleep(LONG_POLL_TICK)
 
     @app.post("/v1/mailbox/{mailbox}/ack")
     async def ack(mailbox: str, request: Request) -> Response:

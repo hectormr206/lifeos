@@ -86,9 +86,18 @@ class RelayClient {
     await _send('POST', '$_path/envelopes', envelope, expect: const {202});
   }
 
-  Future<List<PendingEnvelope>> fetch() async {
-    final response = await _send('GET', '$_path/envelopes', const [],
-        expect: const {200});
+  /// [waitSeconds] asks the relay to HOLD an empty fetch open until something
+  /// arrives, so receiving is as immediate as sending already was. Zero keeps
+  /// the old behaviour, and the relay clamps anything unreasonable — the
+  /// ceiling is its, not ours.
+  Future<List<PendingEnvelope>> fetch({int waitSeconds = 0}) async {
+    final response = await _send(
+      'GET',
+      '$_path/envelopes',
+      const [],
+      expect: const {200},
+      query: waitSeconds > 0 ? '?wait=$waitSeconds' : '',
+    );
     final decoded = jsonDecode(response) as Map<String, dynamic>;
     return [
       for (final e in (decoded['envelopes'] as List).cast<Map<String, dynamic>>())
@@ -113,6 +122,11 @@ class RelayClient {
     String path,
     List<int> body, {
     required Set<int> expect,
+    // Sent but NOT signed. The relay signs `request.url.path`, which excludes
+    // the query string, so signing it here would make every long-polled fetch
+    // fail authentication — and it would fail as a 401, which reads like a
+    // broken key rather than a mismatched preimage.
+    String query = '',
   }) async {
     final ts = (_now().millisecondsSinceEpoch ~/ 1000).toString();
     final nonce = _hex(List<int>.generate(8, (_) => _random.nextInt(256)));
@@ -134,7 +148,7 @@ class RelayClient {
     );
 
     final response = await _dio.request<String>(
-      '$baseUrl$path',
+      '$baseUrl$path$query',
       data: body.isEmpty ? null : Uint8List.fromList(body),
       options: options,
     );
