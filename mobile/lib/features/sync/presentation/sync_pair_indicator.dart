@@ -24,6 +24,7 @@ class SyncPairIndicator extends StatelessWidget {
     required this.thisDevice,
     required this.peer,
     required this.status,
+    this.pairingCode,
     this.now,
   });
 
@@ -35,6 +36,16 @@ class SyncPairIndicator extends StatelessWidget {
 
   /// The last recorded pass, or null when none has ever completed.
   final SyncStatus? status;
+
+  /// Short fingerprint of the mailbox, which is derived from the RECOVERY
+  /// PHRASE alone. Two devices sharing a phrase show the same code; two devices
+  /// that each ran their own ceremony show different ones.
+  ///
+  /// This is the value that was missing while two healthy installs sat on
+  /// different phrases, each reporting "Sin pareja" with nothing to compare.
+  /// The relay held three mailboxes from three ceremonies and neither device
+  /// could tell the user that.
+  final String? pairingCode;
 
   /// Injectable clock, so the "hace 2 h" line is testable.
   final DateTime? now;
@@ -81,6 +92,21 @@ class SyncPairIndicator extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          if (peer == null && pairingCode != null) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Código de emparejamiento: $pairingCode',
+              style: text.labelLarge,
+              textAlign: TextAlign.center,
+            ),
+            Text(
+              'Los dos dispositivos deben mostrar el mismo. Si no coincide, '
+              'están usando frases distintas y nunca se van a encontrar.',
+              style: text.bodySmall,
+              textAlign: TextAlign.center,
+            ),
+          ],
+          const SizedBox(height: 4),
           Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [

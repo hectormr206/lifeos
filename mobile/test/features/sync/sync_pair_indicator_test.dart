@@ -27,6 +27,49 @@ SyncStatus _ok(DateTime at) =>
     SyncStatus(ok: true, at: at, applied: 2, sent: 1, message: null);
 
 void main() {
+  group('two devices on DIFFERENT phrases must be diagnosable', () {
+    // The failure that cost an evening: both devices enabled, both healthy,
+    // both reporting "Sin pareja" — because each had run its own ceremony and
+    // derived its own mailbox. The relay held three mailboxes from three
+    // phrases and neither device could show the user that.
+    //
+    // The mailbox is derived from the phrase ALONE, so its fingerprint is the
+    // one value that proves two devices share a phrase. Shown when there is no
+    // peer, which is exactly when the user needs to compare them.
+    testWidgets('with no peer it shows the fingerprint to compare',
+        (tester) async {
+      await _pump(
+        tester,
+        SyncPairIndicator(
+          thisDevice: 'a1b2c3',
+          peer: null,
+          status: null,
+          pairingCode: '940068',
+          now: DateTime(2026, 8, 17, 20),
+        ),
+      );
+
+      expect(find.textContaining('940068'), findsOneWidget);
+    });
+
+    testWidgets('once paired the fingerprint stops taking up room',
+        (tester) async {
+      await _pump(
+        tester,
+        SyncPairIndicator(
+          thisDevice: 'a1b2c3',
+          peer: 'd4e5f6',
+          status: _ok(DateTime(2026, 8, 17, 20)),
+          pairingCode: '940068',
+          now: DateTime(2026, 8, 17, 20, 1),
+        ),
+      );
+
+      expect(find.textContaining('940068'), findsNothing,
+          reason: 'it is a diagnostic, not decoration');
+    });
+  });
+
   testWidgets('with no peer it does NOT look connected', (tester) async {
     await _pump(
       tester,

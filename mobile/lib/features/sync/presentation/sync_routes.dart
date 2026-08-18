@@ -133,6 +133,18 @@ final thisDeviceShortIdProvider = FutureProvider<String>((ref) async {
   return origin.length <= 6 ? origin : origin.substring(0, 6);
 });
 
+/// Fingerprint of the mailbox this device derives from its phrase.
+///
+/// Shown so two installs can be COMPARED. Derived from the phrase only, so a
+/// mismatch is proof the devices ran separate ceremonies — the one failure that
+/// looks identical to "the other device is just not here yet".
+final syncPairingCodeProvider = FutureProvider<String?>((ref) async {
+  final entropy = await ref.watch(syncKeyStoreProvider).readEntropy();
+  if (entropy == null) return null;
+  final mailbox = await (await deriveSyncKeys(entropy)).sharedMailboxUuid();
+  return mailbox.substring(0, 6);
+});
+
 /// The other device, if this one has ever exchanged with it.
 final syncPeerProvider = FutureProvider<SyncPeer?>((ref) async {
   final db = await ref.watch(graphDatabaseHandleProvider.future);
@@ -169,6 +181,7 @@ class SyncSettingsRoute extends ConsumerWidget {
       thisDeviceId: ref.watch(thisDeviceShortIdProvider).value ?? '······',
       peerDeviceId: ref.watch(syncPeerProvider).value?.shortId,
       lastStatus: ref.watch(syncStatusProvider).value,
+      pairingCode: ref.watch(syncPairingCodeProvider).value,
       onEnable: () => _startEnabling(context, ref),
       onDisable: () async {
         await ref.read(syncEnablementProvider).disable();
