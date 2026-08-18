@@ -17,10 +17,15 @@ import '../domain/daily_digest_aggregator.dart';
 /// the UI, and NOT read from or written to preferences. The digest still needs
 /// a narration instruction for the model, so it lives here and is used only by
 /// [DailyDigestService.generate].
+/// The instruction said "resumen de MI día" and the model did as it was told:
+/// the digest on the device opened with "Hoy tuve un día con dos registros" —
+/// Axi narrating the user's day as its own. The first person was in the
+/// instruction, not in the model.
 const String kDailyDigestNarrationInstruction =
-    'Escribe un resumen breve y cálido de mi día en español neutro, a partir de '
-    'los registros de hoy. Usa solo los hechos listados; no inventes nada ni '
-    'agregues datos. Máximo 4 frases.';
+    'Escribe un resumen breve y cálido del día DEL USUARIO en español neutro, a '
+    'partir de sus registros de hoy. Háblale de "tú" ("registraste", "tuviste"), '
+    'nunca en primera persona: el día es suyo, no tuyo. Usa solo los hechos '
+    'listados; no inventes nada ni agregues datos. Máximo 4 frases.';
 
 /// Builds the on-device daily digest: a DETERMINISTIC aggregation of TODAY's
 /// local domain data (grouped by domain + person) plus an OPTIONAL short
