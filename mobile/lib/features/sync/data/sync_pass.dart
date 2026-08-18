@@ -82,93 +82,90 @@ class SyncPass {
 
     await _engine.ensureReady();
     final origin = await localOrigin(_db);
-    final mailbox = await keys.sharedMailboxUuid();
-    final authKeyPair = await keys.mailboxAuthKeyPair(mailbox);
-
-    final relay = RelayClient(
-      baseUrl: relayBaseUrl,
-      mailboxUuid: mailbox,
-      authKeyPair: authKeyPair,
-      dio: dio,
-    );
+    final board = await keys.sharedMailboxUuid();
+    final inbox = await keys.deviceMailboxUuid(origin);
 
     try {
-      // Idempotent for the same key, and the key comes from the phrase — so a
-      // device that reinstalled and restored is not locked out of its own
-      // mailbox at the exact moment the phrase is supposed to save it.
-      await relay.claim();
+      // 1. ANNOUNCE. Say who we are on the shared board so devices that have
+      //    never heard of us can compute our address.
+      final boardRelay = await _relayFor(board);
+      await boardRelay.claim();
+      await _depositReplacing(
+        boardRelay,
+        board,
+        await _engine.buildPayload(peerUuid: 'announce', limit: 0),
+      );
+
+      // 2. LISTEN. Collect every other device from the board.
+      //
+      //    Their announcements are NEVER acknowledged: on a shared board an ack
+      //    deletes the message for everyone, and the third device would lose
+      //    what the second happened to read first. Each device retires only its
+      //    OWN announcement, by replacing it.
+      for (final pending in await boardRelay.fetch()) {
+        try {
+          final payload =
+              (await openEnvelope(dataKey: keys.dataKey, blob: pending.body))
+                  .payload;
+          final sender = payload['origin_device'] as String? ?? '';
+          if (sender.isEmpty || sender == origin) continue;
+          await _engine.rememberPeer(sender);
+        } catch (_) {
+          // Someone else's envelope we cannot open is not our problem to
+          // report: it is not addressed to us and the board is shared.
+          continue;
+        }
+      }
+
+      // 3. RECEIVE. Our own mailbox has exactly one recipient, so acking is
+      //    correct here and the envelope is genuinely consumed.
+      final inboxRelay = await _relayFor(inbox);
+      await inboxRelay.claim();
 
       var received = 0;
       var applied = 0;
       var conflicts = 0;
-      final peers = <String>{};
 
-      for (final pending in await relay.fetch()) {
-        final opened = await openEnvelope(
-          dataKey: keys.dataKey,
-          blob: pending.body,
-        );
-        final payload = opened.payload;
+      for (final pending in await inboxRelay.fetch()) {
+        final payload =
+            (await openEnvelope(dataKey: keys.dataKey, blob: pending.body))
+                .payload;
         final sender = payload['origin_device'] as String? ?? '';
+        if (sender == origin) {
+          await inboxRelay.ack(pending.envId);
+          continue;
+        }
 
-        // Our own envelope coming back: the mailbox is shared, so we see what
-        // we deposited. SKIPPED, never acknowledged.
-        //
-        // Acknowledging it deletes it at the relay — and that is precisely the
-        // message the other device still has to read. The device that synced
-        // first destroyed the other's only way to learn it existed, and both
-        // then reported "todavía no hay otro dispositivo" for ever. Our own
-        // envelope is retired only when we deposit its replacement.
-        if (sender == origin) continue;
-
-        peers.add(sender);
         received++;
-
+        await _engine.rememberPeer(sender);
         final result = await _engine.applyPayload(payload, envId: pending.envId);
         applied += result.applied;
         conflicts += result.conflicts;
 
-        // The sender told us how far IT has applied of OUR rows; that is the
-        // only thing allowed to advance our cursor for it.
         final echo = payload['peer_cursor_echo'];
         if (echo is int) await _engine.recordEcho(sender, echo);
 
-        // Acked only AFTER a successful apply. Acking first would delete the
-        // envelope from the relay while the rows were still not stored, and
-        // nothing would ever resend them.
-        await relay.ack(pending.envId);
+        // Acked only AFTER a successful apply: acking first would delete the
+        // envelope while the rows were still not stored, and nothing would
+        // ever resend them.
+        await inboxRelay.ack(pending.envId);
       }
 
-      if (peers.length > 1) {
-        return SyncPassReport(
-          received: received,
-          applied: applied,
-          sent: 0,
-          conflicts: conflicts,
-          tooManyDevices: true,
-        );
-      }
-
-      final peer = peers.isEmpty ? null : peers.first;
+      // 4. SEND, once per peer, each into that peer's own mailbox.
       var sent = 0;
-
-      // With NO peer known we still deposit, announcing ourselves.
-      //
-      // Waiting for a peer before depositing is a deadlock: each device sits
-      // silent waiting for a message the other is equally waiting to receive.
-      // That is the state two installs end up in after any envelope loss, and
-      // it must resolve itself — a user should never have to reinstall or
-      // retype the phrase to recover.
-      final payload = await _engine.buildPayload(peerUuid: peer ?? 'announce');
-      final nodes = (payload['rows']['nodes'] as List).length;
-      final edges = (payload['rows']['edges'] as List).length;
-
-      // Also deposit when we merely APPLIED something: our echo rides on the
-      // payload, and without it the peer never advances its cursor and resends
-      // the same rows on every pass, for ever.
-      if (peer == null || nodes + edges > 0 || applied > 0) {
-        sent = nodes + edges;
-        await _depositReplacing(relay, mailbox, payload);
+      for (final peer in await _engine.peers()) {
+        final payload = await _engine.buildPayload(peerUuid: peer.uuid);
+        final rows = (payload['rows']['nodes'] as List).length +
+            (payload['rows']['edges'] as List).length;
+        // Also sent when we merely APPLIED something: our echo rides on the
+        // payload, and without it the peer never advances its cursor and
+        // resends the same rows on every pass, for ever.
+        if (rows == 0 && applied == 0) continue;
+        final target = await keys.deviceMailboxUuid(peer.uuid);
+        final peerRelay = await _relayFor(target);
+        await peerRelay.claim();
+        await _depositReplacing(peerRelay, target, payload);
+        sent += rows;
       }
 
       return SyncPassReport(
@@ -199,6 +196,13 @@ class SyncPass {
     }
   }
 
+  Future<RelayClient> _relayFor(String mailbox) async => RelayClient(
+        baseUrl: relayBaseUrl,
+        mailboxUuid: mailbox,
+        authKeyPair: await keys.mailboxAuthKeyPair(mailbox),
+        dio: dio,
+      );
+
   /// Deposit a payload and retire the envelope this device left last time.
   ///
   /// Retiring the OLD one only after the NEW one is stored means the mailbox
@@ -209,7 +213,7 @@ class SyncPass {
     String mailbox,
     Map<String, dynamic> payload,
   ) async {
-    final previous = await lastDeposit(_db);
+    final previous = await lastDepositTo(_db, mailbox);
     final envelope = await sealEnvelope(
       dataKey: keys.dataKey,
       recipientUuid: mailbox,
@@ -222,7 +226,7 @@ class SyncPass {
     final envId = [
       for (final b in envelope.sublist(1, 33)) b.toRadixString(16).padLeft(2, '0'),
     ].join();
-    await rememberDeposit(_db, envId);
+    await rememberDepositTo(_db, mailbox, envId);
 
     if (previous != null && previous != envId) {
       // Best-effort: a failure here leaves one extra envelope to expire on the
@@ -233,32 +237,22 @@ class SyncPass {
     }
   }
 
-  /// The first pass a brand-new device makes, announcing itself so the peer
-  /// learns its origin. Without it two devices that have never spoken would
-  /// each wait for the other to go first.
+  /// The first pass a brand-new device makes, announcing itself so the others
+  /// can compute its address.
   Future<void> announce() async {
-    final mailbox = await keys.sharedMailboxUuid();
-    final relay = RelayClient(
-      baseUrl: relayBaseUrl,
-      mailboxUuid: mailbox,
-      authKeyPair: await keys.mailboxAuthKeyPair(mailbox),
-      dio: dio,
-    );
+    final board = await keys.sharedMailboxUuid();
+    final relay = await _relayFor(board);
     await relay.claim();
     await _depositReplacing(
       relay,
-      mailbox,
-      await _engine.buildPayload(peerUuid: 'announce'),
+      board,
+      await _engine.buildPayload(peerUuid: 'announce', limit: 0),
     );
   }
 }
 
 /// Human-readable outcome for the settings screen.
 String describeSyncPass(SyncPassReport report) {
-  if (report.tooManyDevices) {
-    return 'Por ahora la sincronización funciona entre dos dispositivos. '
-        'Detecté más y me detuve para no mezclar tu información.';
-  }
   if (report.failure != null) return report.failure!;
   if (report.applied == 0 && report.sent == 0) return 'Todo estaba al día.';
   return 'Recibí ${report.applied} y envié ${report.sent}.'

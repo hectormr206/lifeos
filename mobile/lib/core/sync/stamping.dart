@@ -92,6 +92,17 @@ Future<void> ensureSyncTables(DatabaseExecutor db) async {
   // Every install that had enabled sync before the change failed every pass,
   // while a FRESH install worked perfectly — which is precisely why the suite
   // stayed green: it only ever created new tables.
+  // One row per DESTINATION mailbox: with a mailbox per device there is a
+  // different "previous envelope" to retire for each peer, and a single column
+  // could only ever remember the last one — retiring the wrong device's
+  // message, or none.
+  await db.execute('''
+    CREATE TABLE IF NOT EXISTS $kSyncDepositsTable (
+      mailbox TEXT PRIMARY KEY,
+      env_id  TEXT NOT NULL
+    )
+  ''');
+
   await _addColumnIfMissing(db, kSyncIdentityTable, 'last_deposit', 'TEXT');
   await _addColumnIfMissing(
       db, kSyncPeerStateTable, 'applied_high', 'INTEGER NOT NULL DEFAULT 0');
@@ -158,6 +169,29 @@ Future<int> nextLamport(DatabaseExecutor db) async {
   ''');
   final current = rows.first['high'] as int? ?? 0;
   return current + 1;
+}
+
+const String kSyncDepositsTable = 'sync_deposits';
+
+/// The env id of the last envelope we left in [mailbox], if any.
+Future<String?> lastDepositTo(DatabaseExecutor db, String mailbox) async {
+  await ensureSyncTables(db);
+  final rows = await db.query(kSyncDepositsTable,
+      where: 'mailbox = ?', whereArgs: [mailbox]);
+  return rows.isEmpty ? null : rows.first['env_id'] as String?;
+}
+
+Future<void> rememberDepositTo(
+  DatabaseExecutor db,
+  String mailbox,
+  String envId,
+) async {
+  await ensureSyncTables(db);
+  await db.insert(
+    kSyncDepositsTable,
+    {'mailbox': mailbox, 'env_id': envId},
+    conflictAlgorithm: ConflictAlgorithm.replace,
+  );
 }
 
 /// The env id of the last envelope this device deposited, if any.

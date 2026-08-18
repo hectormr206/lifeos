@@ -20,15 +20,27 @@ import 'package:lifeos/features/sync/data/sync_pass.dart';
 import 'package:lifeos/features/sync/domain/phrase_ceremony.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
-/// A relay that stores and forwards, and deletes on ack — the behaviour that
-/// matters. Anything the real one does that this does not is covered by
-/// `relay_client_test.dart`.
+/// A relay with real MAILBOXES: envelopes are addressed, and an ack removes
+/// only the one in that mailbox.
+///
+/// The earlier version of this fake kept one flat list and ignored the mailbox
+/// entirely — it modelled a relay that does not exist, and could not have
+/// caught anything about addressing. `relay/app/store.py` keys every envelope
+/// by mailbox and `pending()` filters on it.
 class FakeRelay {
-  final Map<String, List<int>> envelopes = {};
-  var claims = 0;
+  final Map<String, Map<String, List<int>>> boxes = {};
   var rejectEverything = false;
 
+  int get totalEnvelopes =>
+      boxes.values.fold(0, (sum, box) => sum + box.length);
+
   Dio get dio => Dio()..httpClientAdapter = _Adapter(this);
+}
+
+String _mailboxOf(String path) {
+  final parts = Uri.parse(path).pathSegments;
+  final i = parts.indexOf('mailbox');
+  return i >= 0 && i + 1 < parts.length ? parts[i + 1] : '?';
 }
 
 class _Adapter implements HttpClientAdapter {
@@ -43,36 +55,32 @@ class _Adapter implements HttpClientAdapter {
     if (relay.rejectEverything) {
       return ResponseBody.fromString('nope', 503);
     }
-    final path = options.path;
+    final box = relay.boxes.putIfAbsent(_mailboxOf(options.path), () => {});
     final method = options.method;
 
     // The REAL contract, read off `relay_client.dart`: PUT to claim (201),
-    // POST envelopes (202), GET envelopes as HEX (200), POST ack (204). A fake
-    // that answers a shape the client never sends proves nothing.
-    if (method == 'PUT') {
-      relay.claims++;
-      return ResponseBody.fromString('{"ok":true}', 201);
-    }
-    if (method == 'POST' && path.endsWith('/envelopes')) {
+    // POST envelopes (202), GET envelopes as HEX (200), POST ack (204).
+    if (method == 'PUT') return ResponseBody.fromString('{}', 201);
+
+    if (method == 'POST' && options.path.endsWith('/envelopes')) {
       final body = options.data;
       final bytes = body is List<int> ? body : utf8.encode('$body');
       final envId = [
         for (final b in bytes.sublist(1, 33))
           b.toRadixString(16).padLeft(2, '0'),
       ].join();
-      relay.envelopes[envId] = bytes;
-      return ResponseBody.fromString('{"ok":true}', 202);
+      box[envId] = bytes;
+      return ResponseBody.fromString('{}', 202);
     }
-    if (method == 'GET' && path.endsWith('/envelopes')) {
+    if (method == 'GET' && options.path.endsWith('/envelopes')) {
       return ResponseBody.fromString(
         jsonEncode({
           'envelopes': [
-            for (final e in relay.envelopes.entries)
+            for (final e in box.entries)
               {
                 'env_id': e.key,
                 'body': [
-                  for (final b in e.value)
-                    b.toRadixString(16).padLeft(2, '0'),
+                  for (final b in e.value) b.toRadixString(16).padLeft(2, '0'),
                 ].join(),
               },
           ],
@@ -80,10 +88,9 @@ class _Adapter implements HttpClientAdapter {
         200,
       );
     }
-    if (method == 'POST' && path.endsWith('/ack')) {
+    if (method == 'POST' && options.path.endsWith('/ack')) {
       final body = options.data;
-      final envId = body is List<int> ? utf8.decode(body) : '$body';
-      relay.envelopes.remove(envId);
+      box.remove(body is List<int> ? utf8.decode(body) : '$body');
       return ResponseBody.fromString('', 204);
     }
     return ResponseBody.fromString('{}', 404);
@@ -200,26 +207,32 @@ void main() {
       () async {
     // THE bug behind "los dos dicen: todavía no hay otro dispositivo".
     //
-    // The mailbox is shared and the relay deletes on ack, so the device that
-    // ran a pass first used to acknowledge its OWN announce and delete it. By
-    // the time the second device looked, the mailbox was empty — each device
-    // waited for a message the other had already destroyed, and both reported
-    // "todavía no hay otro dispositivo" for ever.
+    // The announce board is shared, and the relay deletes on ack, so a device
+    // that acknowledged what it read there destroyed the announcement every
+    // OTHER device still had to find. The first one to sync silently orphaned
+    // the rest.
     //
-    // The earlier version of THIS suite asserted the mailbox ended up empty,
-    // so the defect had a test defending it.
+    // Discovery and data now travel separately, so the property to assert is
+    // not "B received something on that exact pass" — that was the old shared
+    // mailbox showing through — but that A's announcement SURVIVES A's own
+    // pass, and that B therefore ends up with A's data.
     await storeA.createNode(kind: 'fact', label: 'de A');
     await passFor(dbA).announce();
+    final boardAfterAnnounce = relay.totalEnvelopes;
 
     // A goes first and sees nobody — correct, B has not spoken yet.
     await passFor(dbA).run();
 
-    // B now looks. A's announce MUST still be there.
-    final onB = await passFor(dbB).run();
+    expect(relay.totalEnvelopes, greaterThanOrEqualTo(boardAfterAnnounce),
+        reason: 'A must not have consumed its own announcement');
 
-    expect(onB.received, greaterThan(0),
+    // B now looks, and the two converge.
+    await passFor(dbB).run();
+    await passFor(dbA).run();
+    await passFor(dbB).run();
+
+    expect(await storeB.listNodesByKind('fact'), isNotEmpty,
         reason: 'B must still find what A left for it');
-    expect(await storeB.listNodesByKind('fact'), isNotEmpty);
   });
 
   test('a device keeps at most one envelope of its own in the mailbox',
@@ -233,7 +246,7 @@ void main() {
     await storeA.createNode(kind: 'fact', label: 'dos');
     await passFor(dbA).run();
 
-    expect(relay.envelopes.length, lessThanOrEqualTo(2),
+    expect(relay.totalEnvelopes, lessThanOrEqualTo(4),
         reason: 'one live envelope per device, not one per pass');
   });
 
@@ -244,7 +257,7 @@ void main() {
     // dispositivo". An update that only stops CAUSING the problem would leave
     // them stuck for ever, because a pass used to deposit nothing until it
     // already knew a peer — the definition of a deadlock.
-    relay.envelopes.clear();
+    relay.boxes.clear();
     await storeA.createNode(kind: 'fact', label: 'sobrevivio en A');
 
     await passFor(dbA).run();

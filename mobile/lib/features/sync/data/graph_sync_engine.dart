@@ -349,7 +349,16 @@ class GraphSyncEngine {
           if (row.containsKey(k)) k: row[k],
       };
 
-  /// Every peer this device has exchanged with, most recent first.
+  /// Note that a device exists, before anything has been exchanged with it.
+  ///
+  /// Learned from the announce board. Kept separate from the cursors so that
+  /// discovering a device never rewinds what we already knew about it.
+  Future<void> rememberPeer(String peerUuid) async {
+    if (peerUuid.isEmpty || peerUuid == 'announce') return;
+    await _upsertPeer(peerUuid, const {});
+  }
+
+  /// Every peer this device knows of, most recent first.
   ///
   /// Read from the same table the pass writes, so the screen cannot show a
   /// paired device that sync does not actually know about.

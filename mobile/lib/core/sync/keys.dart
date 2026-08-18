@@ -46,6 +46,7 @@ Future<List<int>> _hkdf(
 }
 
 const String kInfoMailbox = 'lifeos/sync/mailbox/v1';
+const String kInfoDeviceMailbox = 'lifeos/sync/mailbox/device/v1';
 
 /// Everything derivable from one recovery phrase.
 class SyncKeys {
@@ -83,6 +84,27 @@ class SyncKeys {
   /// mailboxes are the fix, and they are not built yet.
   Future<String> sharedMailboxUuid() async {
     final bytes = await _hkdf(rootKey, info: kInfoMailbox);
+    return [
+      for (final b in bytes.take(16)) b.toRadixString(16).padLeft(2, '0'),
+    ].join();
+  }
+
+  /// The mailbox that belongs to ONE device, addressed by its origin.
+  ///
+  /// Derived from the shared root key with the origin as salt, so every device
+  /// can compute every other's address from the phrase alone — the relay never
+  /// introduces devices to each other and never learns the shape of the set.
+  ///
+  /// This is what makes more than two devices possible. With a single shared
+  /// mailbox the relay's delete-on-ack meant the first device to fetch consumed
+  /// a message the third would never see; addressing each envelope to one
+  /// recipient makes that deletion correct again.
+  Future<String> deviceMailboxUuid(String originUuid) async {
+    final bytes = await _hkdf(
+      rootKey,
+      info: kInfoDeviceMailbox,
+      salt: Uint8List.fromList(originUuid.codeUnits),
+    );
     return [
       for (final b in bytes.take(16)) b.toRadixString(16).padLeft(2, '0'),
     ].join();
