@@ -92,6 +92,52 @@ String _dateKey(DateTime d) {
   return '$y-$m-$day';
 }
 
+/// Rewrite a remembered line from the user's FIRST person into the second.
+///
+/// The memory stores what the user said, in their words: "Sofía es mi hija".
+/// Handing that to the model produced, on a real device:
+///
+///   "¿qué relación tengo con Sofía?"  ->  "Eres mi hija Sofia."
+///
+/// Axi claiming the user as its daughter. A prompt rule already forbids it and
+/// the model broke the rule anyway — it is ~2B and the instructions are long.
+/// This is the deterministic half: do not ASK the model to reinterpret
+/// possessives when code can rewrite them before they are ever shown.
+///
+/// Conservative by design. Only whole-word possessives and copulas are touched;
+/// anything unrecognised passes through untouched, because mangling a
+/// remembered sentence is worse than leaving it as it was.
+String toSecondPerson(String line) {
+  var out = line;
+  const swaps = <String, String>{
+    'mi': 'tu',
+    'Mi': 'Tu',
+    'mis': 'tus',
+    'Mis': 'Tus',
+    'mío': 'tuyo',
+    'mía': 'tuya',
+    'míos': 'tuyos',
+    'mías': 'tuyas',
+    'soy': 'eres',
+    'Soy': 'Eres',
+    'tengo': 'tienes',
+    'Tengo': 'Tienes',
+    'my': 'your',
+    'My': 'Your',
+    'mine': 'yours',
+    'I am': 'you are',
+    'I have': 'you have',
+  };
+  swaps.forEach((from, to) {
+    out = out.replaceAll(
+      RegExp('(?<![\\p{L}])${RegExp.escape(from)}(?![\\p{L}])',
+          unicode: true),
+      to,
+    );
+  });
+  return out;
+}
+
 /// One stored BOND, written as a sentence the model can use.
 ///
 /// Relationships live in the graph as EDGES, and the recall block used to carry

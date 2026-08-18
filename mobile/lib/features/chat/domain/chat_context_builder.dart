@@ -711,7 +711,11 @@ class ChatContextBuilder {
         continue;
       }
       facts.add(RecallFact(
-        label: n.label,
+        // Rewritten to the second person HERE, once, before anything sees it.
+        // The memory holds the user's own words ("Sofía es mi hija") and a ~2B
+        // model repeating them produced "Eres mi hija Sofia" — Axi claiming the
+        // user as its daughter, with the prompt rule already forbidding it.
+        label: toSecondPerson(n.label),
         occurredAt: n.occurredAt,
         createdAt: n.createdAt,
         domain: n.domain,
