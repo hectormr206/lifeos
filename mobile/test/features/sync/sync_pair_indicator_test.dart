@@ -52,6 +52,26 @@ void main() {
       expect(find.textContaining('940068'), findsOneWidget);
     });
 
+    testWidgets('when the code cannot be computed it SAYS so', (tester) async {
+      // On the phone the code simply did not appear: the provider returned
+      // null — still loading, or failed — and the screen rendered nothing at
+      // all. Silence is the one answer that teaches the user nothing, and it
+      // looked identical to a device that had never been paired.
+      await _pump(
+        tester,
+        SyncPairIndicator(
+          thisDevice: 'a1b2c3',
+          peer: null,
+          status: null,
+          pairingCode: null,
+          pairingProblem: 'No pude calcular el código: PlatformException(…)',
+          now: DateTime(2026, 8, 17, 20),
+        ),
+      );
+
+      expect(find.textContaining('No pude calcular'), findsOneWidget);
+    });
+
     testWidgets('once paired the fingerprint stops taking up room',
         (tester) async {
       await _pump(

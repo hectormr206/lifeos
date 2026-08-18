@@ -40,8 +40,22 @@ final syncEnablementProvider = Provider<SyncEnablement>(
 /// Derived from the presence of key material rather than a separate flag, so a
 /// stored "enabled = true" can never disagree with whether we can actually
 /// decrypt anything.
+/// The recovery entropy, read from the OS keystore ONCE.
+///
+/// Everything that needs it derives from this provider instead of reading the
+/// keystore itself. Two concurrent reads is a race that Android loses far more
+/// often than Linux does — which is exactly the shape of the bug where the
+/// pairing code appeared on the laptop and never on the phone: same code, same
+/// version, one platform silently getting null.
+///
+/// One read also means the two answers can never disagree: "sync is on" and
+/// "here is your pairing code" now come from the same bytes.
+final syncEntropyProvider = FutureProvider<List<int>?>(
+  (ref) => ref.watch(syncKeyStoreProvider).readEntropy(),
+);
+
 final syncEnabledProvider = FutureProvider<bool>(
-  (ref) => ref.watch(syncEnablementProvider).isEnabled(),
+  (ref) async => (await ref.watch(syncEntropyProvider.future)) != null,
 );
 
 /// Where the blind relay lives. Empty until one is configured, and an empty
@@ -139,7 +153,7 @@ final thisDeviceShortIdProvider = FutureProvider<String>((ref) async {
 /// mismatch is proof the devices ran separate ceremonies — the one failure that
 /// looks identical to "the other device is just not here yet".
 final syncPairingCodeProvider = FutureProvider<String?>((ref) async {
-  final entropy = await ref.watch(syncKeyStoreProvider).readEntropy();
+  final entropy = await ref.watch(syncEntropyProvider.future);
   if (entropy == null) return null;
   final mailbox = await (await deriveSyncKeys(entropy)).sharedMailboxUuid();
   return mailbox.substring(0, 6);
@@ -182,6 +196,16 @@ class SyncSettingsRoute extends ConsumerWidget {
       peerDeviceId: ref.watch(syncPeerProvider).value?.shortId,
       lastStatus: ref.watch(syncStatusProvider).value,
       pairingCode: ref.watch(syncPairingCodeProvider).value,
+      // Every branch says something. A null rendered as silence is how the
+      // code failed to appear on the phone with nothing to go on.
+      pairingProblem: ref.watch(syncPairingCodeProvider).when(
+        data: (code) => code == null
+            ? 'La sincronización está activa, pero no encontré la clave en '
+                'este dispositivo. Apágala y vuelve a activarla.'
+            : null,
+        loading: () => 'Calculando el código…',
+        error: (error, _) => 'No pude calcular el código: $error',
+      ),
       onEnable: () => _startEnabling(context, ref),
       onDisable: () async {
         await ref.read(syncEnablementProvider).disable();
@@ -191,7 +215,7 @@ class SyncSettingsRoute extends ConsumerWidget {
           workmanager: Workmanager(),
           reportError: (_, _) {},
         ).cancel();
-        ref.invalidate(syncEnabledProvider);
+        ref.invalidate(syncEntropyProvider);
       },
       onSyncNow: () => _syncNow(context, ref),
       onOpenConflicts: () => context.push('/settings/sync/conflicts'),
@@ -288,7 +312,7 @@ class SyncSettingsRoute extends ConsumerWidget {
             // storage, so a phrase that somehow got here malformed cannot
             // half-enable the device.
             await ref.read(syncEnablementProvider).restore(mnemonic);
-            ref.invalidate(syncEnabledProvider);
+            ref.invalidate(syncEntropyProvider);
             await _announce(ref);
             if (context.mounted) Navigator.of(context).pop();
           },
@@ -308,7 +332,7 @@ class SyncSettingsRoute extends ConsumerWidget {
             // `enable` refuses an unconfirmed ceremony, so this cannot turn
             // sync on from a phrase the user never proved they wrote down.
             await ref.read(syncEnablementProvider).enable(confirmed);
-            ref.invalidate(syncEnabledProvider);
+            ref.invalidate(syncEntropyProvider);
             await _announce(ref);
             if (context.mounted) Navigator.of(context).pop();
           },

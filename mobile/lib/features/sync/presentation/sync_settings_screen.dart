@@ -33,6 +33,7 @@ class SyncSettingsScreen extends StatelessWidget {
     required this.peerDeviceId,
     required this.lastStatus,
     this.pairingCode,
+    this.pairingProblem,
     required this.onEnable,
     required this.onDisable,
     required this.onSyncNow,
@@ -68,6 +69,9 @@ class SyncSettingsScreen extends StatelessWidget {
   /// Short fingerprint of the mailbox, for comparing two devices by eye.
   final String? pairingCode;
 
+  /// Why [pairingCode] is missing, when it is.
+  final String? pairingProblem;
+
   final VoidCallback onEnable;
   final VoidCallback onDisable;
   final VoidCallback onSyncNow;
@@ -91,6 +95,7 @@ class SyncSettingsScreen extends StatelessWidget {
               peer: peerDeviceId,
               status: lastStatus,
               pairingCode: pairingCode,
+              pairingProblem: pairingProblem,
             ),
             // The primary action lives HERE, with the picture it acts on, and
             // not four rows below the switch where it used to be. Adding the

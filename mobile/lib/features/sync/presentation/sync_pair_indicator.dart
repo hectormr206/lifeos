@@ -25,6 +25,7 @@ class SyncPairIndicator extends StatelessWidget {
     required this.peer,
     required this.status,
     this.pairingCode,
+    this.pairingProblem,
     this.now,
   });
 
@@ -46,6 +47,13 @@ class SyncPairIndicator extends StatelessWidget {
   /// The relay held three mailboxes from three ceremonies and neither device
   /// could tell the user that.
   final String? pairingCode;
+
+  /// Why [pairingCode] is missing, when it is.
+  ///
+  /// Rendering nothing was the original behaviour and it taught the user
+  /// nothing: a device still computing the code, one that failed to, and one
+  /// that never paired all looked exactly alike.
+  final String? pairingProblem;
 
   /// Injectable clock, so the "hace 2 h" line is testable.
   final DateTime? now;
@@ -92,6 +100,15 @@ class SyncPairIndicator extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 12),
+          if (peer == null && pairingCode == null && pairingProblem != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                pairingProblem!,
+                style: text.bodySmall?.copyWith(color: scheme.error),
+                textAlign: TextAlign.center,
+              ),
+            ),
           if (peer == null && pairingCode != null) ...[
             const SizedBox(height: 8),
             Text(
