@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
@@ -152,11 +153,24 @@ final thisDeviceShortIdProvider = FutureProvider<String>((ref) async {
 /// Shown so two installs can be COMPARED. Derived from the phrase only, so a
 /// mismatch is proof the devices ran separate ceremonies — the one failure that
 /// looks identical to "the other device is just not here yet".
+/// How long the pairing code may take before we call it stuck.
+///
+/// Generous for a key derivation, which is milliseconds of pure Dart — the
+/// point is not the budget but that there IS one. A screen that can display
+/// "Calculando…" for ever is a screen that can never be diagnosed: the user
+/// waits, nothing changes, and there is nothing to report.
+const Duration kPairingCodeTimeout = Duration(seconds: 10);
+
 final syncPairingCodeProvider = FutureProvider<String?>((ref) async {
-  final entropy = await ref.watch(syncEntropyProvider.future);
-  if (entropy == null) return null;
-  final mailbox = await (await deriveSyncKeys(entropy)).sharedMailboxUuid();
-  return mailbox.substring(0, 6);
+  // The WHOLE computation is bounded, keystore read included: any step of it
+  // can be the one that never returns, and a timeout around only the part we
+  // already suspect would leave the others able to hang exactly as before.
+  return Future(() async {
+    final entropy = await ref.watch(syncEntropyProvider.future);
+    if (entropy == null) return null;
+    final mailbox = await (await deriveSyncKeys(entropy)).sharedMailboxUuid();
+    return mailbox.substring(0, 6);
+  }).timeout(kPairingCodeTimeout);
 });
 
 /// The other device, if this one has ever exchanged with it.
