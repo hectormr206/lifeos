@@ -199,11 +199,21 @@ class ChatContextBuilder {
         // The captured name (first-run onboarding) so Axi addresses the user by
         // name and "yo/mi" anchors to the user hub. Best-effort like recall.
         userName = await deps.writer.userDisplayName();
-        final nodes = await _byName(deps, await _recallNodes(deps, message), message);
-        final facts = _factsFrom(nodes, message);
+        final recalled = await _recallNodes(deps, message);
+        final named = await _byName(deps, recalled, message);
+        // Facts found BY NAME skip the domain filter: the user naming someone
+        // outranks the router's guess about what the question is about.
+        final facts = _factsFrom(
+          named,
+          message,
+          exemptFromDomain: {
+            for (final n in named)
+              if (!recalled.any((r) => r.uuid == n.uuid)) n.uuid,
+          },
+        );
         // Bonds and facts are gathered from the SAME recall, so a question that
         // surfaces a person brings that person's relationships with it.
-        final bonds = await _relationshipsFor(deps, nodes, message);
+        final bonds = await _relationshipsFor(deps, named, message);
         memoryBlock = composeMemoryBlock(
           relationships: bonds,
           factsBlock:
@@ -674,7 +684,11 @@ class ChatContextBuilder {
   /// and the bonds — recalling twice would double the cost and could return
   /// different sets, leaving a person in the block whose relationships were
   /// gathered from a different search.
-  List<RecallFact> _factsFrom(List<GraphNodeRecord> nodes, String message) {
+  List<RecallFact> _factsFrom(
+    List<GraphNodeRecord> nodes,
+    String message, {
+    Set<String> exemptFromDomain = const {},
+  }) {
     final graphDomain = graphDomainForKey(router.routeDomain(message));
     final facts = <RecallFact>[];
     for (final n in nodes) {
@@ -685,7 +699,15 @@ class ChatContextBuilder {
       // edge sitting right there. Their bonds are gathered separately, in
       // `_relationshipsFor`.
       if (n.kind != 'fact') continue;
-      if (graphDomain != null && n.domain != null && n.domain != graphDomain) {
+      if (graphDomain != null &&
+          n.domain != null &&
+          n.domain != graphDomain &&
+          !exemptFromDomain.contains(n.uuid)) {
+        // Measured on 843: "¿qué relación tengo con Ana?" still answered "no
+        // está registrada" while "¿quién es Ana?" answered correctly. The fact
+        // WAS found by name and then discarded here, because the router had
+        // routed the question to a different domain. A routing guess must not
+        // outrank the user naming somebody.
         continue;
       }
       facts.add(RecallFact(
