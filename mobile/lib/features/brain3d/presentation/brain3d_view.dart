@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import '../domain/force_layout.dart';
+import '../domain/label_placement.dart';
 
 /// One node as the view needs it: where it goes, what colour, what it says.
 class Brain3dVisualNode {
@@ -308,11 +309,26 @@ class Brain3dPainter extends CustomPainter {
       final paint = Paint()..color = p.node.color.withValues(alpha: 0.45 + 0.55 * p.scale);
       final radius = p.node.radius * p.scale * 1.4;
       canvas.drawCircle(p.offset, radius, paint);
+    }
 
-      // Labels are what make this a map of memories rather than a scatter
-      // plot. Only the front half is labelled: labelling everything turns the
-      // far side into an unreadable pile of overlapping text.
-      if (p.scale < 0.95 || p.node.label.isEmpty) continue;
+    // Labels are laid out SEPARATELY, after every circle is drawn, because
+    // deciding whether one fits requires knowing where the others went.
+    //
+    // Drawing each label as its node came up produced the pile the user
+    // photographed: "presión 109/77 pulso 56" stacked over
+    // "presión 125/78 pulso 82" until none of it could be read. A label nobody
+    // can read is worse than no label — it hides the legible ones and makes the
+    // whole screen look broken.
+    final labelled = [
+      for (final p in projected)
+        if (p.scale >= 0.95 && p.node.label.isNotEmpty) p,
+    ]..sort((a, b) => b.scale.compareTo(a.scale));
+
+    final painters = <TextPainter>[];
+    final offsets = <Offset>[];
+    final boxes = <Rect>[];
+    for (final p in labelled) {
+      final radius = p.node.radius * p.scale * 1.4;
       final painter = TextPainter(
         text: TextSpan(
           text: p.node.label.length > 28
@@ -330,7 +346,16 @@ class Brain3dPainter extends CustomPainter {
       // user cannot tell which memory the node IS.
       final wouldOverflow = p.offset.dx + radius + 4 + painter.width > size.width;
       final dx = wouldOverflow ? -(radius + 4 + painter.width) : radius + 4;
-      painter.paint(canvas, p.offset + Offset(dx, -painter.height / 2));
+      final at = p.offset + Offset(dx, -painter.height / 2);
+      painters.add(painter);
+      offsets.add(at);
+      boxes.add(Rect.fromLTWH(at.dx, at.dy, painter.width, painter.height));
+    }
+
+    // Nearest first, so the most prominent label is the one that survives a
+    // pile-up rather than whichever happened to be drawn last.
+    for (final i in visibleLabelIndices(boxes)) {
+      painters[i].paint(canvas, offsets[i]);
     }
   }
 

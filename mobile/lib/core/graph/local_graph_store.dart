@@ -5,6 +5,7 @@ import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
 import 'package:lifeos/core/sync/stamping.dart';
+import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
 
 import 'graph_records.dart';
 import 'local_graph_schema.dart';
@@ -183,6 +184,9 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       lamport: await nextLamport(_db),
     );
     final id = await _db.insert(kNodesTable, node.toColumns());
+    // Tell sync there is something to send, so a note written here travels in
+    // seconds instead of waiting out the poll interval.
+    syncChangeSignal.changed();
     return node.copyWith(localId: id);
   }
 
@@ -204,6 +208,7 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       touched.toColumns(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    syncChangeSignal.changed();
     final stored = await getNodeByUuid(node.uuid, includeDeleted: true);
     return stored ?? touched;
   }
@@ -229,6 +234,9 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       lamport: await nextLamport(_db),
     );
     final id = await _db.insert(kEdgesTable, edge.toColumns());
+    // Tell sync there is something to send, so a note written here travels in
+    // seconds instead of waiting out the poll interval.
+    syncChangeSignal.changed();
     return edge.copyWith(localId: id);
   }
 
@@ -244,6 +252,7 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       touched.toColumns(),
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+    syncChangeSignal.changed();
     final stored = await _edgeByUuid(edge.uuid, includeDeleted: true);
     return stored ?? touched;
   }
@@ -355,6 +364,7 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       [now, now, tombstone, origin, uuid],
     );
     if (affected == 0) return false;
+    syncChangeSignal.changed();
     // Tombstone incident edges so a deleted node leaves no dangling live edges.
     await _db.rawUpdate(
       'UPDATE $kEdgesTable SET deleted_at = ?, updated_at = ?, lamport = ?, '
@@ -372,6 +382,7 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       'origin_node = ? WHERE uuid = ? AND deleted_at IS NULL',
       [now, now, await nextLamport(_db), await localOrigin(_db), uuid],
     );
+    if (affected > 0) syncChangeSignal.changed();
     return affected > 0;
   }
 

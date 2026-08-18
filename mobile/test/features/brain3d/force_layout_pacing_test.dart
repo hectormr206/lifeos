@@ -61,6 +61,15 @@ void main() {
     });
   });
 
+  test('the first painted frame is already settled', () {
+    // Reported twice: "se aloca y empieza a mover muy rápido", then "todo
+    // vibra". Nothing is allowed to move once the screen is up.
+    final layout = _layout();
+
+    expect(layout.done, isTrue,
+        reason: 'the ticker must have nothing left to animate');
+  });
+
   group('the unfolding lasts the same on any screen', () {
     test('advancing by time runs steps proportional to the time', () {
       final fast = _layout();

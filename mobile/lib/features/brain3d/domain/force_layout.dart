@@ -49,10 +49,16 @@ const double kForceLayoutStepsPerSecond = 60;
 /// Most steps one frame may consume. Bounds the catch-up after a stall.
 const int kForceLayoutMaxStepsPerFrame = 4;
 
-/// Steps run before the first paint, so the user sees the graph SETTLE instead
-/// of scramble. Three quarters of the run: at that point the temperature has
-/// decayed to a quarter of its initial value and the motion reads as purposeful.
-const int kForceLayoutWarmupSteps = 300;
+/// Steps run before the first paint.
+///
+/// The FULL run, so what appears is the settled shape and nothing moves at all.
+///
+/// This started at 300 of 400, keeping a short "unfolding" the user was meant
+/// to enjoy watching. They reported it twice — "se aloca", "todo vibra" — and
+/// a design note that has to be defended against the person using it is a
+/// design note that is wrong. The graph is a map, not an animation; a map that
+/// wobbles for a second before it can be read is just a slower map.
+const int kForceLayoutWarmupSteps = 400;
 
 class ForceLayout {
   ForceLayout({

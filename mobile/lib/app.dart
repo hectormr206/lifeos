@@ -74,6 +74,11 @@ import 'features/web_search/presentation/web_search_settings_screen.dart';
 import 'features/dictation/presentation/dictation_hotkey_notifier.dart';
 import 'theme/lifeos_theme.dart';
 import 'theme/theme_providers.dart';
+import 'package:lifeos/core/graph/graph_providers.dart';
+import 'package:lifeos/core/sync/keys.dart';
+import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
+import 'package:lifeos/features/sync/data/sync_pass.dart';
+import 'package:lifeos/features/sync/data/sync_status_store.dart';
 
 /// App shell routing (M1 slice 1). Design D1 did not pin a router package;
 /// `go_router` is the de-facto Flutter-recommended choice and is what this
@@ -356,6 +361,7 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     // AppLocalizations, which needs a built context. No-op everywhere else.
     WidgetsBinding.instance.addPostFrameCallback((_) => _wireSystemTray());
     _startForegroundUpdatePolling();
+    _startAutomaticSync();
   }
 
   @override
@@ -366,8 +372,57 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     final tray = _trayService;
     if (tray != null) unawaited(tray.stop());
     _stopForegroundUpdatePolling();
+    syncChangeSignal.stopListening();
+    _syncRunner?.stop();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
+  }
+
+  SyncAutoRunner? _syncRunner;
+
+  /// Automatic sync while the app is open, on EVERY platform.
+  ///
+  /// `workmanager` covers Android and iOS only, so the desktop had no automatic
+  /// pass at all — the laptop moved data when the user pressed the button and
+  /// never otherwise. There is no capability behind that difference: a running
+  /// app can sync itself on a timer anywhere.
+  ///
+  /// It also repairs a phone-side gap. The periodic WorkManager task is
+  /// registered when sync is ENABLED, so a device that turned it on before that
+  /// code shipped never got one. This depends on the STATE rather than on an
+  /// event having happened once, which is what makes it heal itself.
+  void _startAutomaticSync() {
+    final runner = SyncAutoRunner(
+      isEnabled: () => ref.read(syncEnablementProvider).isEnabled(),
+      runPass: () async {
+        final entropy = await ref.read(syncEntropyProvider.future);
+        if (entropy == null) {
+          return const SyncPassReport(
+              received: 0, applied: 0, sent: 0, conflicts: 0);
+        }
+        return SyncPass(
+          db: await ref.read(graphDatabaseHandleProvider.future),
+          keys: await deriveSyncKeys(entropy),
+          relayBaseUrl: ref.read(relayBaseUrlProvider),
+        ).run();
+      },
+      // Recorded so the settings screen shows what the automatic pass did.
+      // An automatic pass nobody records is one the user cannot see.
+      onReport: (report) async {
+        await SyncStatusStore().record(report);
+        if (!mounted) return;
+        ref.invalidate(syncStatusProvider);
+        ref.invalidate(syncPeerProvider);
+      },
+    );
+    _syncRunner = runner;
+    // Local writes push immediately (debounced) instead of waiting out the
+    // interval — 'casi de inmediato' is the requirement, not the interval.
+    syncChangeSignal.listen(runner.requestSoon);
+    // One pass now, so opening the app is itself a sync — the user should not
+    // have to wait out an interval to see the other device's changes.
+    WidgetsBinding.instance.addPostFrameCallback((_) => runner.tick());
+    runner.start();
   }
 
   void _startForegroundUpdatePolling() {
