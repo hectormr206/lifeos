@@ -272,8 +272,20 @@ class Brain3dPainter extends CustomPainter {
     // rotation, so no constant can compensate for it.
     final provisional = (math.min(size.width, size.height) * 0.34) / extent;
 
-    final cosY = math.cos(yaw), sinY = math.sin(yaw);
-    final cosP = math.cos(pitch), sinP = math.sin(pitch);
+    // TURN THE CLOUD TO FACE THE VIEWER before anything else.
+    //
+    // Reported from the laptop: two dots twenty pixels apart in the middle of a
+    // 2560-wide black field. They were separated almost entirely along the
+    // CAMERA AXIS, so they projected onto the same place — and no fit can undo
+    // that, because scaling two points that land together just scales the same
+    // point. Measured before this: a spread of exactly 0.0 px.
+    //
+    // The rule is one line: whichever axis the memories vary LEAST along is the
+    // one that should point at the camera. Then the two axes they vary most
+    // along are the two you can actually see.
+    final base = _facingRotation(positions, cx, cy, cz);
+    final cosY = math.cos(yaw + base.yaw), sinY = math.sin(yaw + base.yaw);
+    final cosP = math.cos(pitch + base.pitch), sinP = math.sin(pitch + base.pitch);
 
     // Pass 1 measures where the nodes actually land; pass 2 scales that box to
     // the viewport. Two cheap loops over a capped node count, and the graph
@@ -281,7 +293,8 @@ class Brain3dPainter extends CustomPainter {
     var minX = double.infinity, maxX = -double.infinity;
     var minY = double.infinity, maxY = -double.infinity;
     for (final p in positions.values) {
-      final o = _flatten(p, cx, cy, cz, yaw, pitch, provisional);
+      final o = _flatten(p, cx, cy, cz, yaw + base.yaw, pitch + base.pitch,
+          provisional);
       minX = math.min(minX, o.dx);
       maxX = math.max(maxX, o.dx);
       minY = math.min(minY, o.dy);
@@ -405,4 +418,36 @@ class Brain3dPainter extends CustomPainter {
       old.zoom != zoom ||
       !identical(old.positions, positions) ||
       old.nodes.length != nodes.length;
+}
+
+/// Which way to turn the cloud so its widest face is the one you see.
+///
+/// Whichever axis the memories vary LEAST along is the one that should point at
+/// the camera; the two they vary most along are then both on screen. Without
+/// this a graph whose nodes differ mainly in depth renders as a single dot —
+/// measured at exactly 0.0 px of spread, which is what the laptop showed.
+///
+/// Three canonical quarter-turns, not a full principal-axis decomposition: the
+/// input is a force layout with no meaningful orientation of its own, so the
+/// only thing worth fixing is which axis faces the viewer. Anything more would
+/// be arithmetic nobody could check by looking at the screen.
+({double yaw, double pitch}) _facingRotation(
+  Map<String, Vec3> positions,
+  double cx,
+  double cy,
+  double cz,
+) {
+  if (positions.length < 2) return (yaw: 0, pitch: 0);
+
+  var sx = 0.0, sy = 0.0, sz = 0.0;
+  for (final p in positions.values) {
+    sx += (p.x - cx) * (p.x - cx);
+    sy += (p.y - cy) * (p.y - cy);
+    sz += (p.z - cz) * (p.z - cz);
+  }
+
+  // Smallest spread goes to the camera axis (z).
+  if (sz <= sx && sz <= sy) return (yaw: 0, pitch: 0);
+  if (sx <= sy) return (yaw: math.pi / 2, pitch: 0); // x becomes depth
+  return (yaw: 0, pitch: math.pi / 2); // y becomes depth
 }
