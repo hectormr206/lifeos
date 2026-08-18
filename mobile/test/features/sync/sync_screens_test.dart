@@ -41,6 +41,10 @@ void main() {
         (tester) async {
       await _pumpTall(tester, SyncSettingsScreen(
         connectivity: SyncConnectivity.reachable,
+        lastSyncLine: 'Al día · hace un momento',
+        thisDeviceId: 'a1b2c3',
+        peerDeviceId: 'd4e5f6',
+        lastStatus: null,
         deviceNickname: 'Pixel de pruebas',
         onEnable: () {},
         onDisable: () {},
@@ -64,6 +68,10 @@ void main() {
       for (final state in SyncConnectivity.values) {
         await _pumpTall(tester, SyncSettingsScreen(
           connectivity: state,
+          lastSyncLine: 'Al día · hace un momento',
+          thisDeviceId: 'a1b2c3',
+          peerDeviceId: 'd4e5f6',
+          lastStatus: null,
           deviceNickname: 'laptop',
           onEnable: () {},
           onDisable: () {},
@@ -79,6 +87,10 @@ void main() {
         (tester) async {
       await _pumpTall(tester, SyncSettingsScreen(
         connectivity: SyncConnectivity.notEnabled,
+        lastSyncLine: 'Al día · hace un momento',
+        thisDeviceId: 'a1b2c3',
+        peerDeviceId: 'd4e5f6',
+        lastStatus: null,
         deviceNickname: 'laptop',
         onEnable: () {},
         onDisable: () {},

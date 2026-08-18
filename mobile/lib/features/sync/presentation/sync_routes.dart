@@ -12,6 +12,7 @@ import 'package:lifeos/core/sync/stamping.dart';
 import '../data/graph_sync_engine.dart';
 import '../data/relay_reachability.dart';
 import '../data/sync_pass.dart';
+import '../data/sync_status_store.dart';
 import '../data/workmanager_sync_work.dart';
 import '../data/sync_key_store.dart';
 import '../domain/phrase_ceremony.dart';
@@ -123,6 +124,27 @@ String _labelOf(String? payloadJson) {
   return payloadJson;
 }
 
+/// This device's short id, read from the same origin the engine stamps rows
+/// with — NOT parsed back out of the display name, which would break the moment
+/// that copy changed.
+final thisDeviceShortIdProvider = FutureProvider<String>((ref) async {
+  final db = await ref.watch(graphDatabaseHandleProvider.future);
+  final origin = await localOrigin(db);
+  return origin.length <= 6 ? origin : origin.substring(0, 6);
+});
+
+/// The other device, if this one has ever exchanged with it.
+final syncPeerProvider = FutureProvider<SyncPeer?>((ref) async {
+  final db = await ref.watch(graphDatabaseHandleProvider.future);
+  final peers = await GraphSyncEngine(db).peers();
+  return peers.isEmpty ? null : peers.first;
+});
+
+/// The last recorded pass, re-read whenever a new one finishes.
+final syncStatusProvider = FutureProvider<SyncStatus?>(
+  (ref) => SyncStatusStore().load(),
+);
+
 class SyncSettingsRoute extends ConsumerWidget {
   const SyncSettingsRoute({super.key});
 
@@ -141,6 +163,10 @@ class SyncSettingsRoute extends ConsumerWidget {
       ),
       deviceNickname:
           ref.watch(deviceNicknameProvider).value ?? 'Este dispositivo',
+      lastSyncLine: describeSyncStatus(ref.watch(syncStatusProvider).value),
+      thisDeviceId: ref.watch(thisDeviceShortIdProvider).value ?? '······',
+      peerDeviceId: ref.watch(syncPeerProvider).value?.shortId,
+      lastStatus: ref.watch(syncStatusProvider).value,
       onEnable: () => _startEnabling(context, ref),
       onDisable: () async {
         await ref.read(syncEnablementProvider).disable();
@@ -174,7 +200,12 @@ class SyncSettingsRoute extends ConsumerWidget {
       relayBaseUrl: ref.read(relayBaseUrlProvider),
     ).run();
 
+    // Persisted BEFORE the SnackBar: the transient message is a courtesy, the
+    // stored one is what the user can still consult tomorrow.
+    await SyncStatusStore().record(report);
+    ref.invalidate(syncStatusProvider);
     ref.invalidate(syncConflictsProvider);
+    ref.invalidate(syncPeerProvider);
     messenger.showSnackBar(
       SnackBar(content: Text(describeSyncPass(report))),
     );

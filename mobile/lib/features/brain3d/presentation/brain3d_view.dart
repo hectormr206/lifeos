@@ -61,6 +61,10 @@ class _Brain3dViewState extends State<Brain3dView>
   late ForceLayout _layout;
   late Ticker _ticker;
 
+  /// Ticker time at the previous frame, so each frame advances the simulation
+  /// by the time that actually passed.
+  Duration _lastElapsed = Duration.zero;
+
   double _yaw = 0.6;
   double _pitch = 0.3;
   double _zoom = 1;
@@ -90,12 +94,20 @@ class _Brain3dViewState extends State<Brain3dView>
     // Stepped on a ticker rather than settled up front so the graph is SEEN to
     // unfold. It also stops on its own: the ticker halts the moment the layout
     // converges, so an idle screen costs nothing.
-    _ticker = createTicker((_) {
+    //
+    // Driven by ELAPSED TIME, not by frame. One step per frame made the whole
+    // animation twice as fast on a 120 Hz phone as on a 60 Hz one — measured at
+    // 3.33 s against 6.65 s — which is half of why this "se alocaba". The other
+    // half, the violent opening, is now warmed up before the first paint.
+    _lastElapsed = Duration.zero;
+    _ticker = createTicker((elapsed) {
       if (_layout.done) {
         _ticker.stop();
         return;
       }
-      setState(_layout.step);
+      final delta = elapsed - _lastElapsed;
+      _lastElapsed = elapsed;
+      setState(() => _layout.advance(delta));
     })
       ..start();
   }

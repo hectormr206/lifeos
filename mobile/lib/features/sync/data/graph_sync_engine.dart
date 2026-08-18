@@ -42,6 +42,30 @@ class GraphApplyResult {
   bool get changedAnything => applied > 0;
 }
 
+/// Another device in the user's set, as this one knows it.
+class SyncPeer {
+  const SyncPeer({
+    required this.uuid,
+    required this.cursor,
+    required this.appliedHigh,
+    required this.lastSeen,
+  });
+
+  final String uuid;
+
+  /// How far this peer confirmed applying of OUR rows.
+  final int cursor;
+
+  /// How far WE have applied of THEIRS.
+  final int appliedHigh;
+
+  final DateTime lastSeen;
+
+  /// A short, stable label. The full uuid means nothing to a person and takes
+  /// the whole width of a phone.
+  String get shortId => uuid.length <= 6 ? uuid : uuid.substring(0, 6);
+}
+
 class GraphSyncEngine {
   GraphSyncEngine(this._db);
 
@@ -324,6 +348,28 @@ class GraphSyncEngine {
         ])
           if (row.containsKey(k)) k: row[k],
       };
+
+  /// Every peer this device has exchanged with, most recent first.
+  ///
+  /// Read from the same table the pass writes, so the screen cannot show a
+  /// paired device that sync does not actually know about.
+  Future<List<SyncPeer>> peers() async {
+    await ensureSyncTables(_db);
+    final rows = await _db.query(kSyncPeerStateTable, orderBy: 'updated_at DESC');
+    return [
+      for (final r in rows)
+        if ((r['peer_uuid'] as String?) != null &&
+            (r['peer_uuid'] as String) != 'announce')
+          SyncPeer(
+            uuid: r['peer_uuid']! as String,
+            cursor: (r['cursor'] as int?) ?? kCursorUnsynced,
+            appliedHigh: (r['applied_high'] as int?) ?? 0,
+            lastSeen: DateTime.fromMillisecondsSinceEpoch(
+              (((r['updated_at'] as num?) ?? 0) * 1000).round(),
+            ),
+          ),
+    ];
+  }
 
   /// Revisions that lost a merge, newest first.
   Future<List<Map<String, Object?>>> conflicts({int limit = 100}) async {

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 
+import '../data/sync_status_store.dart';
 import '../domain/sync_connectivity.dart';
 import '../domain/sync_disclosure.dart';
+import 'sync_pair_indicator.dart';
 
 /// "Ajustes → Sincronizar dispositivos".
 ///
@@ -25,6 +27,10 @@ class SyncSettingsScreen extends StatelessWidget {
     super.key,
     required this.connectivity,
     required this.deviceNickname,
+    required this.lastSyncLine,
+    required this.thisDeviceId,
+    required this.peerDeviceId,
+    required this.lastStatus,
     required this.onEnable,
     required this.onDisable,
     required this.onSyncNow,
@@ -36,6 +42,18 @@ class SyncSettingsScreen extends StatelessWidget {
   /// This device's name inside the user's own device set. Never leaves the
   /// device — the relay is never told it.
   final String deviceNickname;
+
+  /// What the LAST pass did, already formatted. Shown permanently because the
+  /// SnackBar that used to carry this vanished in seconds, and the automatic
+  /// pass has no screen at all — its outcome was known only to a process that
+  /// then exited.
+  final String lastSyncLine;
+
+  /// Short ids for the picture at the top. The indicator refuses to look
+  /// connected without a peer AND a completed pass, so these are not cosmetic.
+  final String thisDeviceId;
+  final String? peerDeviceId;
+  final SyncStatus? lastStatus;
 
   final VoidCallback onEnable;
   final VoidCallback onDisable;
@@ -54,6 +72,12 @@ class SyncSettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
+          if (_enabled)
+            SyncPairIndicator(
+              thisDevice: thisDeviceId,
+              peer: peerDeviceId,
+              status: lastStatus,
+            ),
           _StatusTile(connectivity: connectivity, scheme: scheme),
           const Divider(),
 
@@ -72,6 +96,11 @@ class SyncSettingsScreen extends StatelessWidget {
               leading: const Icon(Icons.devices_outlined),
               title: const Text('Este dispositivo'),
               subtitle: Text(deviceNickname),
+            ),
+            ListTile(
+              leading: const Icon(Icons.schedule),
+              title: const Text('Última sincronización'),
+              subtitle: Text(lastSyncLine),
             ),
             ListTile(
               leading: const Icon(Icons.sync),

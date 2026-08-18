@@ -13,6 +13,7 @@ import 'package:lifeos/core/graph/local_graph_database.dart';
 import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/sync/data/sync_key_store.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
+import 'package:lifeos/features/sync/data/sync_status_store.dart';
 import 'package:lifeos/features/sync/data/sync_scheduler.dart';
 import 'package:sqflite_common/sqlite_api.dart';
 import 'package:workmanager/workmanager.dart';
@@ -96,11 +97,16 @@ Future<bool> executeSyncTask({
     // encrypted file with the same key and migrations rather than a second,
     // drift-prone path to the same database.
     db = await LocalGraphDatabase(keyStore: GraphKeyStore()).open();
-    await SyncPass(
+    final report = await SyncPass(
       db: db,
       keys: await deriveSyncKeys(entropy),
       relayBaseUrl: relayBaseUrl,
     ).run();
+    // THE reason this store exists: this isolate has no screen, so without
+    // recording here the automatic pass would succeed or fail entirely
+    // unobserved, and the settings screen would keep showing whatever the last
+    // MANUAL tap left behind.
+    await SyncStatusStore().record(report);
     return true;
   } catch (_) {
     return true;

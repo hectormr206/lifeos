@@ -43,11 +43,23 @@ class Vec3 {
       'Vec3(${x.toStringAsFixed(2)}, ${y.toStringAsFixed(2)}, ${z.toStringAsFixed(2)})';
 }
 
+/// Simulation steps per second of wall-clock time, independent of the display.
+const double kForceLayoutStepsPerSecond = 60;
+
+/// Most steps one frame may consume. Bounds the catch-up after a stall.
+const int kForceLayoutMaxStepsPerFrame = 4;
+
+/// Steps run before the first paint, so the user sees the graph SETTLE instead
+/// of scramble. Three quarters of the run: at that point the temperature has
+/// decayed to a quarter of its initial value and the motion reads as purposeful.
+const int kForceLayoutWarmupSteps = 300;
+
 class ForceLayout {
   ForceLayout({
     required List<String> nodeIds,
     required List<(String, String)> edges,
     required int seed,
+    this.warmupSteps = kForceLayoutWarmupSteps,
   })  : _ids = List.unmodifiable(nodeIds),
         // Edges may name nodes outside the set: the payload truncates to a node
         // cap, so a kept node can hold an edge to a dropped one. Dereferencing
@@ -57,7 +69,19 @@ class ForceLayout {
             if (nodeIds.contains(e.$1) && nodeIds.contains(e.$2)) e,
         ]) {
     _seedPositions(seed);
+    // The violent phase runs BEFORE the first paint. Measured on the old code:
+    // energy stayed at the movement cap (~12) for the whole early run, so every
+    // node jumped the maximum distance every frame — seen as "se aloca y
+    // empieza a mover muy rápido". Showing that is not an unfolding, it is a
+    // scramble; what reads as the graph assembling itself is the CALM tail.
+    for (var i = 0; i < warmupSteps && !done; i++) {
+      step();
+    }
   }
+
+  /// Steps run before anything is shown. Zero reproduces the original,
+  /// frantic behaviour — kept as a knob so the test can compare the two.
+  final int warmupSteps;
 
   /// Below this the layout is called settled. An animation that never converges
   /// keeps a CPU busy forever — on a laptop that is battery nobody agreed to
@@ -81,6 +105,29 @@ class ForceLayout {
   double get energy => _energy;
 
   bool get done => _ids.isEmpty || _energy < restEnergy || _step >= _maxSteps;
+
+  /// How many steps have run in total, warm-up included.
+  int get stepsTaken => _step;
+
+  /// Advance by WALL-CLOCK time rather than by frame.
+  ///
+  /// The ticker used to call `step()` once per frame, which made the whole
+  /// animation twice as fast on a 120 Hz phone as on a 60 Hz one — measured at
+  /// 3.33 s versus 6.65 s for the same graph. Time-based stepping gives every
+  /// screen the same unfolding.
+  ///
+  /// Capped per call because a dropped frame, a garbage collection, or the app
+  /// returning from the background hands us a huge delta, and replaying it in
+  /// full would make the graph jump exactly the way the bug looked.
+  void advance(Duration delta) {
+    if (done) return;
+    final wanted = (delta.inMicroseconds * kForceLayoutStepsPerSecond / 1e6)
+        .floor()
+        .clamp(0, kForceLayoutMaxStepsPerFrame);
+    for (var i = 0; i < wanted && !done; i++) {
+      step();
+    }
+  }
 
   void _seedPositions(int seed) {
     // A seeded PRNG, not Random(): the layout must be reproducible, or a bug
