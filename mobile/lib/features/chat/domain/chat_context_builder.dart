@@ -214,10 +214,49 @@ class ChatContextBuilder {
         // Bonds and facts are gathered from the SAME recall, so a question that
         // surfaces a person brings that person's relationships with it.
         final bonds = await _relationshipsFor(deps, named, message);
+        // Diagnostic, and deliberately CONTENT-FREE: counts only, never a name
+        // and never a remembered line. Added after three rounds of guessing why
+        // "¿qué relación tengo con X?" found nothing while "¿quién es X?"
+        // answered correctly — a log that cannot be read on the device is a
+        // question that can only be answered by rebuilding.
+        // `print`, not `developer.log`: the latter goes to the VM service and
+        // never reaches logcat in a release build, which is the only build that
+        // runs on the test device. A diagnostic you cannot read where the bug
+        // happens is not a diagnostic.
+        // ignore: avoid_print
+        print('LIFEOS_RECALL names=${properNounsInMessage(message).length} '
+            'recalled=${recalled.length} named=${named.length} '
+            'facts=${facts.length} bonds=${bonds.length}');
+        // A STATEMENT, not a rule. Asked about a name with nothing stored, the
+        // model answered "Mariana es tu esposa" — a relationship invented about
+        // a real person. Filtering the block down to one fact did not stop it:
+        // the invention needs no source material.
+        //
+        // Conditional rules ("if the name is absent, say you don't know") were
+        // tried four times on this ~2B model and each attempt broke something
+        // that worked. A flat sentence of fact is a different kind of input,
+        // and it is the one small models follow.
+        final unknown = [
+          for (final name in properNounsInMessage(message))
+            if (!facts.any((f) =>
+                    f.label.toLowerCase().contains(name.toLowerCase())) &&
+                !bonds.any((b) =>
+                    b.toLowerCase().contains(name.toLowerCase())))
+              name,
+        ];
+        final unknownLine = unknown.isEmpty
+            ? ''
+            : (lang == 'en'
+                ? 'You have NOTHING stored about: ${unknown.join(', ')}. '
+                    'Say you do not know who they are.'
+                : 'No tienes NADA guardado sobre: ${unknown.join(', ')}. '
+                    'Di que no sabes quién es.');
         memoryBlock = composeMemoryBlock(
           relationships: bonds,
-          factsBlock:
-              buildRecallBlock(message, facts, en: lang == 'en', now: at),
+          factsBlock: [
+            buildRecallBlock(message, facts, en: lang == 'en', now: at),
+            unknownLine,
+          ].where((s) => s.trim().isNotEmpty).join('\n\n'),
           en: lang == 'en',
         );
       }
@@ -690,6 +729,9 @@ class ChatContextBuilder {
     Set<String> exemptFromDomain = const {},
   }) {
     final graphDomain = graphDomainForKey(router.routeDomain(message));
+    final askedNames = properNounsInMessage(message)
+        .map((n) => n.toLowerCase())
+        .toSet();
     final facts = <RecallFact>[];
     for (final n in nodes) {
       // Nodes that are not `fact` used to be dropped here, silently — which is
@@ -708,6 +750,19 @@ class ChatContextBuilder {
         // WAS found by name and then discarded here, because the router had
         // routed the question to a different domain. A routing guess must not
         // outrank the user naming somebody.
+        continue;
+      }
+      // A fact about a DIFFERENT person never reaches a question about this one.
+      //
+      // Measured, repeatedly: asked about someone with nothing stored, the model
+      // took the only person-fact in the block and attached it to them —
+      // "Mariana es tu esposa" about a name it had never seen. Four rounds of
+      // prompt rules made it better, then worse, then worse again: a ~2B model
+      // will not reliably police attribution, and every rule added to make it
+      // try broke one that already worked.
+      //
+      // So the block simply never carries the material for that mistake.
+      if (askedNames.isNotEmpty && _mentionsAnotherPerson(n.label, askedNames)) {
         continue;
       }
       facts.add(RecallFact(
@@ -932,4 +987,36 @@ List<String> properNounsInMessage(String message) {
           !openers.contains(words[i]))
         words[i],
   ];
+}
+
+/// True when [label] names a person and NONE of them is one of [askedNames].
+///
+/// Facts that name nobody (a weight, a blood pressure, an appointment) always
+/// pass: they are not attributable to the wrong person because they are not
+/// about a person at all.
+bool _mentionsAnotherPerson(String label, Set<String> askedNames) {
+  final lower = label.toLowerCase();
+
+  // Mentions the person asked about: always keep it.
+  if (askedNames.any(lower.contains)) return false;
+
+  // Does it talk about a PERSON at all? Two signals, because either alone
+  // leaks: a capitalised name catches "Ana", and a kinship word catches
+  // "mi esposa se llama ana" — which is exactly the line that slipped through
+  // when only names were checked, and let "Mariana es tu esposa" survive.
+  const kinship = {
+    'esposa', 'esposo', 'marido', 'mujer', 'hija', 'hijo', 'madre', 'padre',
+    'mamá', 'papá', 'hermana', 'hermano', 'novia', 'novio', 'jefe', 'jefa',
+    'colega', 'amiga', 'amigo', 'suegra', 'suegro', 'tía', 'tío', 'prima',
+    'primo', 'abuela', 'abuelo', 'nieta', 'nieto', 'cuñada', 'cuñado',
+    'wife', 'husband', 'daughter', 'son', 'mother', 'father', 'sister',
+    'brother', 'boss', 'colleague', 'friend', 'girlfriend', 'boyfriend',
+  };
+  final aboutSomeone = properNounsInMessage('x $label').isNotEmpty ||
+      kinship.any((k) => RegExp('(?<![\\p{L}])$k(?![\\p{L}])', unicode: true)
+          .hasMatch(lower));
+
+  // Facts about nobody — a weight, a blood pressure, an appointment — always
+  // pass: they cannot be attributed to the wrong person.
+  return aboutSomeone;
 }
