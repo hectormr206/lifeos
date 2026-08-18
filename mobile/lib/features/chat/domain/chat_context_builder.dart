@@ -719,6 +719,27 @@ class ChatContextBuilder {
     return byUuid.values.toList();
   }
 
+  /// The remembered lines that mention [name], already in the second person.
+  ///
+  /// Used by the deterministic kinship answer, which reads the bond straight
+  /// out of them rather than asking a ~2B model to.
+  Future<List<String>> factsMentioning(String name) async {
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return const [];
+      final hits = await deps.store.searchNodes(name, limit: 8);
+      return [
+        for (final n in hits)
+          if (n.kind == 'fact' && n.label.trim().isNotEmpty)
+            toSecondPerson(n.label),
+      ];
+    } catch (_) {
+      // No memory read is worth losing the turn: an empty list makes the
+      // caller fall through to the model.
+      return const [];
+    }
+  }
+
   /// The `fact` half of a recall. Split out so ONE recall feeds both the facts
   /// and the bonds — recalling twice would double the cost and could return
   /// different sets, leaving a person in the block whose relationships were

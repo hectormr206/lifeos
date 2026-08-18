@@ -25,6 +25,7 @@ import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
+import '../domain/person_answer.dart';
 import '../domain/chat_message.dart';
 import 'chat_context_providers.dart';
 import 'chat_providers.dart';
@@ -355,7 +356,48 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// model with no extra async hop or store read.
   Future<void> _answer(String text, ChatMessage userMessage) {
     if (_looksCapturable(text)) return _captureThenAnswer(text, userMessage);
+    // A KINSHIP question is answered from the graph, never by the model.
+    //
+    // Measured on the test Pixel: with "mi hermana se llama Laura" stored and
+    // the recall provably correct, the ~2B model answered "Laura es tu
+    // esposa". Four rounds of prompt rules only moved the error around. Getting
+    // someone's family wrong is the one mistake a person will not forgive, and
+    // it is also the easiest thing to read straight out of the stored sentence.
+    //
+    // Falls through whenever it is not certain — see `answerAboutPerson`.
+    if (personAskedAbout(text) != null) {
+      return _answerAboutPersonOrModel(text, userMessage);
+    }
     return _sendTextToModel(text, userMessage);
+  }
+
+  /// Try the deterministic person answer; hand over to the model if unsure.
+  Future<void> _answerAboutPersonOrModel(
+    String text,
+    ChatMessage userMessage,
+  ) async {
+    try {
+      final name = personAskedAbout(text)!;
+      final facts = await ref.read(chatContextBuilderProvider).factsMentioning(name);
+      final answer = answerAboutPerson(
+        name: name,
+        facts: facts,
+        languageCode: ref.read(appLanguageCodeProvider),
+      );
+      if (answer == null) return _sendTextToModel(text, userMessage);
+      if (_disposed) return;
+      final reply = ChatMessage(
+        id: 'person-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: answer,
+        timestamp: DateTime.now(),
+      );
+      state = state.copyWith(messages: [...state.messages, reply]);
+      _persist(reply);
+    } catch (_) {
+      // Any failure here is a reason to use the model, never to lose the turn.
+      return _sendTextToModel(text, userMessage);
+    }
   }
 
   /// Sync guard for [_answer]; a builder failure degrades to "not capturable"
