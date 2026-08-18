@@ -84,7 +84,16 @@ class AppUpdateService {
       );
       final data = response.data;
       if (data == null) {
-        return UpToDate(currentVersionName: currentName, currentVersionCode: currentCode);
+        // A reply with no manifest in it proves NOTHING about the installed
+        // version, so it must not be answered with "up to date". Saying so was
+        // the one silent lie left in this method: every other failure below
+        // already returns UpdateUnknown.
+        //
+        // It hides best exactly where it hurts most — a proxy or captive portal
+        // answering 200 with an empty body looks identical to a healthy "you're
+        // current", and the user stops checking.
+        return const UpdateUnknown(
+            'No se pudo leer la información de actualización.');
       }
       final manifest = AppManifest.fromJson(data);
       if (manifest.versionCode > currentCode) {

@@ -90,6 +90,52 @@ String _manifest(int versionCode) => jsonEncode({
     });
 
 void main() {
+  group('a check that could not run never reports "up to date"', () {
+    // Reported as "le di clic en Buscar actualización y no me muestra nada".
+    //
+    // An empty or unparseable body was answered with UpToDate — the app told
+    // the user they had the newest version on the strength of a reply that
+    // contained no version at all. Every other failure here already returns
+    // UpdateUnknown; this one path quietly claimed success.
+    //
+    // It matters most exactly where it is hardest to notice: a captive portal
+    // or a proxy answering 200 with nothing looks identical to a healthy
+    // "you're current", so the user stops checking.
+    test('an empty 200 body is unknown, not up to date', () async {
+      final service = _service(
+        _FixedResponseAdapter(200, ''),
+        FakeAppVersionInfo(code: 100),
+        operatingSystem: 'linux',
+      );
+
+      final result = await service.checkForUpdate();
+
+      expect(result, isA<UpdateUnknown>());
+    });
+
+    test('a 200 body that is not an object is unknown', () async {
+      final service = _service(
+        _FixedResponseAdapter(200, '[]'),
+        FakeAppVersionInfo(code: 100),
+        operatingSystem: 'linux',
+      );
+
+      final result = await service.checkForUpdate();
+
+      expect(result, isA<UpdateUnknown>());
+    });
+
+    test('a real manifest still reports the update', () async {
+      // The guard must not swallow the working case.
+      final service = _service(
+        _FixedResponseAdapter(200, _manifest(200)),
+        FakeAppVersionInfo(code: 100),
+        operatingSystem: 'linux',
+      );
+
+      expect(await service.checkForUpdate(), isA<UpdateAvailable>());
+    });
+  });
   group('AppUpdateService.checkForUpdate', () {
     test('UpdateAvailable when manifest versionCode is higher', () async {
       final service = _service(
