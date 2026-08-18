@@ -90,13 +90,27 @@ DateTime _localDay(DateTime t, [tz.Location? location]) {
 /// the device zone while the window used a manual override printed the wrong
 /// date/times ("Resumen de hoy — 02/01" for entries selected for the LA day
 /// 01/01) — and the model narration, grounded on this text, repeated them.
-String renderDigestFacts(DailyDigestData data, {tz.Location? location}) {
+String renderDigestFacts(DailyDigestData data,
+    {tz.Location? location, DateTime? now}) {
   DateTime inZone(DateTime t) =>
       location == null ? t.toLocal() : tz.TZDateTime.from(t, location);
-  final date = _formatDate(inZone(data.generatedAt));
-  final buffer = StringBuffer('Resumen de hoy — $date\n');
+  final generated = inZone(data.generatedAt);
+  final date = _formatDate(generated);
+  // "de hoy" ONLY when it really is. Seen on the device: yesterday's digest
+  // displayed under a "Resumen de hoy" heading, stating "hoy todavía no
+  // registraste nada" while a weight logged that same morning sat two rows
+  // below it. A stale summary is fine; a stale summary calling itself today's
+  // is a contradiction the user has to resolve on their own.
+  final today = inZone(now ?? DateTime.now());
+  final isToday = generated.year == today.year &&
+      generated.month == today.month &&
+      generated.day == today.day;
+  final buffer =
+      StringBuffer(isToday ? 'Resumen de hoy — $date\n' : 'Resumen del $date\n');
   if (data.isEmpty) {
-    buffer.write('\nHoy todavía no registraste nada en tus dominios.');
+    buffer.write(isToday
+        ? '\nHoy todavía no registraste nada en tus dominios.'
+        : '\nEse día no registraste nada en tus dominios.');
     return buffer.toString();
   }
   for (final section in data.sections) {

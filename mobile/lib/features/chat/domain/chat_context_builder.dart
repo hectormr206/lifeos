@@ -740,7 +740,11 @@ class ChatContextBuilder {
       if (deps == null) return null;
       await deps.writer.learnPersonName(bond, name: name);
       await deps.writer.writeFact(
-        domain: null,
+        // 'relationships', never null: a fact with no domain belongs to no
+        // category, so it never appears in "Mi vida" — the user could be told
+        // "Anotado" and then find nothing anywhere. A memory you cannot see is
+        // one you cannot correct.
+        domain: 'relationships',
         label: languageCode() == 'en'
             ? 'your $bond is called $name'
             : 'tu $bond se llama $name',
