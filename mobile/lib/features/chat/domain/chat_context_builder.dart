@@ -203,7 +203,7 @@ class ChatContextBuilder {
         final facts = _factsFrom(nodes, message);
         // Bonds and facts are gathered from the SAME recall, so a question that
         // surfaces a person brings that person's relationships with it.
-        final bonds = await _relationshipsFor(deps, nodes);
+        final bonds = await _relationshipsFor(deps, nodes, message);
         memoryBlock = composeMemoryBlock(
           relationships: bonds,
           factsBlock:
@@ -670,15 +670,37 @@ class ChatContextBuilder {
   /// with it — an unavailable bond is worth less than a working reply.
   Future<List<String>> _relationshipsFor(
     ChatContextDeps deps,
-    List<GraphNodeRecord> nodes, {
+    List<GraphNodeRecord> nodes,
+    String message, {
     int maxPeople = 4,
     int maxPerPerson = 3,
   }) async {
     final lines = <String>[];
-    final people = [
+    final byUuid = <String, GraphNodeRecord>{
       for (final n in nodes)
-        if (n.kind == 'person' && n.label.trim().isNotEmpty) n,
-    ].take(maxPeople);
+        if (n.kind == 'person' && n.label.trim().isNotEmpty) n.uuid: n,
+    };
+
+    // Also look people up BY NAME straight from the message.
+    //
+    // Measured on 841: "¿quién es Ana?" recalled the person and answered "Ana
+    // es tu esposa", while "¿qué relación tengo con Ana?" did not — the recall
+    // was dominated by "relación" and never surfaced her. A bond reachable only
+    // when the question happens to be phrased around the name is a feature that
+    // works by luck.
+    for (final name in properNounsInMessage(message)) {
+      if (byUuid.length >= maxPeople) break;
+      try {
+        for (final hit in await deps.store.searchNodes(name, limit: 3)) {
+          if (hit.kind != 'person' || hit.label.trim().isEmpty) continue;
+          byUuid.putIfAbsent(hit.uuid, () => hit);
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+
+    final people = byUuid.values.take(maxPeople);
 
     for (final person in people) {
       try {
@@ -823,4 +845,29 @@ class ChatContextBuilder {
       // A dispose failure must never break the turn.
     }
   }
+}
+
+/// Words in [message] that look like someone's NAME.
+///
+/// Capitalised, not the first word (where anything is), and not a known
+/// question opener. Crude on purpose: the result is only used to LOOK UP a
+/// person, so a false positive costs one query that finds nothing, while a
+/// false negative costs the user an answer.
+List<String> properNounsInMessage(String message) {
+  const openers = {
+    'Que', 'Qué', 'Quien', 'Quién', 'Como', 'Cómo', 'Cuando', 'Cuándo',
+    'Donde', 'Dónde', 'Cual', 'Cuál', 'Cuanto', 'Cuánto', 'Por', 'Para',
+    'What', 'Who', 'When', 'Where', 'Which', 'How', 'Why', 'The', 'My',
+  };
+  final words = message.split(RegExp(r'[^\p{L}]+', unicode: true))
+    ..removeWhere((w) => w.isEmpty);
+  return [
+    for (var i = 0; i < words.length; i++)
+      if (i > 0 &&
+          words[i].length > 2 &&
+          words[i][0].toUpperCase() == words[i][0] &&
+          words[i][0].toLowerCase() != words[i][0] &&
+          !openers.contains(words[i]))
+        words[i],
+  ];
 }

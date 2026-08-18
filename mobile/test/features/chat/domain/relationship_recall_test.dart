@@ -14,6 +14,7 @@
 // the concern is that a bond, once found, is expressed in a sentence the model
 // can use.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/chat/domain/chat_context_builder.dart';
 import 'package:lifeos/features/memory/domain/recall_block.dart';
 
 void main() {
@@ -103,6 +104,37 @@ void main() {
       );
 
       expect(block, contains('Ana'));
+    });
+  });
+
+  group('a name in the question is enough to find the person', () {
+    // Measured on 841: "¿quién es Ana?" answered "Ana es tu esposa", but
+    // "¿qué relación tengo con Ana?" did not — the recall was dominated by
+    // "relación" and never surfaced her. A feature that works only when the
+    // question happens to be phrased around the name works by luck.
+
+    test('it picks the name out of a question about a relationship', () {
+      expect(properNounsInMessage('que relacion tengo con Ana'), contains('Ana'));
+    });
+
+    test('the opening word is never taken for a name', () {
+      // "Quién" starts the sentence and is capitalised; it names nobody.
+      expect(properNounsInMessage('Quién es Ana'), ['Ana']);
+    });
+
+    test('lowercase words are left alone', () {
+      expect(properNounsInMessage('cuanto pese ayer'), isEmpty);
+    });
+
+    test('several names all come back', () {
+      expect(
+        properNounsInMessage('agenda algo con Ana y Sofía el jueves'),
+        containsAll(['Ana', 'Sofía']),
+      );
+    });
+
+    test('an accented name survives', () {
+      expect(properNounsInMessage('quien es Sofía'), contains('Sofía'));
     });
   });
 }
