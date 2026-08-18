@@ -23,6 +23,7 @@ import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart' show sha256;
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart';
 import 'package:dio/dio.dart';
 
 /// A relay refused the request. Carries the status so a caller can distinguish
@@ -164,7 +165,10 @@ class RelayClient {
       preimage.addAll(parts[i]);
     }
 
-    final sig = await Ed25519().sign(
+    // Pure Dart, deliberately: this signature runs on EVERY request, and a
+    // platform-resolved implementation is what made the phone throw a
+    // PlatformException where the laptop worked.
+    final sig = await DartEd25519().sign(
       Uint8List.fromList(preimage),
       keyPair: _authKeyPair,
     );

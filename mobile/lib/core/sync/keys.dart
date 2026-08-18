@@ -22,6 +22,7 @@
 import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
+import 'package:cryptography/dart.dart';
 
 /// Domain separation. Part of the wire format: change one and every existing
 /// device derives a different key and can no longer read its own data.
@@ -36,7 +37,17 @@ Future<List<int>> _hkdf(
   required String info,
   List<int> salt = const <int>[],
 }) async {
-  final algorithm = Hkdf(hmac: Hmac.sha256(), outputLength: kKeyBytes);
+  // DartHkdf and DartHmac EXPLICITLY, not the `Hkdf()` factory.
+  //
+  // That factory resolves through `Cryptography.instance`, whose implementation
+  // depends on the platform — so the same phrase could derive through a
+  // platform channel on Android and through pure Dart on Linux. On the phone
+  // that surfaced as a PlatformException while the laptop worked perfectly.
+  //
+  // Beyond the crash it is a correctness requirement: these bytes are a WIRE
+  // FORMAT shared with Python through committed test vectors. A derivation that
+  // can vary by platform is one that can silently stop matching them.
+  final algorithm = DartHkdf(hmac: DartHmac.sha256(), outputLength: kKeyBytes);
   final output = await algorithm.deriveKey(
     secretKey: SecretKey(ikm),
     info: Uint8List.fromList(info.codeUnits),
@@ -66,7 +77,10 @@ class SyncKeys {
       info: kInfoMailboxAuth,
       salt: Uint8List.fromList(mailboxUuid.codeUnits),
     );
-    return Ed25519().newKeyPairFromSeed(seed);
+    // DartEd25519 for the same reason as DartHkdf above: the bare factory
+    // resolves per platform, and a signing key that varies by platform cannot
+    // prove ownership of the same mailbox from a phone and a laptop.
+    return DartEd25519().newKeyPairFromSeed(seed);
   }
 
   /// The one mailbox every device in this set shares.

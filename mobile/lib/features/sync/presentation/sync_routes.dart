@@ -161,14 +161,32 @@ final thisDeviceShortIdProvider = FutureProvider<String>((ref) async {
 /// waits, nothing changes, and there is nothing to report.
 const Duration kPairingCodeTimeout = Duration(seconds: 10);
 
+/// Run one step of the pairing computation, tagging any failure with WHICH.
+Future<T> _stage<T>(String what, Future<T> Function() body) async {
+  try {
+    return await body();
+  } catch (error) {
+    throw StateError('$what: $error');
+  }
+}
+
 final syncPairingCodeProvider = FutureProvider<String?>((ref) async {
   // The WHOLE computation is bounded, keystore read included: any step of it
   // can be the one that never returns, and a timeout around only the part we
   // already suspect would leave the others able to hang exactly as before.
+  // Each step names itself in the error. "PlatformException" alone cost a
+  // round trip to the user and a wrong hypothesis: reading the key from the OS
+  // keystore and deriving from it are different failures with different fixes,
+  // and the message could not tell them apart.
   return Future(() async {
-    final entropy = await ref.watch(syncEntropyProvider.future);
+    final entropy = await _stage(
+      'leyendo la clave de este dispositivo',
+      () => ref.watch(syncEntropyProvider.future),
+    );
     if (entropy == null) return null;
-    final mailbox = await (await deriveSyncKeys(entropy)).sharedMailboxUuid();
+    final keys = await _stage('derivando las llaves', () => deriveSyncKeys(entropy));
+    final mailbox =
+        await _stage('calculando el buzón', keys.sharedMailboxUuid);
     return mailbox.substring(0, 6);
   }).timeout(kPairingCodeTimeout);
 });
