@@ -238,6 +238,25 @@ void main() {
     });
   });
 
+  group('a bond belongs to ONE person', () {
+    // Measured on 845: "¿qué relación tengo con Sofía?" answered "Tu relación
+    // con Sofía es esposa." Sofía had never been stored, so the model took the
+    // only bond in the block and attached it to the wrong person — inventing a
+    // family relationship about someone real.
+    test('it is told never to lend another person\'s bond', () {
+      final prompt = promptFor(const Turn('x', '¿qué relación tengo con Sofía?'));
+
+      expect(prompt.toLowerCase(), contains('una persona concreta'));
+      expect(prompt.toLowerCase(), contains('no sabes quién es'));
+    });
+
+    test('it ranks that with inventing health data', () {
+      final prompt = promptFor(const Turn('x', '¿quién es Roberto?'));
+
+      expect(prompt.toLowerCase(), contains('inventar un parentesco'));
+    });
+  });
+
   group('the person is addressed as themselves', () {
     test('a known name is passed through with its meaning', () {
       final prompt = promptFor(const Turn('x', 'agenda algo'), name: 'Héctor');
