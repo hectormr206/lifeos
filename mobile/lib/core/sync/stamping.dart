@@ -37,7 +37,12 @@ Future<void> ensureSyncTables(DatabaseExecutor db) async {
   await db.execute('''
     CREATE TABLE IF NOT EXISTS $kSyncIdentityTable (
       id     INTEGER PRIMARY KEY CHECK (id = 1),
-      origin TEXT NOT NULL
+      origin TEXT NOT NULL,
+      -- The env id of the last envelope WE deposited. Kept so the next deposit
+      -- can retire the previous one: we must never acknowledge our own live
+      -- envelope, because in a shared mailbox that is exactly the message the
+      -- other device still has to read.
+      last_deposit TEXT
     )
   ''');
   await db.execute('''
@@ -121,6 +126,19 @@ Future<int> nextLamport(DatabaseExecutor db) async {
   ''');
   final current = rows.first['high'] as int? ?? 0;
   return current + 1;
+}
+
+/// The env id of the last envelope this device deposited, if any.
+Future<String?> lastDeposit(DatabaseExecutor db) async {
+  await ensureSyncTables(db);
+  final rows = await db.query(kSyncIdentityTable, where: 'id = 1');
+  if (rows.isEmpty) return null;
+  return rows.first['last_deposit'] as String?;
+}
+
+Future<void> rememberDeposit(DatabaseExecutor db, String envId) async {
+  await localOrigin(db); // guarantees the row exists
+  await db.update(kSyncIdentityTable, {'last_deposit': envId}, where: 'id = 1');
 }
 
 /// Record an envelope as applied. False when it had already been seen.

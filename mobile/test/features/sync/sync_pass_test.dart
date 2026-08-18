@@ -193,9 +193,67 @@ void main() {
 
     final report = await passFor(dbA).run();
 
-    expect(report.applied, 0);
-    expect(relay.envelopes, isEmpty,
-        reason: 'our own envelope is acked so it stops occupying the mailbox');
+    expect(report.applied, 0, reason: 'our own rows are already ours');
+  });
+
+  test('syncing first must NOT destroy what the peer still has to read',
+      () async {
+    // THE bug behind "los dos dicen: todavía no hay otro dispositivo".
+    //
+    // The mailbox is shared and the relay deletes on ack, so the device that
+    // ran a pass first used to acknowledge its OWN announce and delete it. By
+    // the time the second device looked, the mailbox was empty — each device
+    // waited for a message the other had already destroyed, and both reported
+    // "todavía no hay otro dispositivo" for ever.
+    //
+    // The earlier version of THIS suite asserted the mailbox ended up empty,
+    // so the defect had a test defending it.
+    await storeA.createNode(kind: 'fact', label: 'de A');
+    await passFor(dbA).announce();
+
+    // A goes first and sees nobody — correct, B has not spoken yet.
+    await passFor(dbA).run();
+
+    // B now looks. A's announce MUST still be there.
+    final onB = await passFor(dbB).run();
+
+    expect(onB.received, greaterThan(0),
+        reason: 'B must still find what A left for it');
+    expect(await storeB.listNodesByKind('fact'), isNotEmpty);
+  });
+
+  test('a device keeps at most one envelope of its own in the mailbox',
+      () async {
+    // The flip side: if we never clean up, every pass leaves another envelope
+    // and a shared mailbox fills with our own history until the TTL expires it.
+    await passFor(dbA).announce();
+    await storeA.createNode(kind: 'fact', label: 'uno');
+    await passFor(dbB).run();
+    await passFor(dbA).run();
+    await storeA.createNode(kind: 'fact', label: 'dos');
+    await passFor(dbA).run();
+
+    expect(relay.envelopes.length, lessThanOrEqualTo(2),
+        reason: 'one live envelope per device, not one per pass');
+  });
+
+  test('two devices that lost their envelopes find each other again',
+      () async {
+    // EXACTLY the state the user is in after the earlier bug: both installs
+    // enabled, both announces destroyed, both showing "todavía no hay otro
+    // dispositivo". An update that only stops CAUSING the problem would leave
+    // them stuck for ever, because a pass used to deposit nothing until it
+    // already knew a peer — the definition of a deadlock.
+    relay.envelopes.clear();
+    await storeA.createNode(kind: 'fact', label: 'sobrevivio en A');
+
+    await passFor(dbA).run();
+    await passFor(dbB).run();
+    await passFor(dbA).run();
+    await passFor(dbB).run();
+
+    expect(await storeB.listNodesByKind('fact'), isNotEmpty,
+        reason: 'recovery must need no reinstall and no re-typing the phrase');
   });
 
   test('nothing to do reads as up to date, not as an error', () async {

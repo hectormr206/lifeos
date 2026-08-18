@@ -112,11 +112,14 @@ class SyncPass {
         final sender = payload['origin_device'] as String? ?? '';
 
         // Our own envelope coming back: the mailbox is shared, so we see what
-        // we deposited. Acked so it stops occupying the mailbox, never applied.
-        if (sender == origin) {
-          await relay.ack(pending.envId);
-          continue;
-        }
+        // we deposited. SKIPPED, never acknowledged.
+        //
+        // Acknowledging it deletes it at the relay — and that is precisely the
+        // message the other device still has to read. The device that synced
+        // first destroyed the other's only way to learn it existed, and both
+        // then reported "todavía no hay otro dispositivo" for ever. Our own
+        // envelope is retired only when we deposit its replacement.
+        if (sender == origin) continue;
 
         peers.add(sender);
         received++;
@@ -146,24 +149,26 @@ class SyncPass {
         );
       }
 
-      // Nobody to send to yet: the first device in a set has no peer until a
-      // second one deposits. Not a failure — there is simply nothing to say.
       final peer = peers.isEmpty ? null : peers.first;
       var sent = 0;
-      if (peer != null) {
-        final payload = await _engine.buildPayload(peerUuid: peer);
-        final nodes = (payload['rows']['nodes'] as List).length;
-        final edges = (payload['rows']['edges'] as List).length;
-        if (nodes + edges > 0) {
-          await relay.deposit(
-            await sealEnvelope(
-              dataKey: keys.dataKey,
-              recipientUuid: mailbox,
-              payload: payload,
-            ),
-          );
-          sent = nodes + edges;
-        }
+
+      // With NO peer known we still deposit, announcing ourselves.
+      //
+      // Waiting for a peer before depositing is a deadlock: each device sits
+      // silent waiting for a message the other is equally waiting to receive.
+      // That is the state two installs end up in after any envelope loss, and
+      // it must resolve itself — a user should never have to reinstall or
+      // retype the phrase to recover.
+      final payload = await _engine.buildPayload(peerUuid: peer ?? 'announce');
+      final nodes = (payload['rows']['nodes'] as List).length;
+      final edges = (payload['rows']['edges'] as List).length;
+
+      // Also deposit when we merely APPLIED something: our echo rides on the
+      // payload, and without it the peer never advances its cursor and resends
+      // the same rows on every pass, for ever.
+      if (peer == null || nodes + edges > 0 || applied > 0) {
+        sent = nodes + edges;
+        await _depositReplacing(relay, mailbox, payload);
       }
 
       return SyncPassReport(
@@ -194,6 +199,40 @@ class SyncPass {
     }
   }
 
+  /// Deposit a payload and retire the envelope this device left last time.
+  ///
+  /// Retiring the OLD one only after the NEW one is stored means the mailbox
+  /// always holds something from us for the peer to find, while never
+  /// accumulating one envelope per pass.
+  Future<void> _depositReplacing(
+    RelayClient relay,
+    String mailbox,
+    Map<String, dynamic> payload,
+  ) async {
+    final previous = await lastDeposit(_db);
+    final envelope = await sealEnvelope(
+      dataKey: keys.dataKey,
+      recipientUuid: mailbox,
+      payload: payload,
+    );
+    await relay.deposit(envelope);
+
+    // The env id is bytes 1..33 of the sealed blob, the same slice the relay
+    // keys it by.
+    final envId = [
+      for (final b in envelope.sublist(1, 33)) b.toRadixString(16).padLeft(2, '0'),
+    ].join();
+    await rememberDeposit(_db, envId);
+
+    if (previous != null && previous != envId) {
+      // Best-effort: a failure here leaves one extra envelope to expire on the
+      // relay's own TTL, which is strictly better than deleting a live one.
+      try {
+        await relay.ack(previous);
+      } catch (_) {}
+    }
+  }
+
   /// The first pass a brand-new device makes, announcing itself so the peer
   /// learns its origin. Without it two devices that have never spoken would
   /// each wait for the other to go first.
@@ -206,12 +245,10 @@ class SyncPass {
       dio: dio,
     );
     await relay.claim();
-    await relay.deposit(
-      await sealEnvelope(
-        dataKey: keys.dataKey,
-        recipientUuid: mailbox,
-        payload: await _engine.buildPayload(peerUuid: 'announce'),
-      ),
+    await _depositReplacing(
+      relay,
+      mailbox,
+      await _engine.buildPayload(peerUuid: 'announce'),
     );
   }
 }
