@@ -203,6 +203,41 @@ void main() {
     });
   });
 
+  group('memory is the USER\'s life, never Axi\'s', () {
+    // Measured on the test Pixel with 839: "¿cómo se llama mi esposa?" came
+    // back as "Ana es mi esposa." — Axi claiming a wife. The memory had stored
+    // the user's own first-person wording and the model repeated it verbatim,
+    // producing a sentence that is simply false about itself.
+
+    test('it is told that "mi X" in memory means the USER\'s X', () {
+      final prompt = promptFor(const Turn('x', '¿cómo se llama mi esposa?'));
+
+      expect(prompt, contains('jamás "mi esposa"'));
+    });
+
+    test('it is told it owns none of these facts', () {
+      final prompt = promptFor(const Turn('x', '¿cuánto pesé?'));
+
+      expect(prompt.toLowerCase(), contains('tú no tienes esposa'));
+    });
+
+    test('a relationship question is answered from the stored bond', () {
+      // Also measured: "¿qué relación tengo con Ana?" asked for more context
+      // while the bond was sitting in memory.
+      final prompt = promptFor(const Turn('x', '¿qué relación tengo con Ana?'));
+
+      expect(prompt.toLowerCase(), contains('vínculo guardado'));
+    });
+
+    test('English gets the same rules', () {
+      final prompt =
+          promptFor(const Turn('x', 'what is my wife called?', language: 'en'));
+
+      expect(prompt, contains('never'));
+      expect(prompt.toLowerCase(), contains('stored bond'));
+    });
+  });
+
   group('the person is addressed as themselves', () {
     test('a known name is passed through with its meaning', () {
       final prompt = promptFor(const Turn('x', 'agenda algo'), name: 'Héctor');
