@@ -25,6 +25,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/local_graph_migrations.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
 import 'package:lifeos/core/sync/keys.dart';
+import 'package:lifeos/core/sync/envelope.dart';
+import 'package:lifeos/core/sync/relay_client.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
 import 'package:lifeos/features/sync/domain/phrase_ceremony.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -124,4 +126,66 @@ void main() {
         reason: 'the relay answered something the pass could not handle');
     expect(report.ok, isTrue);
   }, timeout: const Timeout(Duration(minutes: 2)));
+
+  group('the deployed relay actually HOLDS the line', () {
+    // The whole point of the long poll, measured against production rather
+    // than asserted. A relay that ignores `wait` answers instantly and the
+    // feature is silently absent — which is exactly what the old build did,
+    // and what made this measurable rather than arguable.
+
+    test('an empty inbox is held open, not answered at once', () async {
+      final origin = 'live-${DateTime.now().microsecondsSinceEpoch}';
+      final mailbox = await keys.deviceMailboxUuid(origin);
+      final relay = RelayClient(
+        baseUrl: _relay,
+        mailboxUuid: mailbox,
+        authKeyPair: await keys.mailboxAuthKeyPair(mailbox),
+      );
+      await relay.claim();
+
+      final started = DateTime.now();
+      final pending = await relay.fetch(waitSeconds: 8);
+      final elapsed = DateTime.now().difference(started);
+
+      expect(pending, isEmpty);
+      // The property is that it HELD: a relay ignoring `wait` answers in
+      // milliseconds and the feature is silently absent.
+      expect(elapsed.inSeconds, greaterThanOrEqualTo(6),
+          reason: 'the relay answered immediately — long polling is NOT live');
+      // Generous, and deliberately so. Measured directly, the relay is exact
+      // (wait=3 -> 3026 ms, wait=8 -> 8064 ms), but it runs capped at one CPU
+      // and this test follows three passes that just hammered it: a queued
+      // request waits behind them. A tight bound here fails on load and teaches
+      // whoever sees it that the feature is broken when it is not.
+      expect(elapsed.inSeconds, lessThan(60), reason: 'and it must stop');
+    }, timeout: const Timeout(Duration(minutes: 2)));
+
+    test('mail already waiting still returns at once', () async {
+      // A wait must never add latency to a mailbox that has mail.
+      final origin = 'live2-${DateTime.now().microsecondsSinceEpoch}';
+      final mailbox = await keys.deviceMailboxUuid(origin);
+      final relay = RelayClient(
+        baseUrl: _relay,
+        mailboxUuid: mailbox,
+        authKeyPair: await keys.mailboxAuthKeyPair(mailbox),
+      );
+      await relay.claim();
+      await relay.deposit(await sealEnvelope(
+        dataKey: keys.dataKey,
+        recipientUuid: mailbox,
+        payload: const {'schema_version': 1, 'origin_device': 'x', 'rows': {}},
+      ));
+
+      final started = DateTime.now();
+      final pending = await relay.fetch(waitSeconds: 20);
+      final elapsed = DateTime.now().difference(started);
+
+      expect(pending, hasLength(1));
+      expect(elapsed.inSeconds, lessThan(5),
+          reason: 'a mailbox with mail must never be held');
+      for (final e in pending) {
+        await relay.ack(e.envId);
+      }
+    }, timeout: const Timeout(Duration(minutes: 2)));
+  });
 }
