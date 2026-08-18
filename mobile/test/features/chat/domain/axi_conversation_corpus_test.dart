@@ -161,6 +161,48 @@ void main() {
     });
   });
 
+  group('findings from the real device, pinned so they cannot come back', () {
+    // Both observed on the test Pixel running 836, driven over adb.
+
+    test('it is told to speak in the SECOND person', () {
+      // Observed: "¿cuánto pesaba Héctor en 2019?" — talking ABOUT the user
+      // instead of TO him. Using someone's name as if they were a third party
+      // reads as a case file, not a conversation.
+      final prompt = promptFor(
+        const Turn('x', '¿cuánto pesaba en 2019?'),
+        name: 'Héctor',
+      );
+
+      expect(prompt, contains('"tú"'));
+      expect(prompt.toLowerCase(), contains('nunca en tercera'));
+    });
+
+    test('an elliptical turn must follow the SAME topic', () {
+      // Observed: after talking about weight, "y ayer" was answered with what
+      // he ate. It resolved the ellipsis against memory — but against the
+      // wrong thread.
+      final prompt = promptFor(const Turn('x', 'y ayer'));
+
+      expect(prompt.toLowerCase(), contains('mismo tema'));
+    });
+
+    test('with no clear topic it must ask, not guess', () {
+      final prompt = promptFor(const Turn('x', '¿y?'));
+
+      expect(prompt.toLowerCase(), contains('pregunta a qué se refiere'));
+    });
+
+    test('the English install gets the same two rules', () {
+      final prompt = promptFor(
+        const Turn('x', 'and yesterday?', language: 'en'),
+        name: 'Héctor',
+      );
+
+      expect(prompt.toLowerCase(), contains('second person'));
+      expect(prompt.toLowerCase(), contains('same topic'));
+    });
+  });
+
   group('the person is addressed as themselves', () {
     test('a known name is passed through with its meaning', () {
       final prompt = promptFor(const Turn('x', 'agenda algo'), name: 'Héctor');
@@ -169,6 +211,8 @@ void main() {
       // "yo"/"mi" has to resolve to the user, or a self-reference silently
       // becomes a reference to nobody.
       expect(prompt, contains('"yo"'));
+      // And the model must be told to answer in the second person.
+      expect(prompt, contains('hablando CON él'));
     });
 
     test('an unknown name adds no line at all', () {
