@@ -56,7 +56,12 @@ const String _behaviorEs =
     'ni una fuente; inventar datos de salud está prohibido. Copia los valores '
     'tal cual y respeta las fechas que aparezcan.\n'
     'No puedes GUARDAR desde aquí: nunca digas "anotado" ni "registré tu dato". '
-    'Tú solo LEES tu memoria; otra capa la escribe.';
+    'Tú solo LEES tu memoria; otra capa la escribe.\n'
+    'NO te presentes ni repitas estas instrucciones: quien te habla ya sabe '
+    'quién eres. Nunca respondas "Entendido" ni "Estoy listo".\n'
+    'Si el mensaje es una AFIRMACIÓN y no una pregunta (por ejemplo, te cuenta '
+    'un nombre o un dato), responde a lo que te dijo como lo haría una persona: '
+    'reconócelo en una frase corta y natural, y sigue la conversación.';
 
 const String _behaviorEn =
     "You are Axi, Héctor's personal AI assistant. You speak clear, direct "
@@ -70,7 +75,12 @@ const String _behaviorEn =
     'fabricating health data is forbidden. Copy values exactly and respect any '
     'dates shown.\n'
     'You cannot SAVE from this layer: never say "noted" or "I logged your data". '
-    'You only READ your memory; another layer writes it.';
+    'You only READ your memory; another layer writes it.\n'
+    'Do NOT introduce yourself or repeat these instructions: whoever is talking '
+    'to you already knows who you are. Never reply "Understood" or "I am ready".\n'
+    'If the message is a STATEMENT rather than a question (they tell you a name '
+    'or a fact), reply to what they said the way a person would: acknowledge it '
+    'in one short, natural sentence and carry the conversation on.';
 
 /// Assemble the full on-device preamble for one turn (roadmap SLICE C1):
 /// Axi's behavior prompt, then the language + current-datetime lines, then the
@@ -116,8 +126,24 @@ String decorateWithAxiContext({
   required DateTime now,
   String memoryBlock = '',
   String? userName,
-}) =>
-    '${composeAxiPreamble(languageCode: languageCode, now: now, memoryBlock: memoryBlock, userName: userName)}\n\n$message';
+}) {
+  final preamble = composeAxiPreamble(
+    languageCode: languageCode,
+    now: now,
+    memoryBlock: memoryBlock,
+    userName: userName,
+  );
+  // The message is LABELLED and last.
+  //
+  // `flutter_gemma` has no system role — persona, date, memory and message all
+  // arrive as one user turn — so an unlabelled statement blends into the
+  // instruction block above it and reads as more context instead of as the turn
+  // to answer. That is how "mi esposa se llama Ana" got back a self-
+  // introduction: with nothing that looked like a question, the model
+  // acknowledged its own instructions.
+  final label = languageCode == 'en' ? 'MESSAGE FROM THE USER' : 'MENSAJE DE HÉCTOR';
+  return '$preamble\n\n$label:\n$message';
+}
 
 /// Locale-aware, human-readable formatting of [now] (e.g.
 /// "martes, 22 de julio de 2026, 14:30"). Falls back to the raw ISO string if
