@@ -226,7 +226,7 @@ void main() {
       // while the bond was sitting in memory.
       final prompt = promptFor(const Turn('x', '¿qué relación tengo con Ana?'));
 
-      expect(prompt.toLowerCase(), contains('vínculo guardado'));
+      expect(prompt.toLowerCase(), contains('si el nombre está en la memoria'));
     });
 
     test('English gets the same rules', () {
@@ -234,7 +234,7 @@ void main() {
           promptFor(const Turn('x', 'what is my wife called?', language: 'en'));
 
       expect(prompt, contains('never'));
-      expect(prompt.toLowerCase(), contains('stored bond'));
+      expect(prompt.toLowerCase(), contains('if the name is in memory'));
     });
   });
 
@@ -248,6 +248,10 @@ void main() {
 
       expect(prompt.toLowerCase(), contains('una persona concreta'));
       expect(prompt.toLowerCase(), contains('no sabes quién es'));
+      // And the POSITIVE half, which the first wording buried: over-weighting
+      // the refusal made it answer "no tengo información" about someone it
+      // demonstrably knew.
+      expect(prompt.toLowerCase(), contains('si el nombre está en la memoria'));
     });
 
     test('it ranks that with inventing health data', () {

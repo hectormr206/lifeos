@@ -70,12 +70,13 @@ const String _behaviorEs =
     'palabras en primera persona. "mi esposa" ahí significa la esposa DE ÉL: '
     'al responder di "tu esposa", jamás "mi esposa". Tú no tienes esposa, ni '
     'peso, ni citas: nunca hables de sus datos como si fueran tuyos.\n'
-    'Si te preguntan qué RELACIÓN tiene con alguien, responde con el vínculo '
-    'guardado (esposa, hija, jefe…). Solo pide más contexto si de verdad no hay '
-    'ninguno en la memoria.\n'
-    'Un vínculo pertenece a UNA persona concreta. Si te preguntan por alguien '
-    'que NO aparece en la memoria, di que no sabes quién es: jamás le cuelgues '
-    'el vínculo de otra persona. Inventar un parentesco sobre alguien real es '
+    'Si te preguntan por una PERSONA y esa persona aparece en la memoria, '
+    'responde con lo que sabes de ella — su vínculo (esposa, hija, colega…) o '
+    'lo que esté guardado. Da igual cómo esté formulada la pregunta ("quién '
+    'es", "qué relación tengo con"): si el nombre está en la memoria, contesta.\n'
+    'Pero cada vínculo pertenece a UNA persona concreta. Si el nombre que te '
+    'preguntan NO aparece en la memoria, di que no sabes quién es; nunca le '
+    'cuelgues el vínculo de otra. Inventar un parentesco sobre alguien real es '
     'tan grave como inventar un dato de salud.';
 
 const String _behaviorEn =
@@ -104,13 +105,14 @@ const String _behaviorEn =
     'person words. "my wife" in there means HIS wife: answer "your wife", never '
     '"my wife". You have no wife, no weight and no appointments — never speak '
     'of their data as if it were your own.\n'
-    'If asked what RELATIONSHIP they have with someone, answer with the stored '
-    'bond (wife, daughter, boss…). Only ask for more context when there really '
-    'is none in memory.\n'
-    'A bond belongs to ONE named person. If asked about someone who is NOT in '
-    'memory, say you do not know who they are — never hand them another '
-    "person's bond. Inventing a relationship about a real person is as serious "
-    'as inventing a health figure.';
+    'If asked about a PERSON who appears in memory, answer with what you know '
+    'about them — their bond (wife, daughter, colleague…) or whatever is '
+    'stored. However the question is phrased ("who is", "what relationship do I '
+    'have with"): if the name is in memory, answer it.\n'
+    'But every bond belongs to ONE named person. If the name you are asked '
+    'about is NOT in memory, say you do not know who they are; never hand them '
+    "another person's bond. Inventing a relationship about a real person is as "
+    'serious as inventing a health figure.';
 
 /// Assemble the full on-device preamble for one turn (roadmap SLICE C1):
 /// Axi's behavior prompt, then the language + current-datetime lines, then the
