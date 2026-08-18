@@ -199,7 +199,7 @@ class ChatContextBuilder {
         // The captured name (first-run onboarding) so Axi addresses the user by
         // name and "yo/mi" anchors to the user hub. Best-effort like recall.
         userName = await deps.writer.userDisplayName();
-        final nodes = await _recallNodes(deps, message);
+        final nodes = await _byName(deps, await _recallNodes(deps, message), message);
         final facts = _factsFrom(nodes, message);
         // Bonds and facts are gathered from the SAME recall, so a question that
         // surfaces a person brings that person's relationships with it.
@@ -634,6 +634,42 @@ class ChatContextBuilder {
   /// memories to cite). When the message routes to a domain, facts from a
   /// DIFFERENT domain are dropped, but domainless facts (identity/relationships
   /// stored without a domain) always stay in scope.
+  /// Add whatever the graph holds about the NAMES in the message.
+  ///
+  /// Measured on 842, same session, same memory:
+  ///
+  ///   "¿quién es Ana?"               -> "Ana es tu esposa."
+  ///   "¿qué relación tengo con Ana?" -> "no está registrada"
+  ///
+  /// The recall for the second question was dominated by "relación" and never
+  /// surfaced her. Ana is not a `person` node with an edge — she is inside a
+  /// FACT — so looking up only people missed her too. A name in the question is
+  /// the strongest signal the user could give about what they want remembered;
+  /// spending one lexical query on it is cheap and stops the answer depending
+  /// on how the sentence was phrased.
+  Future<List<GraphNodeRecord>> _byName(
+    ChatContextDeps deps,
+    List<GraphNodeRecord> recalled,
+    String message, {
+    int maxPerName = 4,
+  }) async {
+    final names = properNounsInMessage(message);
+    if (names.isEmpty) return recalled;
+
+    final byUuid = {for (final n in recalled) n.uuid: n};
+    for (final name in names) {
+      try {
+        for (final hit in await deps.store.searchNodes(name, limit: maxPerName)) {
+          byUuid.putIfAbsent(hit.uuid, () => hit);
+        }
+      } catch (_) {
+        // A store that cannot answer costs us this name, never the turn.
+        continue;
+      }
+    }
+    return byUuid.values.toList();
+  }
+
   /// The `fact` half of a recall. Split out so ONE recall feeds both the facts
   /// and the bonds — recalling twice would double the cost and could return
   /// different sets, leaving a person in the block whose relationships were
