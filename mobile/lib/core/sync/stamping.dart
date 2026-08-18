@@ -80,6 +80,38 @@ Future<void> ensureSyncTables(DatabaseExecutor db) async {
       UNIQUE(uuid, losing_lamport, losing_origin, losing_payload)
     )
   ''');
+
+  // Tables that already existed keep their OLD shape: `CREATE TABLE IF NOT
+  // EXISTS` does nothing at all when the table is there, columns and all.
+  //
+  // Shipped without this, and the devices said so:
+  //
+  //   no such column: last_deposit
+  //   UPDATE sync_identity SET last_deposit = ? WHERE id = 1
+  //
+  // Every install that had enabled sync before the change failed every pass,
+  // while a FRESH install worked perfectly — which is precisely why the suite
+  // stayed green: it only ever created new tables.
+  await _addColumnIfMissing(db, kSyncIdentityTable, 'last_deposit', 'TEXT');
+  await _addColumnIfMissing(
+      db, kSyncPeerStateTable, 'applied_high', 'INTEGER NOT NULL DEFAULT 0');
+}
+
+/// ALTER, never re-CREATE.
+///
+/// Dropping and rebuilding `sync_identity` would hand the device a NEW origin,
+/// and every row it had already authored would suddenly look like a stranger's
+/// — turning its own history into a permanent conflict with itself.
+Future<void> _addColumnIfMissing(
+  DatabaseExecutor db,
+  String table,
+  String column,
+  String definition,
+) async {
+  final info = await db.rawQuery('PRAGMA table_info($table)');
+  final present = {for (final row in info) row['name'] as String?};
+  if (present.contains(column)) return;
+  await db.execute('ALTER TABLE $table ADD COLUMN $column $definition');
 }
 
 /// This device's identity inside the user's own device set.
