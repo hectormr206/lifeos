@@ -216,6 +216,20 @@ class Brain3dPainter extends CustomPainter {
   /// reads as depth rather than as a fisheye.
   static const double _cameraDistance = 60;
 
+  /// Where one point lands on screen, relative to the centre, at [scale].
+  /// Shared so the measuring pass and the drawing pass cannot drift apart.
+  static Offset _flatten(Vec3 p, double cx, double cy, double cz, double yaw,
+      double pitch, double scale) {
+    final px = p.x - cx, py = p.y - cy, pz = p.z - cz;
+    final x1 = px * math.cos(yaw) + pz * math.sin(yaw);
+    final z1 = -px * math.sin(yaw) + pz * math.cos(yaw);
+    final y2 = py * math.cos(pitch) - z1 * math.sin(pitch);
+    final z2 = py * math.sin(pitch) + z1 * math.cos(pitch);
+    final perspective =
+        _cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0);
+    return Offset(x1 * scale * perspective, y2 * scale * perspective);
+  }
+
   static List<ProjectedNode> project({
     required List<Brain3dVisualNode> nodes,
     required Map<String, Vec3> positions,
@@ -251,10 +265,35 @@ class Brain3dPainter extends CustomPainter {
           math.max((p.x - cx).abs(),
               math.max((p.y - cy).abs(), (p.z - cz).abs())));
     }
-    final fit = (math.min(size.width, size.height) * 0.34) / extent * zoom;
+    // A provisional scale, refined below. Fitting by the 3D extent alone is
+    // what left the graph occupying a fifth of a phone screen: after the yaw,
+    // the pitch and the perspective divide, the PROJECTED spread is always
+    // smaller than the cloud's radius — and by a factor that changes with every
+    // rotation, so no constant can compensate for it.
+    final provisional = (math.min(size.width, size.height) * 0.34) / extent;
 
     final cosY = math.cos(yaw), sinY = math.sin(yaw);
     final cosP = math.cos(pitch), sinP = math.sin(pitch);
+
+    // Pass 1 measures where the nodes actually land; pass 2 scales that box to
+    // the viewport. Two cheap loops over a capped node count, and the graph
+    // fills the screen at any angle instead of hiding in the middle of it.
+    var minX = double.infinity, maxX = -double.infinity;
+    var minY = double.infinity, maxY = -double.infinity;
+    for (final p in positions.values) {
+      final o = _flatten(p, cx, cy, cz, yaw, pitch, provisional);
+      minX = math.min(minX, o.dx);
+      maxX = math.max(maxX, o.dx);
+      minY = math.min(minY, o.dy);
+      maxY = math.max(maxY, o.dy);
+    }
+    // 0.82 leaves room for the LABELS, which sit outside the node they name; a
+    // graph scaled to the very edge pushes half of them off-screen.
+    final spanX = math.max(maxX - minX, 1.0);
+    final spanY = math.max(maxY - minY, 1.0);
+    final fit = provisional *
+        math.min(size.width * 0.82 / spanX, size.height * 0.82 / spanY) *
+        zoom;
 
     final out = <ProjectedNode>[];
     for (final node in nodes) {
