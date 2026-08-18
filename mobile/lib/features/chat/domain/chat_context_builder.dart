@@ -199,8 +199,17 @@ class ChatContextBuilder {
         // The captured name (first-run onboarding) so Axi addresses the user by
         // name and "yo/mi" anchors to the user hub. Best-effort like recall.
         userName = await deps.writer.userDisplayName();
-        final facts = await _retrieve(deps, message);
-        memoryBlock = buildRecallBlock(message, facts, en: lang == 'en', now: at);
+        final nodes = await _recallNodes(deps, message);
+        final facts = _factsFrom(nodes, message);
+        // Bonds and facts are gathered from the SAME recall, so a question that
+        // surfaces a person brings that person's relationships with it.
+        final bonds = await _relationshipsFor(deps, nodes);
+        memoryBlock = composeMemoryBlock(
+          relationships: bonds,
+          factsBlock:
+              buildRecallBlock(message, facts, en: lang == 'en', now: at),
+          en: lang == 'en',
+        );
       }
     } catch (_) {
       // Memory is best-effort context — never let it break a generation.
@@ -625,14 +634,20 @@ class ChatContextBuilder {
   /// memories to cite). When the message routes to a domain, facts from a
   /// DIFFERENT domain are dropped, but domainless facts (identity/relationships
   /// stored without a domain) always stay in scope.
-  Future<List<RecallFact>> _retrieve(
-    ChatContextDeps deps,
-    String message,
-  ) async {
+  /// The `fact` half of a recall. Split out so ONE recall feeds both the facts
+  /// and the bonds — recalling twice would double the cost and could return
+  /// different sets, leaving a person in the block whose relationships were
+  /// gathered from a different search.
+  List<RecallFact> _factsFrom(List<GraphNodeRecord> nodes, String message) {
     final graphDomain = graphDomainForKey(router.routeDomain(message));
-    final nodes = await _recallNodes(deps, message);
     final facts = <RecallFact>[];
     for (final n in nodes) {
+      // Nodes that are not `fact` used to be dropped here, silently — which is
+      // why a RELATIONSHIP could never be answered. The bond lives on the
+      // EDGES, the 3D brain draws it, and the prompt never saw it:
+      // "¿qué relación tengo con Ana?" replied "no está en la memoria" with the
+      // edge sitting right there. Their bonds are gathered separately, in
+      // `_relationshipsFor`.
       if (n.kind != 'fact') continue;
       if (graphDomain != null && n.domain != null && n.domain != graphDomain) {
         continue;
@@ -646,6 +661,55 @@ class ChatContextBuilder {
       ));
     }
     return facts;
+  }
+
+  /// The BONDS of every person among the recalled nodes, as plain sentences.
+  ///
+  /// Best-effort and bounded: a person with fifty edges must not crowd the
+  /// prompt, and a store that cannot answer must not take the whole turn down
+  /// with it — an unavailable bond is worth less than a working reply.
+  Future<List<String>> _relationshipsFor(
+    ChatContextDeps deps,
+    List<GraphNodeRecord> nodes, {
+    int maxPeople = 4,
+    int maxPerPerson = 3,
+  }) async {
+    final lines = <String>[];
+    final people = [
+      for (final n in nodes)
+        if (n.kind == 'person' && n.label.trim().isNotEmpty) n,
+    ].take(maxPeople);
+
+    for (final person in people) {
+      try {
+        final edges = await deps.store.edgesForNode(person.uuid);
+        var used = 0;
+        for (final edge in edges) {
+          if (used >= maxPerPerson) break;
+          final bond = edge.relation.trim();
+          if (bond.isEmpty) continue;
+          lines.add(describeRelationship(
+            subject: bond,
+            personLabel: person.label,
+            languageCode: languageCode(),
+          ));
+          used++;
+        }
+        if (used == 0) {
+          // Named but with no bond stored. Still worth saying: the model can
+          // then answer "sé quién es, no cómo se relacionan" instead of
+          // inventing a link.
+          lines.add(describeRelationship(
+            subject: null,
+            personLabel: person.label,
+            languageCode: languageCode(),
+          ));
+        }
+      } catch (_) {
+        continue;
+      }
+    }
+    return lines;
   }
 
   /// Semantic recall first (embedder permitting), LEXICAL fallback otherwise.

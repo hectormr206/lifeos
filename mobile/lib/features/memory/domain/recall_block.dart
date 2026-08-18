@@ -92,6 +92,62 @@ String _dateKey(DateTime d) {
   return '$y-$m-$day';
 }
 
+/// One stored BOND, written as a sentence the model can use.
+///
+/// Relationships live in the graph as EDGES, and the recall block used to carry
+/// only `fact` nodes — so the bond the 3D brain draws on screen never reached
+/// the prompt. "¿Qué relación tengo con Ana?" answered "no está en la memoria"
+/// while the edge sat right there.
+///
+/// Always SECOND person: the memory holds the user's life, and rendering it as
+/// "mi esposa" is what had Axi claiming a wife of its own.
+///
+/// When the bond is unknown the person is still named, and NOTHING is guessed —
+/// inventing "amiga" or "conocida" about a real person is precisely the
+/// fabrication this codebase forbids.
+String describeRelationship({
+  required String? subject,
+  required String personLabel,
+  required String languageCode,
+}) {
+  final bond = subject?.trim();
+  if (languageCode == 'en') {
+    return (bond == null || bond.isEmpty)
+        ? 'A person you know: $personLabel.'
+        : 'Your $bond is $personLabel.';
+  }
+  return (bond == null || bond.isEmpty)
+      ? 'Una persona que conoces: $personLabel.'
+      : 'Tu $bond es $personLabel.';
+}
+
+/// Put the BONDS above the dated facts in one memory block.
+///
+/// Relationships are timeless, and the fact block buckets everything by day —
+/// pushing a bond through it either drops it or dates it wrongly. They also
+/// belong FIRST: "tu esposa es Ana" is the context that makes the rest of the
+/// block make sense.
+///
+/// Returns "" when there is nothing at all, so the caller can omit the section
+/// entirely rather than announce an empty memory.
+String composeMemoryBlock({
+  required List<String> relationships,
+  required String factsBlock,
+  bool en = false,
+}) {
+  final bonds = [
+    for (final r in relationships)
+      if (r.trim().isNotEmpty) r.trim(),
+  ];
+  final sections = <String>[];
+  if (bonds.isNotEmpty) {
+    sections.add('${en ? 'PEOPLE AND BONDS' : 'PERSONAS Y VÍNCULOS'}:\n'
+        '${bonds.map((b) => '- $b').join('\n')}');
+  }
+  if (factsBlock.trim().isNotEmpty) sections.add(factsBlock.trim());
+  return sections.join('\n\n');
+}
+
 /// Build a compact "MEMORIA RELEVANTE" block from already-retrieved [facts].
 ///
 /// Steps (ported from `recall._build_recall_block`, pure half):
