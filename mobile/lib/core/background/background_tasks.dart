@@ -38,6 +38,8 @@ import '../notifications/app_notifications.dart';
 import '../timezone/device_timezone.dart';
 import '../timezone/effective_timezone.dart';
 import '../timezone/timezone_preference.dart';
+import 'package:lifeos/features/sync/data/workmanager_sync_work.dart';
+import 'package:lifeos/features/sync/presentation/sync_routes.dart';
 
 /// The WorkManager background entrypoint for the whole app.
 ///
@@ -55,6 +57,11 @@ void backgroundTaskDispatcher() {
         return executeMorningBriefingBackgroundTask();
       case automaticBackupTaskName:
         return executeAutomaticBackupTask();
+      case syncTaskName:
+        // The relay address is compiled in (`--dart-define`), so the headless
+        // isolate reads the same constant the UI does rather than needing the
+        // widget tree it does not have.
+        return executeSyncTask(relayBaseUrl: kRelayBaseUrl);
       default:
         // Unknown/legacy task id after an app update: succeed so WorkManager
         // drops it instead of retry-looping a task nobody handles any more.

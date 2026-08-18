@@ -4,6 +4,8 @@ import 'dart:typed_data';
 import 'package:sqflite_sqlcipher/sqflite.dart';
 import 'package:uuid/uuid.dart';
 
+import 'package:lifeos/core/sync/stamping.dart';
+
 import 'graph_records.dart';
 import 'local_graph_schema.dart';
 
@@ -164,6 +166,9 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
     String? originNode,
   }) async {
     final now = _now();
+    // Stamped HERE and not by the sync engine: a row that reaches the table
+    // unstamped is invisible to `lamport > cursor` for ever, and no later pass
+    // can rescue it because nothing knows it was missed.
     final node = GraphNodeRecord(
       uuid: _uuid.v4(),
       kind: kind,
@@ -174,7 +179,8 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       createdAt: now,
       updatedAt: now,
       createdTz: createdTz,
-      originNode: originNode,
+      originNode: originNode ?? await localOrigin(_db),
+      lamport: await nextLamport(_db),
     );
     final id = await _db.insert(kNodesTable, node.toColumns());
     return node.copyWith(localId: id);
@@ -183,7 +189,16 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
   @override
   Future<GraphNodeRecord> upsertNode(GraphNodeRecord node) async {
     // Bump updated_at on every upsert; preserve created_at/uuid.
-    final touched = node.copyWith(updatedAt: _now());
+    final touched = node.copyWith(
+      updatedAt: _now(),
+      // An edit is a new authorship by THIS device, so the origin is REPLACED,
+      // not defaulted. Keeping the previous author made a genuine two-device
+      // disagreement look like one device overwriting its own row: `isConflict`
+      // compares origins, so the losing revision was never recorded and the
+      // user silently lost an edit.
+      originNode: await localOrigin(_db),
+      lamport: await nextLamport(_db),
+    );
     await _db.insert(
       kNodesTable,
       touched.toColumns(),
@@ -210,7 +225,8 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
       data: data,
       createdAt: now,
       updatedAt: now,
-      originNode: originNode,
+      originNode: originNode ?? await localOrigin(_db),
+      lamport: await nextLamport(_db),
     );
     final id = await _db.insert(kEdgesTable, edge.toColumns());
     return edge.copyWith(localId: id);
@@ -218,7 +234,11 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
 
   @override
   Future<GraphEdgeRecord> upsertEdge(GraphEdgeRecord edge) async {
-    final touched = edge.copyWith(updatedAt: _now());
+    final touched = edge.copyWith(
+      updatedAt: _now(),
+      originNode: await localOrigin(_db),
+      lamport: await nextLamport(_db),
+    );
     await _db.insert(
       kEdgesTable,
       touched.toColumns(),
@@ -323,17 +343,23 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
   @override
   Future<bool> softDeleteNode(String uuid) async {
     final now = _epoch(_now());
+    // A GLOBAL next, not `lamport + 1`: a per-row bump can land at or below the
+    // graph's high-water mark, and a tombstone that does not clear the peer's
+    // cursor never ships — the delete stays local and the row lives on
+    // elsewhere for ever.
+    final tombstone = await nextLamport(_db);
+    final origin = await localOrigin(_db);
     final affected = await _db.rawUpdate(
-      'UPDATE $kNodesTable SET deleted_at = ?, updated_at = ?, lamport = lamport + 1 '
-      'WHERE uuid = ? AND deleted_at IS NULL',
-      [now, now, uuid],
+      'UPDATE $kNodesTable SET deleted_at = ?, updated_at = ?, lamport = ?, '
+      'origin_node = ? WHERE uuid = ? AND deleted_at IS NULL',
+      [now, now, tombstone, origin, uuid],
     );
     if (affected == 0) return false;
     // Tombstone incident edges so a deleted node leaves no dangling live edges.
     await _db.rawUpdate(
-      'UPDATE $kEdgesTable SET deleted_at = ?, updated_at = ?, lamport = lamport + 1 '
-      'WHERE (src_uuid = ? OR dst_uuid = ?) AND deleted_at IS NULL',
-      [now, now, uuid, uuid],
+      'UPDATE $kEdgesTable SET deleted_at = ?, updated_at = ?, lamport = ?, '
+      'origin_node = ? WHERE (src_uuid = ? OR dst_uuid = ?) AND deleted_at IS NULL',
+      [now, now, await nextLamport(_db), origin, uuid, uuid],
     );
     return true;
   }
@@ -342,9 +368,9 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
   Future<bool> softDeleteEdge(String uuid) async {
     final now = _epoch(_now());
     final affected = await _db.rawUpdate(
-      'UPDATE $kEdgesTable SET deleted_at = ?, updated_at = ?, lamport = lamport + 1 '
-      'WHERE uuid = ? AND deleted_at IS NULL',
-      [now, now, uuid],
+      'UPDATE $kEdgesTable SET deleted_at = ?, updated_at = ?, lamport = ?, '
+      'origin_node = ? WHERE uuid = ? AND deleted_at IS NULL',
+      [now, now, await nextLamport(_db), await localOrigin(_db), uuid],
     );
     return affected > 0;
   }

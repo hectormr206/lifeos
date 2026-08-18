@@ -136,6 +136,14 @@ void main() {
       final b = await store.createNode(kind: 'event', label: 'B');
       final edge = await store.createEdge(srcUuid: a.uuid, dstUuid: b.uuid, relation: 'r');
 
+      // Snapshotted BEFORE the delete: the cascade tombstones the incident edge
+      // too, so reading the maximum afterwards would compare the node's
+      // tombstone against a value written after it.
+      final highestBeforeDelete = ((await db.rawQuery(
+        'SELECT MAX(lamport) AS m FROM '
+        '(SELECT lamport FROM nodes UNION ALL SELECT lamport FROM edges)',
+      )).first['m'] as int?) ?? 0;
+
       final ok = await store.softDeleteNode(a.uuid);
       expect(ok, isTrue);
 
@@ -148,7 +156,13 @@ void main() {
       expect(raw, isNotNull);
       expect(raw!.isDeleted, isTrue);
       expect(raw.deletedAt, isNotNull);
-      expect(raw.lamport, 1);
+      // The tombstone must sit ABOVE every row written before it, not merely
+      // one above its own previous value. A per-row bump can land at or below
+      // the graph's high-water mark, and a tombstone that does not clear the
+      // peer's cursor never ships — the delete stays local while the row lives
+      // on elsewhere. Asserting the RULE rather than the number `1`, which only
+      // held while deletes were unsyncable.
+      expect(raw.lamport, greaterThan(highestBeforeDelete));
 
       final rawEdges = await store.edgesForNode(a.uuid, includeDeleted: true);
       expect(rawEdges.single.uuid, edge.uuid);

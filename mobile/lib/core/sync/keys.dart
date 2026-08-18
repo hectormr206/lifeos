@@ -45,6 +45,8 @@ Future<List<int>> _hkdf(
   return output.extractBytes();
 }
 
+const String kInfoMailbox = 'lifeos/sync/mailbox/v1';
+
 /// Everything derivable from one recovery phrase.
 class SyncKeys {
   const SyncKeys({required this.rootKey, required this.dataKey});
@@ -64,6 +66,26 @@ class SyncKeys {
       salt: Uint8List.fromList(mailboxUuid.codeUnits),
     );
     return Ed25519().newKeyPairFromSeed(seed);
+  }
+
+  /// The one mailbox every device in this set shares.
+  ///
+  /// Derived from the root key, so each device computes the SAME value from the
+  /// phrase alone — which is the whole point: a device that just joined has no
+  /// way to be told an address, and asking the relay to introduce devices to
+  /// each other would give it exactly the map of the user's device set that
+  /// per-mailbox auth keys exist to deny it.
+  ///
+  /// LIMIT, and it is deliberate: the relay deletes an envelope when it is
+  /// acknowledged, so with THREE or more devices the first one to fetch would
+  /// consume an envelope the others never see. `SyncPass` refuses to run rather
+  /// than sync a third device wrongly — see the guard there. Per-recipient
+  /// mailboxes are the fix, and they are not built yet.
+  Future<String> sharedMailboxUuid() async {
+    final bytes = await _hkdf(rootKey, info: kInfoMailbox);
+    return [
+      for (final b in bytes.take(16)) b.toRadixString(16).padLeft(2, '0'),
+    ].join();
   }
 
   /// The 32 raw bytes the relay stores when the mailbox is claimed.

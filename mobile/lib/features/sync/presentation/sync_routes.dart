@@ -1,8 +1,18 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:workmanager/workmanager.dart';
 
+import 'package:lifeos/core/graph/graph_providers.dart';
+import 'package:lifeos/core/sync/keys.dart';
+import 'package:lifeos/core/sync/stamping.dart';
+
+import '../data/graph_sync_engine.dart';
 import '../data/relay_reachability.dart';
+import '../data/sync_pass.dart';
+import '../data/workmanager_sync_work.dart';
 import '../data/sync_key_store.dart';
 import '../domain/phrase_ceremony.dart';
 import '../domain/sync_conflict.dart';
@@ -53,15 +63,65 @@ final relayReachableProvider = FutureProvider<bool>((ref) async {
   return RelayReachability(baseUrl: ref.watch(relayBaseUrlProvider)).check();
 });
 
-/// Conflicts awaiting the user's attention. Empty until the engine is wired.
-final syncConflictsProvider = FutureProvider<List<SyncConflict>>(
-  (ref) async => const [],
-);
+/// Revisions that lost a merge, read from the database the engine writes to.
+///
+/// Was `const []` while the engine was unwired, which rendered as "no hay
+/// conflictos" on a device that had never been able to have one — a screen
+/// that could only ever say everything was fine.
+final syncConflictsProvider = FutureProvider<List<SyncConflict>>((ref) async {
+  final db = await ref.watch(graphDatabaseHandleProvider.future);
+  final rows = await GraphSyncEngine(db).conflicts();
+  return [
+    for (final r in rows)
+      SyncConflict(
+        uuid: r['uuid']! as String,
+        losingLamport: (r['losing_lamport'] as int?) ?? 0,
+        losingOrigin: r['losing_origin'] as String?,
+        // The stored payload is the whole losing row as JSON; the screen shows
+        // its label, which is the only part a person can recognise.
+        losingLabel: _labelOf(r['losing_payload'] as String?),
+        resolvedAt: DateTime.fromMillisecondsSinceEpoch(
+          (((r['resolved_at'] as num?) ?? 0) * 1000).round(),
+        ),
+      ),
+  ];
+});
 
 /// Device uuid -> nickname, for the conflict list. Never leaves the device.
-final deviceNicknamesProvider = FutureProvider<Map<String, String>>(
-  (ref) async => const {},
-);
+///
+/// Only this device is named for now: a nickname for the OTHER device would
+/// have to travel, and nothing carries it yet. Showing a shortened uuid is
+/// honest; inventing "Mi otro dispositivo" for an id we cannot resolve is not.
+final deviceNicknamesProvider = FutureProvider<Map<String, String>>((ref) async {
+  final db = await ref.watch(graphDatabaseHandleProvider.future);
+  return {await localOrigin(db): 'Este dispositivo'};
+});
+
+/// This device's short name, derived from its own origin so two devices never
+/// show the same label.
+final deviceNicknameProvider = FutureProvider<String>((ref) async {
+  final db = await ref.watch(graphDatabaseHandleProvider.future);
+  final origin = await localOrigin(db);
+  return 'Este dispositivo (${origin.substring(0, 6)})';
+});
+
+/// The human-readable label inside a stored losing revision.
+///
+/// Falls back to the raw text rather than an empty string: a conflict entry
+/// with no label at all is one the user cannot act on, and silently dropping it
+/// would hide an edit that was already lost once.
+String _labelOf(String? payloadJson) {
+  if (payloadJson == null || payloadJson.isEmpty) return '(sin título)';
+  try {
+    final decoded = jsonDecode(payloadJson);
+    if (decoded is Map && decoded['label'] is String) {
+      return decoded['label'] as String;
+    }
+  } catch (_) {
+    // Not JSON any more (an older row, a truncated write): show what we have.
+  }
+  return payloadJson;
+}
 
 class SyncSettingsRoute extends ConsumerWidget {
   const SyncSettingsRoute({super.key});
@@ -79,14 +139,44 @@ class SyncSettingsRoute extends ConsumerWidget {
         // screen shows the steady state, and a manual tap ignores it anyway.
         onUnmeteredNetwork: true,
       ),
-      deviceNickname: 'Este dispositivo',
+      deviceNickname:
+          ref.watch(deviceNicknameProvider).value ?? 'Este dispositivo',
       onEnable: () => _startEnabling(context, ref),
       onDisable: () async {
         await ref.read(syncEnablementProvider).disable();
+        // Cancelled too: leaving a periodic task running after the user turned
+        // sync off would keep waking the device for work it must not do.
+        await WorkmanagerSyncScheduler(
+          workmanager: Workmanager(),
+          reportError: (_, _) {},
+        ).cancel();
         ref.invalidate(syncEnabledProvider);
       },
-      onSyncNow: () {},
+      onSyncNow: () => _syncNow(context, ref),
       onOpenConflicts: () => context.push('/settings/sync/conflicts'),
+    );
+  }
+
+  /// One real pass, on the user's explicit tap.
+  ///
+  /// Manual runs ignore the Wi-Fi rule on purpose — the user asked, and the
+  /// screen says so. The RESULT is always shown, including failure: a tap that
+  /// silently does nothing is how this button spent its first day.
+  Future<void> _syncNow(BuildContext context, WidgetRef ref) async {
+    final messenger = ScaffoldMessenger.of(context);
+    final entropy = await ref.read(syncKeyStoreProvider).readEntropy();
+    if (entropy == null) return;
+
+    final db = await ref.read(graphDatabaseHandleProvider.future);
+    final report = await SyncPass(
+      db: db,
+      keys: await deriveSyncKeys(entropy),
+      relayBaseUrl: ref.read(relayBaseUrlProvider),
+    ).run();
+
+    ref.invalidate(syncConflictsProvider);
+    messenger.showSnackBar(
+      SnackBar(content: Text(describeSyncPass(report))),
     );
   }
 
@@ -153,6 +243,7 @@ class SyncSettingsRoute extends ConsumerWidget {
             // half-enable the device.
             await ref.read(syncEnablementProvider).restore(mnemonic);
             ref.invalidate(syncEnabledProvider);
+            await _announce(ref);
             if (context.mounted) Navigator.of(context).pop();
           },
         ),
@@ -172,11 +263,41 @@ class SyncSettingsRoute extends ConsumerWidget {
             // sync on from a phrase the user never proved they wrote down.
             await ref.read(syncEnablementProvider).enable(confirmed);
             ref.invalidate(syncEnabledProvider);
+            await _announce(ref);
             if (context.mounted) Navigator.of(context).pop();
           },
         ),
       ),
     );
+  }
+}
+
+/// Tell the mailbox this device exists.
+///
+/// Without it two devices that have never spoken would each sit waiting for the
+/// other to go first: a pass only sends to a peer it has HEARD from, and
+/// neither would ever be heard. Best-effort — enabling sync must not fail
+/// because the relay happened to be down.
+Future<void> _announce(WidgetRef ref) async {
+  // Automatic passes are registered HERE, at the moment sync is turned on, and
+  // cancelled when it is turned off. Registering at app start instead would
+  // schedule work for every user who never enabled the feature.
+  await WorkmanagerSyncScheduler(
+    workmanager: Workmanager(),
+    reportError: (_, _) {},
+  ).schedule();
+
+  try {
+    final entropy = await ref.read(syncKeyStoreProvider).readEntropy();
+    if (entropy == null) return;
+    await SyncPass(
+      db: await ref.read(graphDatabaseHandleProvider.future),
+      keys: await deriveSyncKeys(entropy),
+      relayBaseUrl: ref.read(relayBaseUrlProvider),
+    ).announce();
+  } catch (_) {
+    // Swallowed HERE and nowhere else: the next pass announces again, and the
+    // settings screen reports the relay as unreachable on its own.
   }
 }
 

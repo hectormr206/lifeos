@@ -102,6 +102,14 @@ def decide(
     if local_deleted and not incoming_deleted:
         return Outcome.rejected
 
+    # RULE 4b — the MIRROR, which is not optional. Rule 4 alone protects a local
+    # tombstone but leaves an INCOMING tombstone to the clock tiebreak; at equal
+    # Lamport values that compares origin uuids, so one device rejects the other's
+    # delete while the other rejects its edit, and they diverge for ever with
+    # nothing reporting it. Delete dominates BOTH ways so both sides converge.
+    if incoming_deleted and not local_deleted:
+        return Outcome.updated
+
     if _wins(
         (incoming_lamport, incoming_origin),
         (int(local_lamport or 0), local_origin or ""),

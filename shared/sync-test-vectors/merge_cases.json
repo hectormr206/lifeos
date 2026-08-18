@@ -12,62 +12,272 @@
     {
       "name": "absent locally is inserted",
       "local": null,
-      "incoming": {"uuid": "u-1", "label": "nuevo", "lamport": 1, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "inserted", "winner_label": "nuevo", "deleted": false, "conflict": false}
+      "incoming": {
+        "uuid": "u-1",
+        "label": "nuevo",
+        "lamport": 1,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "inserted",
+        "winner_label": "nuevo",
+        "deleted": false,
+        "conflict": false
+      }
     },
     {
       "name": "higher lamport wins",
-      "local": {"uuid": "u-1", "label": "viejo", "lamport": 3, "origin_node": "aaaa", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "nuevo", "lamport": 9, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "updated", "winner_label": "nuevo", "deleted": false, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "viejo",
+        "lamport": 3,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "nuevo",
+        "lamport": 9,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "nuevo",
+        "deleted": false,
+        "conflict": true
+      }
     },
     {
       "name": "lower lamport loses and is preserved",
-      "local": {"uuid": "u-1", "label": "ganador", "lamport": 9, "origin_node": "aaaa", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "perdedor", "lamport": 3, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "rejected", "winner_label": "ganador", "deleted": false, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "ganador",
+        "lamport": 9,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "perdedor",
+        "lamport": 3,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "rejected",
+        "winner_label": "ganador",
+        "deleted": false,
+        "conflict": true
+      }
     },
     {
       "name": "equal lamport, greater origin wins",
-      "local": {"uuid": "u-1", "label": "de-aaaa", "lamport": 5, "origin_node": "aaaa", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "de-zzzz", "lamport": 5, "origin_node": "zzzz", "deleted_at": null},
-      "expect": {"outcome": "updated", "winner_label": "de-zzzz", "deleted": false, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "de-aaaa",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "de-zzzz",
+        "lamport": 5,
+        "origin_node": "zzzz",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "de-zzzz",
+        "deleted": false,
+        "conflict": true
+      }
     },
     {
       "name": "equal lamport, lesser origin loses",
-      "local": {"uuid": "u-1", "label": "de-zzzz", "lamport": 5, "origin_node": "zzzz", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "de-aaaa", "lamport": 5, "origin_node": "aaaa", "deleted_at": null},
-      "expect": {"outcome": "rejected", "winner_label": "de-zzzz", "deleted": false, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "de-zzzz",
+        "lamport": 5,
+        "origin_node": "zzzz",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "de-aaaa",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "rejected",
+        "winner_label": "de-zzzz",
+        "deleted": false,
+        "conflict": true
+      }
     },
     {
       "name": "tombstone propagates",
-      "local": {"uuid": "u-1", "label": "vivo", "lamport": 1, "origin_node": "aaaa", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "vivo", "lamport": 2, "origin_node": "bbbb", "deleted_at": 2000.0},
-      "expect": {"outcome": "updated", "winner_label": "vivo", "deleted": true, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "vivo",
+        "lamport": 1,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "vivo",
+        "lamport": 2,
+        "origin_node": "bbbb",
+        "deleted_at": 2000.0
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "vivo",
+        "deleted": true,
+        "conflict": true
+      }
     },
     {
       "name": "a stale live revision never resurrects a tombstone",
-      "local": {"uuid": "u-1", "label": "borrado", "lamport": 5, "origin_node": "aaaa", "deleted_at": 2000.0},
-      "incoming": {"uuid": "u-1", "label": "revivido", "lamport": 2, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "rejected", "winner_label": "borrado", "deleted": true, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "borrado",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": 2000.0
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "revivido",
+        "lamport": 2,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "rejected",
+        "winner_label": "borrado",
+        "deleted": true,
+        "conflict": true
+      }
     },
     {
       "name": "DELETE DOMINATES a concurrent edit with a HIGHER lamport",
-      "local": {"uuid": "u-1", "label": "borrado", "lamport": 5, "origin_node": "aaaa", "deleted_at": 2000.0},
-      "incoming": {"uuid": "u-1", "label": "editado despues", "lamport": 7, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "rejected", "winner_label": "borrado", "deleted": true, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "borrado",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": 2000.0
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "editado despues",
+        "lamport": 7,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "rejected",
+        "winner_label": "borrado",
+        "deleted": true,
+        "conflict": true
+      }
     },
     {
       "name": "a later delete still wins over an earlier edit",
-      "local": {"uuid": "u-1", "label": "editado", "lamport": 7, "origin_node": "aaaa", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "editado", "lamport": 9, "origin_node": "bbbb", "deleted_at": 3000.0},
-      "expect": {"outcome": "updated", "winner_label": "editado", "deleted": true, "conflict": true}
+      "local": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 7,
+        "origin_node": "aaaa",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 9,
+        "origin_node": "bbbb",
+        "deleted_at": 3000.0
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "editado",
+        "deleted": true,
+        "conflict": true
+      }
     },
     {
       "name": "a device overwriting its own row is not a conflict",
-      "local": {"uuid": "u-1", "label": "v1", "lamport": 1, "origin_node": "bbbb", "deleted_at": null},
-      "incoming": {"uuid": "u-1", "label": "v2", "lamport": 2, "origin_node": "bbbb", "deleted_at": null},
-      "expect": {"outcome": "updated", "winner_label": "v2", "deleted": false, "conflict": false}
+      "local": {
+        "uuid": "u-1",
+        "label": "v1",
+        "lamport": 1,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "v2",
+        "lamport": 2,
+        "origin_node": "bbbb",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "v2",
+        "deleted": false,
+        "conflict": false
+      }
+    },
+    {
+      "name": "an incoming delete wins a tie its origin would have lost",
+      "local": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 5,
+        "origin_node": "zzzz",
+        "deleted_at": null
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": 4000.0
+      },
+      "expect": {
+        "outcome": "updated",
+        "winner_label": "editado",
+        "deleted": true,
+        "conflict": true
+      }
+    },
+    {
+      "name": "the same tie seen from the other device also ends deleted",
+      "local": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 5,
+        "origin_node": "aaaa",
+        "deleted_at": 4000.0
+      },
+      "incoming": {
+        "uuid": "u-1",
+        "label": "editado",
+        "lamport": 5,
+        "origin_node": "zzzz",
+        "deleted_at": null
+      },
+      "expect": {
+        "outcome": "rejected",
+        "winner_label": "editado",
+        "deleted": true,
+        "conflict": true
+      }
     }
   ]
 }

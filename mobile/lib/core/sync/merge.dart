@@ -68,6 +68,20 @@ MergeOutcome decideMerge({
   // high its Lamport value.
   if (local.deleted && !incoming.deleted) return MergeOutcome.rejected;
 
+  // RULE 4b — and the MIRROR of it, which is not optional.
+  //
+  // Rule 4 alone is asymmetric: it protects a local tombstone but leaves an
+  // INCOMING tombstone to the clock tiebreak. At equal Lamport values that
+  // tiebreak is decided by comparing origin uuids, so device A rejects B's
+  // delete while B rejects A's edit — and the two settle on DIFFERENT rows,
+  // for ever, with nothing reporting it. Which device "wins" depends on a
+  // random uuid, so the same delete converges or diverges by luck.
+  //
+  // Delete dominates in BOTH directions, and then both sides converge on the
+  // tombstone. Found by the two-device test, not by the unit vectors: every
+  // case they covered had unequal clocks.
+  if (incoming.deleted && !local.deleted) return MergeOutcome.updated;
+
   return _wins(incoming, local) ? MergeOutcome.updated : MergeOutcome.rejected;
 }
 
