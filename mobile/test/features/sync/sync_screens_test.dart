@@ -35,6 +35,8 @@ Future<void> _pumpTall(WidgetTester tester, Widget child) async {
   await tester.pumpAndSettle();
 }
 
+void _noop() {}
+
 void main() {
   group('sync settings', () {
     testWidgets('shows the disclosure verbatim, uncomfortable parts included',
@@ -104,6 +106,75 @@ void main() {
       // sync ON is exactly who needs to read it.
       expect(find.text(kRelayCanSee.first.what), findsOneWidget);
     });
+  });
+
+  testWidgets('the sync action is reachable without scrolling', (tester) async {
+    // Reported as "no hay ningún botón de Sincronizar ahora". The action was
+    // four rows below the switch, and the pair indicator added above it pushed
+    // it off a phone screen — a regression introduced by the very widget meant
+    // to make sync legible.
+    //
+    // Pumped at a REAL phone size, not the 800x600 default: at that default the
+    // old layout fitted and this test would have passed while the button stayed
+    // invisible on every actual device.
+    tester.view.physicalSize = const Size(1080, 2160);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(MaterialApp(
+      home: SyncSettingsScreen(
+        connectivity: SyncConnectivity.reachable,
+        lastSyncLine: 'Al día · hace un momento',
+        thisDeviceId: 'a1b2c3',
+        peerDeviceId: 'd4e5f6',
+        lastStatus: null,
+        deviceNickname: 'pixel',
+        onEnable: () {},
+        onDisable: () {},
+        onSyncNow: () {},
+        onOpenConflicts: () {},
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    final button = find.widgetWithText(FilledButton, 'Sincronizar ahora');
+    expect(button, findsOneWidget);
+
+    final box = tester.getRect(button);
+    expect(box.bottom, lessThan(720),
+        reason: 'the primary action must be visible without scrolling');
+  });
+
+  testWidgets('while the keystore is still loading it does not claim to be off',
+      (tester) async {
+    // Reading the OS keystore takes a moment. Rendering that moment as "off"
+    // is not a cosmetic flicker: the user sees the switch off on a device where
+    // sync IS on, taps it, is asked "¿es tu primer dispositivo?", and gets a
+    // BRAND NEW phrase — a new key, and their existing data orphaned behind the
+    // old one.
+    //
+    // Unknown must therefore look like unknown, and must not be tappable.
+    await tester.pumpWidget(const MaterialApp(
+      home: SyncSettingsScreen(
+        connectivity: SyncConnectivity.notEnabled,
+        enablementKnown: false,
+        lastSyncLine: '',
+        thisDeviceId: 'a1b2c3',
+        peerDeviceId: null,
+        lastStatus: null,
+        deviceNickname: 'pixel',
+        onEnable: _noop,
+        onDisable: _noop,
+        onSyncNow: _noop,
+        onOpenConflicts: _noop,
+      ),
+    ));
+
+    final switchTile = tester.widget<SwitchListTile>(
+      find.byType(SwitchListTile),
+    );
+    expect(switchTile.onChanged, isNull,
+        reason: 'an unknown state must not be tappable into a new ceremony');
   });
 
   group('phrase ceremony', () {

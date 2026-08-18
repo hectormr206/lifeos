@@ -150,7 +150,8 @@ class SyncSettingsRoute extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final enabled = ref.watch(syncEnabledProvider).value ?? false;
+    final enablement = ref.watch(syncEnabledProvider);
+    final enabled = enablement.value ?? false;
     final reachable = ref.watch(relayReachableProvider).value ?? false;
 
     return SyncSettingsScreen(
@@ -163,6 +164,7 @@ class SyncSettingsRoute extends ConsumerWidget {
       ),
       deviceNickname:
           ref.watch(deviceNicknameProvider).value ?? 'Este dispositivo',
+      enablementKnown: enablement.hasValue,
       lastSyncLine: describeSyncStatus(ref.watch(syncStatusProvider).value),
       thisDeviceId: ref.watch(thisDeviceShortIdProvider).value ?? '······',
       peerDeviceId: ref.watch(syncPeerProvider).value?.shortId,

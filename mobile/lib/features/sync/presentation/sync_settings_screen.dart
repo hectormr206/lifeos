@@ -28,6 +28,7 @@ class SyncSettingsScreen extends StatelessWidget {
     required this.connectivity,
     required this.deviceNickname,
     required this.lastSyncLine,
+    this.enablementKnown = true,
     required this.thisDeviceId,
     required this.peerDeviceId,
     required this.lastStatus,
@@ -48,6 +49,14 @@ class SyncSettingsScreen extends StatelessWidget {
   /// pass has no screen at all — its outcome was known only to a process that
   /// then exited.
   final String lastSyncLine;
+
+  /// False while the keystore read is still in flight.
+  ///
+  /// Kept separate from [connectivity] on purpose. Collapsing "we do not know
+  /// yet" into "off" shows an ENABLED device an off switch; tapping it offers
+  /// to create a new phrase, which mints a new key and orphans the data behind
+  /// the old one. Unknown must look unknown.
+  final bool enablementKnown;
 
   /// Short ids for the picture at the top. The indicator refuses to look
   /// connected without a peer AND a completed pass, so these are not cosmetic.
@@ -72,22 +81,50 @@ class SyncSettingsScreen extends StatelessWidget {
       body: ListView(
         padding: const EdgeInsets.symmetric(vertical: 8),
         children: [
-          if (_enabled)
+          if (_enabled) ...[
             SyncPairIndicator(
               thisDevice: thisDeviceId,
               peer: peerDeviceId,
               status: lastStatus,
             ),
+            // The primary action lives HERE, with the picture it acts on, and
+            // not four rows below the switch where it used to be. Adding the
+            // indicator above pushed that row off a phone screen entirely —
+            // "no hay ningún botón de Sincronizar ahora" — so the widget meant
+            // to make sync legible had hidden its only control.
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+              child: FilledButton.icon(
+                onPressed: onSyncNow,
+                icon: const Icon(Icons.sync),
+                label: const Text('Sincronizar ahora'),
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              child: Text(
+                'Funciona también con datos móviles. La automática espera Wi-Fi.',
+                style: text.bodySmall,
+                textAlign: TextAlign.center,
+              ),
+            ),
+          ],
           _StatusTile(connectivity: connectivity, scheme: scheme),
           const Divider(),
 
           SwitchListTile(
             value: _enabled,
-            onChanged: (want) => want ? onEnable() : onDisable(),
+            // Null while unknown: disables the tile, so the state cannot be
+            // flipped from a value we have not actually read yet.
+            onChanged: enablementKnown
+                ? (want) => want ? onEnable() : onDisable()
+                : null,
             title: const Text('Sincronizar entre mis dispositivos'),
-            subtitle: const Text(
-              'Tus dispositivos comparten la misma información. Todo viaja '
-              'cifrado y el servidor no puede leerlo.',
+            subtitle: Text(
+              enablementKnown
+                  ? 'Tus dispositivos comparten la misma información. Todo '
+                      'viaja cifrado y el servidor no puede leerlo.'
+                  : 'Comprobando…',
             ),
           ),
 
@@ -101,17 +138,6 @@ class SyncSettingsScreen extends StatelessWidget {
               leading: const Icon(Icons.schedule),
               title: const Text('Última sincronización'),
               subtitle: Text(lastSyncLine),
-            ),
-            ListTile(
-              leading: const Icon(Icons.sync),
-              title: const Text('Sincronizar ahora'),
-              // Manual sync runs on cellular too: the user asked. Said here so
-              // nobody is surprised by the data it may use.
-              subtitle: const Text(
-                'Funciona también con datos móviles. La sincronización '
-                'automática espera a que haya Wi-Fi.',
-              ),
-              onTap: onSyncNow,
             ),
             ListTile(
               leading: const Icon(Icons.history_toggle_off),
