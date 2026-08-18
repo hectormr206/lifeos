@@ -355,6 +355,11 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// model-free and store-free, so an ordinary message goes straight to the
   /// model with no extra async hop or store read.
   Future<void> _answer(String text, ChatMessage userMessage) {
+    // A stated BOND is stored before anything else looks at the turn. The
+    // generic capture accepted the sentence and wrote nothing from it, so being
+    // told about someone's sister left no trace at all.
+    final bond = kinshipStatement(text);
+    if (bond != null) return _rememberBondOrModel(bond, text, userMessage);
     if (_looksCapturable(text)) return _captureThenAnswer(text, userMessage);
     // A KINSHIP question is answered from the graph, never by the model.
     //
@@ -369,6 +374,33 @@ class ChatNotifier extends Notifier<ChatUiState> {
       return _answerAboutPersonOrModel(text, userMessage);
     }
     return _sendTextToModel(text, userMessage);
+  }
+
+  /// Store a stated bond; fall back to the model if it could not be written.
+  Future<void> _rememberBondOrModel(
+    ({String bond, String name}) stated,
+    String text,
+    ChatMessage userMessage,
+  ) async {
+    try {
+      final ack = await ref
+          .read(chatContextBuilderProvider)
+          .rememberKinship(bond: stated.bond, name: stated.name);
+      // Null means nothing was stored: never acknowledge a save that did not
+      // happen — that is the one lie this codebase treats as unforgivable.
+      if (ack == null) return _sendTextToModel(text, userMessage);
+      if (_disposed) return;
+      final reply = ChatMessage(
+        id: 'bond-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: ack,
+        timestamp: DateTime.now(),
+      );
+      state = state.copyWith(messages: [...state.messages, reply]);
+      _persist(reply);
+    } catch (_) {
+      return _sendTextToModel(text, userMessage);
+    }
   }
 
   /// Try the deterministic person answer; hand over to the model if unsure.

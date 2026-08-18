@@ -719,6 +719,41 @@ class ChatContextBuilder {
     return byUuid.values.toList();
   }
 
+  /// Store a bond the user just stated, and confirm it.
+  ///
+  /// "Mi hermana se llama Laura" passed the capture triage and produced no
+  /// entry, so nothing was written — and the next turn Axi honestly said it did
+  /// not know her. Being told about someone's sister and forgetting is the
+  /// plainest failure a memory can have.
+  ///
+  /// Writes BOTH: the person hub (so the bond is a real edge in the graph and
+  /// the 3D brain draws it) and a readable fact (so recall can quote it).
+  /// Returns the acknowledgment, or null when nothing could be stored — the
+  /// caller then lets the model answer rather than claiming a save that did not
+  /// happen.
+  Future<String?> rememberKinship({
+    required String bond,
+    required String name,
+  }) async {
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return null;
+      await deps.writer.learnPersonName(bond, name: name);
+      await deps.writer.writeFact(
+        domain: null,
+        label: languageCode() == 'en'
+            ? 'your $bond is called $name'
+            : 'tu $bond se llama $name',
+        subject: bond,
+      );
+      return languageCode() == 'en'
+          ? 'Noted: your $bond is $name.'
+          : 'Anotado: tu $bond es $name.';
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// The remembered lines that mention [name], already in the second person.
   ///
   /// Used by the deterministic kinship answer, which reads the bond straight

@@ -108,3 +108,43 @@ String? answerAboutPerson({
   final bond = found.first;
   return en ? '$name is your $bond.' : '$name es tu $bond.';
 }
+
+/// A kinship STATEMENT and what it says: ("hermana", "Laura").
+///
+/// "Mi hermana se llama Laura" reached the capture triage and produced no
+/// entry, so nothing was stored — and the next turn Axi correctly said it did
+/// not know her. Telling someone about your sister and having it forgotten is
+/// the plainest possible failure of a memory.
+///
+/// Statements only. A question ("¿quién es Laura?") returns null: that belongs
+/// to [personAskedAbout], and treating it as a statement would store the
+/// question as if it were a fact.
+({String bond, String name})? kinshipStatement(String message) {
+  if (RegExp(r'[?¿]').hasMatch(message)) return null;
+
+  final bonds = _bondsEs.keys.map(RegExp.escape).join('|');
+  final patterns = <RegExp>[
+    // "mi hermana se llama Laura" / "my sister is called Laura"
+    RegExp('\\b(?:mi|my)\\s+($bonds)\\s+(?:se\\s+llama|is\\s+called|is)\\s+'
+        r'([\p{Lu}][\p{L}]+)', unicode: true, caseSensitive: false),
+    // "Laura es mi hermana" / "Laura is my sister"
+    RegExp(r'([\p{Lu}][\p{L}]+)\s+(?:es|is)\s+(?:mi|my)\s+'
+        '($bonds)', unicode: true, caseSensitive: false),
+  ];
+
+  for (var i = 0; i < patterns.length; i++) {
+    final m = patterns[i].firstMatch(message);
+    if (m == null) continue;
+    final bond = (i == 0 ? m.group(1) : m.group(2))!.toLowerCase();
+    final name = (i == 0 ? m.group(2) : m.group(1))!;
+    // `caseSensitive: false` makes `\p{Lu}` match lowercase too, so the capital
+    // is checked here instead: without it "mi hermana se llama como mi abuela"
+    // stored a person called "como".
+    if (name[0].toUpperCase() != name[0] ||
+        name[0].toLowerCase() == name[0]) {
+      continue;
+    }
+    return (bond: _bondsEs[bond] ?? bond, name: name);
+  }
+  return null;
+}

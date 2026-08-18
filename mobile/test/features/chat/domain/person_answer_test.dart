@@ -109,4 +109,43 @@ void main() {
       );
     });
   });
+
+  group('learning a bond from a statement', () {
+    // The other half of the hole. The QUESTION was answered correctly ("No sé
+    // quién es Laura") precisely because the STATEMENT that should have taught
+    // it was never stored. Being told about someone's sister and forgetting is
+    // the plainest failure a memory can have.
+
+    test('"mi hermana se llama Laura"', () {
+      final r = kinshipStatement('mi hermana se llama Laura')!;
+      expect(r.bond, 'hermana');
+      expect(r.name, 'Laura');
+    });
+
+    test('"Laura es mi hermana"', () {
+      final r = kinshipStatement('Laura es mi hermana')!;
+      expect(r.bond, 'hermana');
+      expect(r.name, 'Laura');
+    });
+
+    test('English', () {
+      final r = kinshipStatement('my sister is called Laura')!;
+      expect(r.bond, 'hermana');
+      expect(r.name, 'Laura');
+    });
+
+    test('a QUESTION is never a statement', () {
+      // Storing the question as a fact would teach it something nobody said.
+      expect(kinshipStatement('¿quién es Laura?'), isNull);
+      expect(kinshipStatement('que relacion tengo con Laura'), isNull);
+    });
+
+    test('a sentence with no bond word is not one', () {
+      expect(kinshipStatement('Laura trabaja en marketing'), isNull);
+    });
+
+    test('a lowercase word is not taken for a name', () {
+      expect(kinshipStatement('mi hermana se llama como mi abuela'), isNull);
+    });
+  });
 }
