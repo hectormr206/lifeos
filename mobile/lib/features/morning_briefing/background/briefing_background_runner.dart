@@ -89,7 +89,9 @@ class BriefingBackgroundDeps {
 /// the whole run sits under a hard [BriefingBackgroundDeps.timeout]. Always
 /// returns `true` so WorkManager NEVER retry-loops a failed generation — the
 /// reminder + generate-on-open fallback is the recovery path.
-Future<bool> runMorningBriefingBackgroundTask(BriefingBackgroundDeps deps) async {
+Future<bool> runMorningBriefingBackgroundTask(
+  BriefingBackgroundDeps deps,
+) async {
   try {
     await _run(deps).timeout(deps.timeout);
   } catch (_) {
@@ -104,7 +106,9 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   final schedule = await deps.preferences.schedule();
   final location = await _locationSafely(deps);
   final base = deps.now();
-  final nowInZone = location == null ? base : tz.TZDateTime.from(base, location);
+  final nowInZone = location == null
+      ? base
+      : tz.TZDateTime.from(base, location);
   final last = await _lastBriefingSafely(deps);
 
   final due = schedule.shouldRunNow(
@@ -120,8 +124,15 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   }
 
   final sources = await deps.preferences.sources();
-  final harvests = await deps.harvester.harvestAll(sources);
-  final assembled = deps.assembler.assemble(harvests, now: base, generatedAt: base);
+  // The harvester fetches URLs; the section is what the user reads them under.
+  final harvests = await deps.harvester.harvestAll([
+    for (final s in sources) s.url,
+  ]);
+  final assembled = deps.assembler.assemble(
+    harvests,
+    now: base,
+    generatedAt: base,
+  );
   if (assembled.isEmpty) {
     // No fresh news: skip cleanly (the foreground path will report the empty
     // state if the user opens the app); keep the chain armed for tomorrow.
@@ -141,7 +152,10 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
         translator: OnDeviceTranslator(engine),
         extractor: deps.harvester.extractor,
       );
-      briefing = await pipeline.translateAll(assembled, languageCode: await deps.languageCode());
+      briefing = await pipeline.translateAll(
+        assembled,
+        languageCode: await deps.languageCode(),
+      );
       // Then write the briefs the feeds never carried, while the model is
       // still loaded. Both stages finish BEFORE the notification below, so
       // "tu boletín está listo" is only ever said about a finished briefing —
@@ -156,7 +170,9 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
     } finally {
       try {
         await engine.dispose();
-      } catch (_) {/* best-effort release */}
+      } catch (_) {
+        /* best-effort release */
+      }
     }
   }
 
@@ -166,10 +182,14 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   // redundant — remove it from the shade before announcing the result.
   try {
     await deps.reminderScheduler.cancelReminder();
-  } catch (_) {/* best-effort */}
+  } catch (_) {
+    /* best-effort */
+  }
   try {
     await deps.notifications.showBriefingReady();
-  } catch (_) {/* the briefing is persisted either way */}
+  } catch (_) {
+    /* the briefing is persisted either way */
+  }
 
   await _rearm(deps, schedule, location, lastGeneratedAt: briefing.generatedAt);
 }
@@ -189,10 +209,17 @@ Future<void> _rearm(
     return;
   }
   final base = deps.now();
-  final nowInZone = location == null ? base : tz.TZDateTime.from(base, location);
-  final next =
-      schedule.nextRun(nowInZone, lastGeneratedAt: lastGeneratedAt, location: location);
-  await deps.reminderScheduler.scheduleReminder(next.add(kBriefingReminderGrace));
+  final nowInZone = location == null
+      ? base
+      : tz.TZDateTime.from(base, location);
+  final next = schedule.nextRun(
+    nowInZone,
+    lastGeneratedAt: lastGeneratedAt,
+    location: location,
+  );
+  await deps.reminderScheduler.scheduleReminder(
+    next.add(kBriefingReminderGrace),
+  );
   await deps.backgroundWork.scheduleOneOff(next.difference(base));
 }
 
@@ -216,7 +243,9 @@ Future<tz.Location?> _locationSafely(BriefingBackgroundDeps deps) async {
   }
 }
 
-Future<OnDeviceBriefing?> _lastBriefingSafely(BriefingBackgroundDeps deps) async {
+Future<OnDeviceBriefing?> _lastBriefingSafely(
+  BriefingBackgroundDeps deps,
+) async {
   try {
     return await deps.preferences.lastBriefing();
   } catch (_) {

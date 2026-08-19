@@ -75,7 +75,10 @@ class BriefingBriefWriter {
   }) async {
     try {
       final pending = briefing.articles
-          .where((a) => a.displayDescription.trim().isEmpty && a.url.trim().isNotEmpty)
+          .where(
+            (a) =>
+                a.displayDescription.trim().isEmpty && a.url.trim().isNotEmpty,
+          )
           .take(maxItemsPerRun)
           .toList(growable: false);
       if (pending.isEmpty) return briefing;

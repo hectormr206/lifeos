@@ -16,7 +16,10 @@ import 'morning_briefing.dart';
 /// given (original, untranslated text); a per-source failure keeps that
 /// source's native text while the rest are still translated.
 class BriefingTranslationPipeline {
-  const BriefingTranslationPipeline({required this.translator, required this.extractor});
+  const BriefingTranslationPipeline({
+    required this.translator,
+    required this.extractor,
+  });
 
   final OnDeviceTranslator translator;
   final SourceContentExtractor extractor;
@@ -92,7 +95,9 @@ class BriefingTranslationPipeline {
     String languageCode, {
     void Function(EngineFailureDetail detail)? onEngineFailure,
   }) async {
-    final articles = briefing.articles.where((a) => a.sourceName == sourceName).toList();
+    final articles = briefing.articles
+        .where((a) => a.sourceName == sourceName)
+        .toList();
     if (articles.isEmpty) return briefing;
 
     // Cheap same-language detection, decided PER ARTICLE.
@@ -147,7 +152,9 @@ class BriefingTranslationPipeline {
         current.copyWith(
           translatedTitle: t,
           // Only carry a translated brief when the item actually had one.
-          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty ? d : null,
+          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty
+              ? d
+              : null,
         ),
       );
     }
@@ -163,7 +170,10 @@ class BriefingTranslationPipeline {
     final lower = text.toLowerCase();
     if (lower.trim().isEmpty) return true; // nothing to translate
     final hasEsChars = RegExp(r'[áéíóúñ¿¡]').hasMatch(lower);
-    final words = lower.split(RegExp(r'[^a-z]+')).where((w) => w.length > 1).toList();
+    final words = lower
+        .split(RegExp(r'[^a-z]+'))
+        .where((w) => w.length > 1)
+        .toList();
     var es = 0, en = 0;
     for (final w in words) {
       if (_esStop.contains(w)) es++;
@@ -175,11 +185,58 @@ class BriefingTranslationPipeline {
   }
 
   static const Set<String> _esStop = {
-    'de', 'la', 'el', 'que', 'en', 'los', 'del', 'las', 'por', 'una', 'para', 'con', 'su', 'al',
-    'un', 'como', 'más', 'pero', 'sus', 'le', 'ya', 'este', 'sí', 'porque', 'esta', 'son',
+    'de',
+    'la',
+    'el',
+    'que',
+    'en',
+    'los',
+    'del',
+    'las',
+    'por',
+    'una',
+    'para',
+    'con',
+    'su',
+    'al',
+    'un',
+    'como',
+    'más',
+    'pero',
+    'sus',
+    'le',
+    'ya',
+    'este',
+    'sí',
+    'porque',
+    'esta',
+    'son',
   };
   static const Set<String> _enStop = {
-    'the', 'of', 'and', 'to', 'in', 'for', 'is', 'on', 'with', 'that', 'it', 'as', 'are', 'at',
-    'by', 'an', 'be', 'this', 'from', 'or', 'was', 'how', 'why', 'new', 'your',
+    'the',
+    'of',
+    'and',
+    'to',
+    'in',
+    'for',
+    'is',
+    'on',
+    'with',
+    'that',
+    'it',
+    'as',
+    'are',
+    'at',
+    'by',
+    'an',
+    'be',
+    'this',
+    'from',
+    'or',
+    'was',
+    'how',
+    'why',
+    'new',
+    'your',
   };
 }

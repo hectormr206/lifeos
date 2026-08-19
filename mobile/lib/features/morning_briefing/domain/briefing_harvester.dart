@@ -6,7 +6,8 @@ import 'source_fetcher.dart';
 /// same browser-like [SourceFetcher] as the feeds; parsed by
 /// [SourceContentExtractor.parseHackerNews]. Each item keeps its `objectID`, so
 /// the on-demand "Ver resumen de comentarios" action can fetch the thread.
-const String hnFrontPageUrl = 'https://hn.algolia.com/api/v1/search?tags=front_page';
+const String hnFrontPageUrl =
+    'https://hn.algolia.com/api/v1/search?tags=front_page';
 
 /// The HN Algolia single-item (comments thread) endpoint prefix.
 const String hnItemUrlPrefix = 'https://hn.algolia.com/api/v1/items/';
@@ -49,7 +50,9 @@ class BriefingHarvester {
     try {
       final body = await fetcher.fetch(url);
       final feed = extractor.parseFeed(body, url: url);
-      final name = feed.sourceTitle.trim().isEmpty ? hostLabel(url) : feed.sourceTitle.trim();
+      final name = feed.sourceTitle.trim().isEmpty
+          ? hostLabel(url)
+          : feed.sourceTitle.trim();
       return SourceHarvest(name: name, items: feed.items);
     } catch (_) {
       return SourceHarvest(name: hostLabel(url), failed: true);

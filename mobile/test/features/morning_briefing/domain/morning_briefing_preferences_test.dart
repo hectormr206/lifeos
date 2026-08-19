@@ -4,6 +4,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_source.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing_preferences.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -20,8 +21,15 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final prefs = SharedPrefsMorningBriefingPreferences();
 
-    await prefs.setSources(['https://a.com/rss', 'https://b.com/feed']);
-    expect(await prefs.sources(), ['https://a.com/rss', 'https://b.com/feed']);
+    await prefs.setSources(const [
+      BriefingSource(url: 'https://a.com/rss', section: 'Mundo'),
+      BriefingSource(url: 'https://b.com/feed', section: 'Linux'),
+    ]);
+
+    expect(await prefs.sources(), const [
+      BriefingSource(url: 'https://a.com/rss', section: 'Mundo'),
+      BriefingSource(url: 'https://b.com/feed', section: 'Linux'),
+    ]);
   });
 
   test('honors a deliberately empty source list', () async {

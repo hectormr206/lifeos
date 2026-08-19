@@ -15,7 +15,8 @@ library;
 
 import '../../local_model/domain/engine_failure_detail.dart';
 
-export '../../local_model/domain/engine_failure_detail.dart' show EngineFailureDetail, LlmEngineCall;
+export '../../local_model/domain/engine_failure_detail.dart'
+    show EngineFailureDetail, LlmEngineCall;
 
 enum SummaryFailure {
   /// There is no model on the device at all. Nothing can be summarized until
@@ -63,14 +64,14 @@ enum SummaryRecovery {
 
 extension SummaryFailureRecovery on SummaryFailure {
   SummaryRecovery get recovery => switch (this) {
-        SummaryFailure.modelMissing => SummaryRecovery.installModel,
-        SummaryFailure.pageUnreadable || SummaryFailure.commentsMissing => SummaryRecovery.none,
-        SummaryFailure.modelUnavailable ||
-        SummaryFailure.pageUnavailable ||
-        SummaryFailure.emptyGeneration ||
-        SummaryFailure.unknown =>
-          SummaryRecovery.retry,
-      };
+    SummaryFailure.modelMissing => SummaryRecovery.installModel,
+    SummaryFailure.pageUnreadable ||
+    SummaryFailure.commentsMissing => SummaryRecovery.none,
+    SummaryFailure.modelUnavailable ||
+    SummaryFailure.pageUnavailable ||
+    SummaryFailure.emptyGeneration ||
+    SummaryFailure.unknown => SummaryRecovery.retry,
+  };
 }
 
 /// Thrown inside the on-demand summary job to carry the identified cause out
@@ -125,5 +126,6 @@ class SummaryAttemptFailure {
   int get hashCode => Object.hash(failure, attempt, detail);
 
   @override
-  String toString() => 'SummaryAttemptFailure(${failure.name}, attempt: $attempt)';
+  String toString() =>
+      'SummaryAttemptFailure(${failure.name}, attempt: $attempt)';
 }

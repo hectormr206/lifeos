@@ -1,31 +1,8 @@
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'briefing_schedule.dart';
+import 'briefing_source.dart';
 import 'morning_briefing.dart';
-
-/// Starting news sources (RSS/Atom feeds), seeded from the laptop LifeOS
-/// briefing config (axi/src/axi/briefing.py). The user can change or remove
-/// them. Kept feed-first because the pipeline extracts feeds most reliably;
-/// the laptop's Hacker News source is omitted (it uses a special HN-Algolia
-/// adapter the on-device pipeline doesn't have yet).
-///
-/// NOTE for distribution: curate a GLOBAL default set later — several of these
-/// are ES/MX-specific and new users (e.g. shared installs) may be elsewhere.
-const List<String> defaultBriefingSources = [
-  // General / world (Spanish)
-  'https://feeds.bbci.co.uk/mundo/rss.xml',
-  // Mexico
-  'https://expansion.mx/rss',
-  // AI (English)
-  'https://simonwillison.net/atom/everything/',
-  'https://huggingface.co/blog/feed.xml',
-  // Linux (Spanish)
-  'https://www.muylinux.com/feed/',
-  'https://soploslinux.com/feed/',
-  'https://www.linuxadictos.com/feed/',
-  'https://blog.desdelinux.net/feed/',
-  'https://www.xn--linuxenespaol-skb.com/feed/',
-];
 
 /// Local-only persistence for the ON-DEVICE morning briefing: the user's list
 /// of news-source URLs plus the last briefing the model produced (so it
@@ -38,9 +15,9 @@ const List<String> defaultBriefingSources = [
 abstract class MorningBriefingPreferences {
   /// The configured news-source URLs (seeded with [defaultBriefingSources] the
   /// first time, before the user has customized anything).
-  Future<List<String>> sources();
+  Future<List<BriefingSource>> sources();
 
-  Future<void> setSources(List<String> urls);
+  Future<void> setSources(List<BriefingSource> sources);
 
   /// The last briefing the on-device pipeline produced, or null if never run.
   Future<OnDeviceBriefing?> lastBriefing();
@@ -55,8 +32,10 @@ abstract class MorningBriefingPreferences {
 }
 
 /// [MorningBriefingPreferences] backed by `shared_preferences`.
-class SharedPrefsMorningBriefingPreferences implements MorningBriefingPreferences {
-  SharedPrefsMorningBriefingPreferences({SharedPreferences? prefs}) : _prefs = prefs; // ignore: prefer_initializing_formals
+class SharedPrefsMorningBriefingPreferences
+    implements MorningBriefingPreferences {
+  SharedPrefsMorningBriefingPreferences({SharedPreferences? prefs})
+    : _prefs = prefs; // ignore: prefer_initializing_formals
 
   static const String sourcesKey = 'morning_briefing_sources';
   static const String lastBriefingKey = 'morning_briefing_last';
@@ -66,18 +45,27 @@ class SharedPrefsMorningBriefingPreferences implements MorningBriefingPreference
 
   SharedPreferences? _prefs;
 
-  Future<SharedPreferences> get _instance async => _prefs ??= await SharedPreferences.getInstance();
+  Future<SharedPreferences> get _instance async =>
+      _prefs ??= await SharedPreferences.getInstance();
 
   @override
-  Future<List<String>> sources() async {
+  Future<List<BriefingSource>> sources() async {
     final p = await _instance;
     // Absent key (first run) → seed with defaults; an empty list the user
     // deliberately saved is honored as empty.
-    return p.getStringList(sourcesKey) ?? List<String>.from(defaultBriefingSources);
+    final stored = p.getStringList(sourcesKey);
+    // Lines saved before sections existed are bare URLs; `decode` reads them
+    // as "General" rather than dropping a list the user curated by hand.
+    if (stored == null)
+      return List<BriefingSource>.from(defaultBriefingSources);
+    return [for (final line in stored) BriefingSource.decode(line)];
   }
 
   @override
-  Future<void> setSources(List<String> urls) async => (await _instance).setStringList(sourcesKey, urls);
+  Future<void> setSources(List<BriefingSource> sources) async =>
+      (await _instance).setStringList(sourcesKey, [
+        for (final s in sources) s.encode(),
+      ]);
 
   @override
   Future<OnDeviceBriefing?> lastBriefing() async {

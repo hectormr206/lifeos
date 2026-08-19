@@ -35,8 +35,8 @@ class LocalBriefingScheduler implements BriefingScheduler {
   LocalBriefingScheduler({
     FlutterLocalNotificationsPlugin? plugin,
     AppNotifications? notifications,
-  })  : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
-        _notifications = notifications ?? AppNotifications.instance;
+  }) : _plugin = plugin ?? FlutterLocalNotificationsPlugin(),
+       _notifications = notifications ?? AppNotifications.instance;
 
   final FlutterLocalNotificationsPlugin _plugin;
   final AppNotifications _notifications;
@@ -56,7 +56,8 @@ class LocalBriefingScheduler implements BriefingScheduler {
       _notifications.registerTapHandler(payload, onTap);
 
   @override
-  Future<bool> launchedByTap() async => await _notifications.launchedByTap() == payload;
+  Future<bool> launchedByTap() async =>
+      await _notifications.launchedByTap() == payload;
 
   @override
   Future<void> scheduleReminder(DateTime when) async {

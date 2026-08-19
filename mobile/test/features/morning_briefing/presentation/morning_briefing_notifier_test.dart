@@ -1044,9 +1044,14 @@ void main() {
     final notifier = container.read(morningBriefingNotifierProvider.notifier);
     await notifier.ready;
 
-    await notifier.addSource('https://new.com/rss');
-    expect(container.read(morningBriefingNotifierProvider).sources, ['https://new.com/rss']);
-    await notifier.addSource('https://new.com/rss');
+    await notifier.addSource('https://new.com/rss', section: 'Mundo');
+    expect(
+      [for (final s in container.read(morningBriefingNotifierProvider).sources) s.url],
+      ['https://new.com/rss'],
+    );
+    // The same feed under a DIFFERENT section is still the same feed: adding
+    // it twice would fetch it twice and read it to the user twice.
+    await notifier.addSource('https://new.com/rss', section: 'Linux');
     expect(container.read(morningBriefingNotifierProvider).sources.length, 1);
     await notifier.removeSource('https://new.com/rss');
     expect(container.read(morningBriefingNotifierProvider).sources, isEmpty);

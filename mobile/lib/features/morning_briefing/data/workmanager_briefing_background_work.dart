@@ -31,7 +31,7 @@ const String morningBriefingUniqueWorkName = 'lifeos_morning_briefing_oneoff';
 ///     (tests) / WorkManager unavailable must never break the caller.
 class WorkmanagerBriefingBackgroundWork implements BriefingBackgroundWork {
   WorkmanagerBriefingBackgroundWork({Workmanager? workmanager})
-      : _workmanager = workmanager ?? Workmanager();
+    : _workmanager = workmanager ?? Workmanager();
 
   final Workmanager _workmanager;
 

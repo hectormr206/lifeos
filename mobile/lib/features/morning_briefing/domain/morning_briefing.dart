@@ -89,7 +89,9 @@ class BriefingArticle {
   /// The headline to render: the cached translation when present, else the
   /// feed-native [title] (never blank — the translation fallback).
   String get displayTitle =>
-      (translatedTitle != null && translatedTitle!.trim().isNotEmpty) ? translatedTitle! : title;
+      (translatedTitle != null && translatedTitle!.trim().isNotEmpty)
+      ? translatedTitle!
+      : title;
 
   /// The brief to render — the ladder that keeps a card from ever being blank,
   /// in strict preference order:
@@ -105,7 +107,8 @@ class BriefingArticle {
   /// The feed always outranks the model, and the model always outranks a raw
   /// excerpt: a real summary beats a written one, which beats a first paragraph.
   String get displayDescription {
-    if (translatedDescription != null && translatedDescription!.trim().isNotEmpty) {
+    if (translatedDescription != null &&
+        translatedDescription!.trim().isNotEmpty) {
       return translatedDescription!;
     }
     if (description.trim().isNotEmpty) return description;
@@ -124,38 +127,39 @@ class BriefingArticle {
     String? translatedDescription,
     String? generatedBrief,
     String? sourceExcerpt,
-  }) =>
-      BriefingArticle(
-        sourceName: sourceName,
-        title: title,
-        url: url,
-        description: description,
-        publishedAt: publishedAt,
-        hnObjectId: hnObjectId,
-        fullSummary: fullSummary ?? this.fullSummary,
-        commentsSummary: commentsSummary ?? this.commentsSummary,
-        translatedTitle: translatedTitle ?? this.translatedTitle,
-        translatedDescription: translatedDescription ?? this.translatedDescription,
-        generatedBrief: generatedBrief ?? this.generatedBrief,
-        sourceExcerpt: sourceExcerpt ?? this.sourceExcerpt,
-      );
+  }) => BriefingArticle(
+    sourceName: sourceName,
+    title: title,
+    url: url,
+    description: description,
+    publishedAt: publishedAt,
+    hnObjectId: hnObjectId,
+    fullSummary: fullSummary ?? this.fullSummary,
+    commentsSummary: commentsSummary ?? this.commentsSummary,
+    translatedTitle: translatedTitle ?? this.translatedTitle,
+    translatedDescription: translatedDescription ?? this.translatedDescription,
+    generatedBrief: generatedBrief ?? this.generatedBrief,
+    sourceExcerpt: sourceExcerpt ?? this.sourceExcerpt,
+  );
 
   Map<String, dynamic> toJson() => {
-        'sourceName': sourceName,
-        'title': title,
-        'url': url,
-        'description': description,
-        if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
-        if (hnObjectId != null) 'hnObjectId': hnObjectId,
-        if (fullSummary != null) 'fullSummary': fullSummary,
-        if (commentsSummary != null) 'commentsSummary': commentsSummary,
-        if (translatedTitle != null) 'translatedTitle': translatedTitle,
-        if (translatedDescription != null) 'translatedDescription': translatedDescription,
-        if (generatedBrief != null) 'generatedBrief': generatedBrief,
-        if (sourceExcerpt != null) 'sourceExcerpt': sourceExcerpt,
-      };
+    'sourceName': sourceName,
+    'title': title,
+    'url': url,
+    'description': description,
+    if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
+    if (hnObjectId != null) 'hnObjectId': hnObjectId,
+    if (fullSummary != null) 'fullSummary': fullSummary,
+    if (commentsSummary != null) 'commentsSummary': commentsSummary,
+    if (translatedTitle != null) 'translatedTitle': translatedTitle,
+    if (translatedDescription != null)
+      'translatedDescription': translatedDescription,
+    if (generatedBrief != null) 'generatedBrief': generatedBrief,
+    if (sourceExcerpt != null) 'sourceExcerpt': sourceExcerpt,
+  };
 
-  factory BriefingArticle.fromJson(Map<String, dynamic> json) => BriefingArticle(
+  factory BriefingArticle.fromJson(Map<String, dynamic> json) =>
+      BriefingArticle(
         sourceName: (json['sourceName'] as String?) ?? '',
         title: (json['title'] as String?) ?? '',
         url: (json['url'] as String?) ?? '',
@@ -187,9 +191,20 @@ class BriefingArticle {
       other.sourceExcerpt == sourceExcerpt;
 
   @override
-  int get hashCode => Object.hash(sourceName, title, url, description, publishedAt, hnObjectId,
-      fullSummary, commentsSummary, translatedTitle, translatedDescription, generatedBrief,
-      sourceExcerpt);
+  int get hashCode => Object.hash(
+    sourceName,
+    title,
+    url,
+    description,
+    publishedAt,
+    hnObjectId,
+    fullSummary,
+    commentsSummary,
+    translatedTitle,
+    translatedDescription,
+    generatedBrief,
+    sourceExcerpt,
+  );
 }
 
 /// A run of consecutive articles that share a source, for the grouped card UI
@@ -233,14 +248,17 @@ class OnDeviceBriefing {
       if (out.isNotEmpty && out.last.sourceName == article.sourceName) {
         out.last.articles.add(article);
       } else {
-        out.add(BriefingGroup(sourceName: article.sourceName, articles: [article]));
+        out.add(
+          BriefingGroup(sourceName: article.sourceName, articles: [article]),
+        );
       }
     }
     return out;
   }
 
   /// Returns a copy with the article identified by [key] replaced by [updated].
-  OnDeviceBriefing replaceArticle(String key, BriefingArticle updated) => OnDeviceBriefing(
+  OnDeviceBriefing replaceArticle(String key, BriefingArticle updated) =>
+      OnDeviceBriefing(
         articles: articles.map((a) => a.key == key ? updated : a).toList(),
         skippedSources: skippedSources,
         generatedAt: generatedAt,
@@ -254,19 +272,22 @@ class OnDeviceBriefing {
   }
 
   Map<String, dynamic> toJson() => {
-        'articles': articles.map((a) => a.toJson()).toList(),
-        'skippedSources': skippedSources,
-        'generatedAt': generatedAt.toIso8601String(),
-      };
+    'articles': articles.map((a) => a.toJson()).toList(),
+    'skippedSources': skippedSources,
+    'generatedAt': generatedAt.toIso8601String(),
+  };
 
-  factory OnDeviceBriefing.fromJson(Map<String, dynamic> json) => OnDeviceBriefing(
+  factory OnDeviceBriefing.fromJson(Map<String, dynamic> json) =>
+      OnDeviceBriefing(
         articles: ((json['articles'] as List<dynamic>?) ?? const [])
             .map((e) => BriefingArticle.fromJson(e as Map<String, dynamic>))
             .toList(),
         skippedSources: ((json['skippedSources'] as List<dynamic>?) ?? const [])
             .map((e) => e.toString())
             .toList(),
-        generatedAt: DateTime.tryParse((json['generatedAt'] as String?) ?? '') ?? DateTime.now(),
+        generatedAt:
+            DateTime.tryParse((json['generatedAt'] as String?) ?? '') ??
+            DateTime.now(),
       );
 
   /// Round-trips through [toJson] for shared_preferences string storage.
@@ -281,7 +302,8 @@ class OnDeviceBriefing {
       final briefing = OnDeviceBriefing.fromJson(decoded);
       // A legacy payload (old {intro, items:[{sourceTitle,summary}]} shape) has
       // no `articles`, so it decodes to an empty briefing → treat as no cache.
-      if (briefing.articles.isEmpty && !decoded.containsKey('articles')) return null;
+      if (briefing.articles.isEmpty && !decoded.containsKey('articles'))
+        return null;
       return briefing;
     } catch (_) {
       return null;
@@ -296,8 +318,11 @@ class OnDeviceBriefing {
       other.generatedAt == generatedAt;
 
   @override
-  int get hashCode =>
-      Object.hash(Object.hashAll(articles), Object.hashAll(skippedSources), generatedAt);
+  int get hashCode => Object.hash(
+    Object.hashAll(articles),
+    Object.hashAll(skippedSources),
+    generatedAt,
+  );
 }
 
 bool _listEquals(List<BriefingArticle> a, List<BriefingArticle> b) {

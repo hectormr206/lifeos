@@ -3,6 +3,7 @@ import 'package:lifeos/features/morning_briefing/domain/briefing_notifications.d
 import 'package:lifeos/features/morning_briefing/domain/briefing_schedule.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_source.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing_preferences.dart';
 import 'package:lifeos/features/morning_briefing/domain/source_fetcher.dart';
 
@@ -90,11 +91,17 @@ class FakeMorningBriefingPreferences implements MorningBriefingPreferences {
     List<String>? initialSources,
     OnDeviceBriefing? initialBriefing,
     BriefingSchedule? initialSchedule,
-  })  : _sources = initialSources ?? const [],
+  })  : // Still written as bare URLs by the suites that predate sections:
+        // those tests are about scheduling and harvesting, and should not have
+        // to learn a new shape to keep testing what they test.
+        _sources = [
+          for (final url in initialSources ?? const <String>[])
+            BriefingSource(url: url, section: kDefaultBriefingSection),
+        ],
         _lastBriefing = initialBriefing,
         _schedule = initialSchedule ?? const BriefingSchedule();
 
-  List<String> _sources;
+  List<BriefingSource> _sources;
   OnDeviceBriefing? _lastBriefing;
   BriefingSchedule _schedule;
   int saveCount = 0;
@@ -102,11 +109,12 @@ class FakeMorningBriefingPreferences implements MorningBriefingPreferences {
   int saveScheduleCount = 0;
 
   @override
-  Future<List<String>> sources() async => List<String>.from(_sources);
+  Future<List<BriefingSource>> sources() async =>
+      List<BriefingSource>.from(_sources);
 
   @override
-  Future<void> setSources(List<String> urls) async {
-    _sources = List<String>.from(urls);
+  Future<void> setSources(List<BriefingSource> sources) async {
+    _sources = List<BriefingSource>.from(sources);
     setSourcesCount++;
   }
 

@@ -8,8 +8,10 @@ import '../domain/source_fetcher.dart';
 /// timeouts + a plain UA keep it robust; the response is returned as text.
 class DioSourceFetcher implements SourceFetcher {
   DioSourceFetcher({Dio? dio})
-      : _dio = dio ??
-            Dio(BaseOptions(
+    : _dio =
+          dio ??
+          Dio(
+            BaseOptions(
               connectTimeout: const Duration(seconds: 12),
               receiveTimeout: const Duration(seconds: 12),
               // Accept any 2xx/3xx/4xx so we read the body rather than throwing
@@ -23,10 +25,12 @@ class DioSourceFetcher implements SourceFetcher {
               // return 403 to a bare bot UA but 200 to a browser-shaped one.
               headers: const {
                 'User-Agent': 'Mozilla/5.0 (Linux; Android 14) LifeOS',
-                'Accept': 'application/rss+xml, application/atom+xml, application/xml, '
+                'Accept':
+                    'application/rss+xml, application/atom+xml, application/xml, '
                     'application/json, text/html, */*',
               },
-            ));
+            ),
+          );
 
   final Dio _dio;
 

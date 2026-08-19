@@ -71,10 +71,17 @@ class MorningBriefingScreen extends ConsumerWidget {
             ? const SizedBox(
                 width: 18,
                 height: 18,
-                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: Colors.white,
+                ),
               )
             : const Icon(Icons.auto_awesome),
-        label: Text(state.isGenerating ? l10n.briefingGenerating : l10n.briefingGenerateNow),
+        label: Text(
+          state.isGenerating
+              ? l10n.briefingGenerating
+              : l10n.briefingGenerateNow,
+        ),
       ),
     );
   }
@@ -142,7 +149,9 @@ class _ProgressCard extends StatelessWidget {
               child: CircularProgressIndicator(strokeWidth: 2.5),
             ),
             const SizedBox(width: 16),
-            Expanded(child: Text(label, style: Theme.of(context).textTheme.bodyMedium)),
+            Expanded(
+              child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+            ),
           ],
         ),
       ),
@@ -167,7 +176,12 @@ class _ErrorCard extends StatelessWidget {
           children: [
             Icon(Icons.error_outline, color: scheme.onErrorContainer),
             const SizedBox(width: 12),
-            Expanded(child: Text(message, style: TextStyle(color: scheme.onErrorContainer))),
+            Expanded(
+              child: Text(
+                message,
+                style: TextStyle(color: scheme.onErrorContainer),
+              ),
+            ),
           ],
         ),
       ),
@@ -186,11 +200,23 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.only(top: 48),
       child: Column(
         children: [
-          const Icon(Icons.wb_sunny_outlined, size: 56, color: LifeOSColors.teal),
+          const Icon(
+            Icons.wb_sunny_outlined,
+            size: 56,
+            color: LifeOSColors.teal,
+          ),
           const SizedBox(height: 16),
-          Text(l10n.briefingEmptyTitle, style: textTheme.titleMedium, textAlign: TextAlign.center),
+          Text(
+            l10n.briefingEmptyTitle,
+            style: textTheme.titleMedium,
+            textAlign: TextAlign.center,
+          ),
           const SizedBox(height: 8),
-          Text(l10n.briefingEmptyBody, style: textTheme.bodyMedium, textAlign: TextAlign.center),
+          Text(
+            l10n.briefingEmptyBody,
+            style: textTheme.bodyMedium,
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );
@@ -213,7 +239,9 @@ class _BriefingHeader extends StatelessWidget {
         const SizedBox(height: 4),
         Text(
           l10n.briefingGeneratedAt(_formatTimestamp(briefing.generatedAt)),
-          style: textTheme.labelMedium?.copyWith(color: Theme.of(context).hintColor),
+          style: textTheme.labelMedium?.copyWith(
+            color: Theme.of(context).hintColor,
+          ),
         ),
       ],
     );
@@ -257,7 +285,9 @@ class _SourceSection extends StatelessWidget {
           leading: Container(width: 3, height: 20, color: LifeOSColors.teal),
           title: Text(
             '${group.sourceName} (${group.articles.length})',
-            style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
+            style: theme.textTheme.titleMedium?.copyWith(
+              fontWeight: FontWeight.w600,
+            ),
           ),
           childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
           children: [
@@ -304,7 +334,9 @@ class _TranslationFailedNote extends StatelessWidget {
         children: [
           Text(
             l10n.briefingTranslationFailed,
-            style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: LifeOSColors.pink,
+            ),
           ),
           EngineFailureDetails(detail: detail),
         ],
@@ -327,7 +359,9 @@ class _SkippedNote extends StatelessWidget {
       padding: const EdgeInsets.only(top: 20),
       child: Text(
         l10n.briefingSkippedSources(sources.join(', ')),
-        style: textTheme.labelMedium?.copyWith(color: Theme.of(context).hintColor),
+        style: textTheme.labelMedium?.copyWith(
+          color: Theme.of(context).hintColor,
+        ),
       ),
     );
   }
@@ -402,7 +436,9 @@ class _ArticleCardState extends State<_ArticleCard> {
               const SizedBox(height: 4),
               Text(
                 _formatDate(article.publishedAt!),
-                style: textTheme.labelSmall?.copyWith(color: Theme.of(context).hintColor),
+                style: textTheme.labelSmall?.copyWith(
+                  color: Theme.of(context).hintColor,
+                ),
               ),
             ],
             const SizedBox(height: 8),
@@ -427,7 +463,9 @@ class _ArticleCardState extends State<_ArticleCard> {
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Text(
                     l10n.briefingOpenArticle,
-                    style: textTheme.labelLarge?.copyWith(color: LifeOSColors.teal),
+                    style: textTheme.labelLarge?.copyWith(
+                      color: LifeOSColors.teal,
+                    ),
                   ),
                 ),
               ),
@@ -435,7 +473,9 @@ class _ArticleCardState extends State<_ArticleCard> {
             // On-demand full-article summary.
             if (article.url.isNotEmpty)
               _ActionRow(
-                label: _showSummary ? l10n.briefingHideFullSummary : l10n.briefingFullSummary,
+                label: _showSummary
+                    ? l10n.briefingHideFullSummary
+                    : l10n.briefingFullSummary,
                 color: LifeOSColors.teal,
                 onTap: _toggleSummary,
               ),
@@ -449,7 +489,11 @@ class _ArticleCardState extends State<_ArticleCard> {
                 failure: widget.summaryFailure,
                 failureMessage: widget.summaryFailure == null
                     ? null
-                    : _failureMessage(l10n, widget.summaryFailure!.failure, comments: false),
+                    : _failureMessage(
+                        l10n,
+                        widget.summaryFailure!.failure,
+                        comments: false,
+                      ),
                 slowBackend: widget.modelOnFallbackBackend,
                 slowBackendLabel: l10n.briefingModelSlowBackend,
                 onRetry: widget.onRequestSummary,
@@ -475,7 +519,11 @@ class _ArticleCardState extends State<_ArticleCard> {
                 failure: widget.commentsFailure,
                 failureMessage: widget.commentsFailure == null
                     ? null
-                    : _failureMessage(l10n, widget.commentsFailure!.failure, comments: true),
+                    : _failureMessage(
+                        l10n,
+                        widget.commentsFailure!.failure,
+                        comments: true,
+                      ),
                 slowBackend: widget.modelOnFallbackBackend,
                 slowBackendLabel: l10n.briefingModelSlowBackend,
                 onRetry: widget.onRequestComments,
@@ -496,21 +544,23 @@ class _ArticleCardState extends State<_ArticleCard> {
     AppLocalizations l10n,
     SummaryFailure failure, {
     required bool comments,
-  }) =>
-      switch (failure) {
-        SummaryFailure.modelMissing => l10n.briefingSummaryErrorNoModel,
-        SummaryFailure.modelUnavailable => l10n.briefingSummaryErrorModelLoad,
-        SummaryFailure.pageUnavailable =>
-          comments ? l10n.briefingCommentsErrorFetch : l10n.briefingSummaryErrorFetch,
-        SummaryFailure.pageUnreadable => l10n.briefingSummaryErrorUnreadable,
-        SummaryFailure.commentsMissing => l10n.briefingCommentsErrorNone,
-        SummaryFailure.emptyGeneration => l10n.briefingSummaryErrorEmpty,
-        SummaryFailure.unknown => l10n.briefingSummaryErrorUnknown,
-      };
+  }) => switch (failure) {
+    SummaryFailure.modelMissing => l10n.briefingSummaryErrorNoModel,
+    SummaryFailure.modelUnavailable => l10n.briefingSummaryErrorModelLoad,
+    SummaryFailure.pageUnavailable =>
+      comments
+          ? l10n.briefingCommentsErrorFetch
+          : l10n.briefingSummaryErrorFetch,
+    SummaryFailure.pageUnreadable => l10n.briefingSummaryErrorUnreadable,
+    SummaryFailure.commentsMissing => l10n.briefingCommentsErrorNone,
+    SummaryFailure.emptyGeneration => l10n.briefingSummaryErrorEmpty,
+    SummaryFailure.unknown => l10n.briefingSummaryErrorUnknown,
+  };
 
   /// The answer to "there is no model": the download screen, one tap away —
   /// the same deep-link shape the update banner uses for `/settings/updates`.
-  static void _openModelScreen(BuildContext context) => context.push('/settings/local-model');
+  static void _openModelScreen(BuildContext context) =>
+      context.push('/settings/local-model');
 
   /// A failure that nothing can fix is not re-run behind the user's back when
   /// he reopens the panel: the explanation is already there, and a second
@@ -550,7 +600,11 @@ class _ArticleCardState extends State<_ArticleCard> {
   /// copying as an explicit action. The message is shown BEFORE any clipboard
   /// work — telling the user must never sit behind an await that can hang, or
   /// a stuck clipboard swallows the explanation too and the tap looks dead.
-  Future<void> _openArticle(BuildContext context, String url, AppLocalizations l10n) async {
+  Future<void> _openArticle(
+    BuildContext context,
+    String url,
+    AppLocalizations l10n,
+  ) async {
     final uri = Uri.tryParse(url);
     var opened = false;
     if (uri != null) {
@@ -597,7 +651,11 @@ class _ArticleCardState extends State<_ArticleCard> {
 }
 
 class _ActionRow extends StatelessWidget {
-  const _ActionRow({required this.label, required this.color, required this.onTap});
+  const _ActionRow({
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
 
   final String label;
   final Color color;
@@ -686,7 +744,9 @@ class _SummaryPanel extends StatelessWidget {
                 Text(queuedLabel, style: theme.textTheme.bodySmall),
                 Text(
                   queuedHint,
-                  style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.hintColor,
+                  ),
                 ),
                 if (slowBackend) _slowBackendLine(theme),
               ],
@@ -698,7 +758,11 @@ class _SummaryPanel extends StatelessWidget {
       child = Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+          const SizedBox(
+            width: 16,
+            height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -741,12 +805,12 @@ class _SummaryPanel extends StatelessWidget {
   /// the user has to go looking for — or one shown once and forgotten — does
   /// not answer it.
   Widget _slowBackendLine(ThemeData theme) => Padding(
-        padding: const EdgeInsets.only(top: 4),
-        child: Text(
-          slowBackendLabel,
-          style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
-        ),
-      );
+    padding: const EdgeInsets.only(top: 4),
+    child: Text(
+      slowBackendLabel,
+      style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+    ),
+  );
 }
 
 /// The FAILED look: the cause in words, the repeat-failure count once there is
@@ -771,7 +835,10 @@ class _FailurePanel extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(message, style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink)),
+        Text(
+          message,
+          style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink),
+        ),
         // From the second failure on: the retry IS running, and failing fast.
         // Without this line the identical message repaints and the tap reads as
         // if it had been swallowed.
@@ -780,44 +847,49 @@ class _FailurePanel extends StatelessWidget {
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               l10n.briefingSummaryRetryFailedAgain(failure.attempt),
-              style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.hintColor,
+              ),
             ),
           ),
         switch (failure.failure.recovery) {
           SummaryRecovery.retry => Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: onRetry,
-                icon: const Icon(Icons.refresh, size: 18),
-                label: Text(l10n.briefingSummaryRetryAction),
-              ),
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onRetry,
+              icon: const Icon(Icons.refresh, size: 18),
+              label: Text(l10n.briefingSummaryRetryAction),
             ),
+          ),
           // No model: retrying fails identically forever, so the card offers
           // the thing that actually fixes it instead.
           SummaryRecovery.installModel => Align(
-              alignment: Alignment.centerLeft,
-              child: TextButton.icon(
-                onPressed: onInstallModel,
-                icon: const Icon(Icons.download_outlined, size: 18),
-                label: Text(l10n.briefingSummaryInstallModelAction),
-              ),
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: onInstallModel,
+              icon: const Icon(Icons.download_outlined, size: 18),
+              label: Text(l10n.briefingSummaryInstallModelAction),
             ),
+          ),
           // Permanent for this item: say so rather than invite a loop of taps
           // that will each fail the same way.
           SummaryRecovery.none => Padding(
-              padding: const EdgeInsets.only(top: 4),
-              child: Text(
-                l10n.briefingSummaryNotRetryable,
-                style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              l10n.briefingSummaryNotRetryable,
+              style: theme.textTheme.labelSmall?.copyWith(
+                color: theme.hintColor,
               ),
             ),
+          ),
         },
         // COLLAPSED, and last: the sentence above stays the headline. This is
         // the underlying exception, kept because it is the only evidence of
         // WHY the model could not be used — and there is no way to recover it
         // from the device afterwards. Absent for causes that never touched the
         // model, where there is no exception to show.
-        if (failure.detail != null) EngineFailureDetails(detail: failure.detail!),
+        if (failure.detail != null)
+          EngineFailureDetails(detail: failure.detail!),
       ],
     );
   }

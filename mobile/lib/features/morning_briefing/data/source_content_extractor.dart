@@ -76,44 +76,93 @@ class SourceContentExtractor {
   /// is bounded to a single readable snippet with an ellipsis.
   final int briefMaxChars;
 
-  static final RegExp _itemBlock = RegExp(r'<(item|entry)\b[^>]*>(.*?)</\1>', dotAll: true, caseSensitive: false);
-  static final RegExp _titleTag = RegExp(r'<title\b[^>]*>(.*?)</title>', dotAll: true, caseSensitive: false);
-  static final RegExp _descTag =
-      RegExp(r'<(description|summary|content)\b[^>]*>(.*?)</\1>', dotAll: true, caseSensitive: false);
-  static final RegExp _h1Tag = RegExp(r'<h1\b[^>]*>(.*?)</h1>', dotAll: true, caseSensitive: false);
-  static final RegExp _scriptStyle =
-      RegExp(r'<(script|style)\b[^>]*>.*?</\1>', dotAll: true, caseSensitive: false);
+  static final RegExp _itemBlock = RegExp(
+    r'<(item|entry)\b[^>]*>(.*?)</\1>',
+    dotAll: true,
+    caseSensitive: false,
+  );
+  static final RegExp _titleTag = RegExp(
+    r'<title\b[^>]*>(.*?)</title>',
+    dotAll: true,
+    caseSensitive: false,
+  );
+  static final RegExp _descTag = RegExp(
+    r'<(description|summary|content)\b[^>]*>(.*?)</\1>',
+    dotAll: true,
+    caseSensitive: false,
+  );
+  static final RegExp _h1Tag = RegExp(
+    r'<h1\b[^>]*>(.*?)</h1>',
+    dotAll: true,
+    caseSensitive: false,
+  );
+  static final RegExp _scriptStyle = RegExp(
+    r'<(script|style)\b[^>]*>.*?</\1>',
+    dotAll: true,
+    caseSensitive: false,
+  );
   static final RegExp _anyTag = RegExp(r'<[^>]+>');
   static final RegExp _cdata = RegExp(r'<!\[CDATA\[(.*?)\]\]>', dotAll: true);
   static final RegExp _whitespace = RegExp(r'\s+');
 
   // Per-item structured parsing (RSS/Atom/RDF).
-  static final RegExp _linkTag = RegExp(r'<link\b([^>]*)>', caseSensitive: false);
-  static final RegExp _linkTextTag =
-      RegExp(r'<link\b[^>]*>(.*?)</link>', dotAll: true, caseSensitive: false);
-  static final RegExp _hrefAttr = RegExp('''href\\s*=\\s*["']([^"']*)["']''', caseSensitive: false);
-  static final RegExp _relAttr = RegExp('''rel\\s*=\\s*["']([^"']*)["']''', caseSensitive: false);
-  static final RegExp _guidTag =
-      RegExp(r'<guid\b[^>]*>(.*?)</guid>', dotAll: true, caseSensitive: false);
+  static final RegExp _linkTag = RegExp(
+    r'<link\b([^>]*)>',
+    caseSensitive: false,
+  );
+  static final RegExp _linkTextTag = RegExp(
+    r'<link\b[^>]*>(.*?)</link>',
+    dotAll: true,
+    caseSensitive: false,
+  );
+  static final RegExp _hrefAttr = RegExp(
+    '''href\\s*=\\s*["']([^"']*)["']''',
+    caseSensitive: false,
+  );
+  static final RegExp _relAttr = RegExp(
+    '''rel\\s*=\\s*["']([^"']*)["']''',
+    caseSensitive: false,
+  );
+  static final RegExp _guidTag = RegExp(
+    r'<guid\b[^>]*>(.*?)</guid>',
+    dotAll: true,
+    caseSensitive: false,
+  );
   static final RegExp _dateTag = RegExp(
-      r'<(pubDate|published|updated|dc:date|date)\b[^>]*>(.*?)</\1>',
-      dotAll: true,
-      caseSensitive: false);
+    r'<(pubDate|published|updated|dc:date|date)\b[^>]*>(.*?)</\1>',
+    dotAll: true,
+    caseSensitive: false,
+  );
   static final RegExp _rfc822 = RegExp(
-      r'(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([+-]\d{4}|[A-Za-z]{1,5})?');
+    r'(\d{1,2})\s+([A-Za-z]{3})[a-z]*\s+(\d{2,4})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*([+-]\d{4}|[A-Za-z]{1,5})?',
+  );
   static const Map<String, int> _months = {
-    'jan': 1, 'feb': 2, 'mar': 3, 'apr': 4, 'may': 5, 'jun': 6,
-    'jul': 7, 'aug': 8, 'sep': 9, 'oct': 10, 'nov': 11, 'dec': 12,
+    'jan': 1,
+    'feb': 2,
+    'mar': 3,
+    'apr': 4,
+    'may': 5,
+    'jun': 6,
+    'jul': 7,
+    'aug': 8,
+    'sep': 9,
+    'oct': 10,
+    'nov': 11,
+    'dec': 12,
   };
 
   /// Whether [body] looks like an RSS/Atom/RDF feed (checked on the head so a
   /// stray `<rss>` mention deep in an HTML article never misclassifies it).
   bool looksLikeFeed(String body) {
-    final head = body.length > 800 ? body.substring(0, 800).toLowerCase() : body.toLowerCase();
+    final head = body.length > 800
+        ? body.substring(0, 800).toLowerCase()
+        : body.toLowerCase();
     return head.contains('<rss') ||
         head.contains('<feed') ||
         head.contains('<rdf:rdf') ||
-        head.contains('<?xml') && (body.toLowerCase().contains('<item') || body.toLowerCase().contains('<entry'));
+        head.contains('<?xml') &&
+            (body.toLowerCase().contains('<item') ||
+                body.toLowerCase().contains('<entry'));
   }
 
   /// Extracts readable content from [body]. [url] provides the host fallback
@@ -141,15 +190,23 @@ class SourceContentExtractor {
       if (desc.isNotEmpty) buffer.writeln('  $desc');
       count++;
     }
-    return SourceExtract(title: feedTitle, text: _cap(buffer.toString().trim()));
+    return SourceExtract(
+      title: feedTitle,
+      text: _cap(buffer.toString().trim()),
+    );
   }
 
   SourceExtract _extractHtml(String body, {required String host}) {
-    final title = _clean(_firstTitle(body) ?? _clean(_h1Tag.firstMatch(body)?.group(1) ?? ''));
+    final title = _clean(
+      _firstTitle(body) ?? _clean(_h1Tag.firstMatch(body)?.group(1) ?? ''),
+    );
     final withoutScripts = body.replaceAll(_scriptStyle, ' ');
     final stripped = _decodeEntities(withoutScripts.replaceAll(_anyTag, ' '));
     final text = stripped.replaceAll(_whitespace, ' ').trim();
-    return SourceExtract(title: title.isNotEmpty ? title : host, text: _cap(text));
+    return SourceExtract(
+      title: title.isNotEmpty ? title : host,
+      text: _cap(text),
+    );
   }
 
   /// Parses [body] as an RSS/Atom/RDF feed into STRUCTURED per-item records
@@ -167,7 +224,14 @@ class SourceContentExtractor {
       final desc = cleanBrief(_descTag.firstMatch(block)?.group(2) ?? '');
       final published = parseFeedDate(_dateTag.firstMatch(block)?.group(2));
       if (title.isEmpty && link.isEmpty) continue;
-      items.add(ParsedFeedItem(title: title, link: link, description: desc, published: published));
+      items.add(
+        ParsedFeedItem(
+          title: title,
+          link: link,
+          description: desc,
+          published: published,
+        ),
+      );
     }
     return ParsedFeed(sourceTitle: feedTitle, items: items);
   }
@@ -182,7 +246,8 @@ class SourceContentExtractor {
       final href = _hrefAttr.firstMatch(attrs)?.group(1)?.trim();
       if (href == null || href.isEmpty) continue;
       firstHref ??= href;
-      final rel = _relAttr.firstMatch(attrs)?.group(1)?.toLowerCase() ?? 'alternate';
+      final rel =
+          _relAttr.firstMatch(attrs)?.group(1)?.toLowerCase() ?? 'alternate';
       if (rel == 'alternate') alternate ??= href;
     }
     final atom = alternate ?? firstHref;
@@ -253,12 +318,14 @@ class SourceContentExtractor {
               link = 'https://news.ycombinator.com/item?id=$oid';
             }
             if (link.isEmpty) continue;
-            items.add(ParsedFeedItem(
-              title: title,
-              link: link,
-              published: parseFeedDate(hit['created_at']?.toString()),
-              hnObjectId: oid.isEmpty ? null : oid,
-            ));
+            items.add(
+              ParsedFeedItem(
+                title: title,
+                link: link,
+                published: parseFeedDate(hit['created_at']?.toString()),
+                hnObjectId: oid.isEmpty ? null : oid,
+              ),
+            );
           }
         }
       }
@@ -345,7 +412,9 @@ class SourceContentExtractor {
   /// [String.trim] nor `\s` removes them. A feed (or a small on-device model)
   /// that emits one at the start of a brief produces a card that looks
   /// mysteriously indented, with nothing in the text to explain it.
-  static final RegExp _invisible = RegExp(r'[\u200B-\u200D\u2060\uFEFF\u180E\u2800]');
+  static final RegExp _invisible = RegExp(
+    r'[\u200B-\u200D\u2060\uFEFF\u180E\u2800]',
+  );
 
   /// `&#160;` / `&#xA0;` — numeric entities of every codepoint. The named list
   /// below only ever covered a handful, so a numeric non-breaking space reached
@@ -377,7 +446,8 @@ class SourceContentExtractor {
     return out;
   }
 
-  String _cap(String s) => s.length <= maxChars ? s : '${s.substring(0, maxChars)}…';
+  String _cap(String s) =>
+      s.length <= maxChars ? s : '${s.substring(0, maxChars)}…';
 
   String _hostOf(String url) {
     try {

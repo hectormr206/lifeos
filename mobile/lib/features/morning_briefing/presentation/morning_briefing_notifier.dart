@@ -5,6 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../../core/clock/clock.dart';
+import '../domain/briefing_source.dart';
 import '../../../core/timezone/timezone_providers.dart';
 import '../../../l10n/locale_providers.dart';
 import '../../local_model/domain/local_llm_engine.dart';
@@ -59,7 +60,7 @@ class MorningBriefingState {
   });
 
   /// Configured news-source URLs (the user adds/removes these).
-  final List<String> sources;
+  final List<BriefingSource> sources;
 
   /// The "Boletín automático" setting (daily trigger + hour).
   final BriefingSchedule schedule;
@@ -123,13 +124,15 @@ class MorningBriefingState {
   bool isQueuedComments(String key) => queuedComments.contains(key);
 
   /// Running OR waiting — the guard against enqueuing the same article twice.
-  bool isArticlePending(String key) => isSummarizingArticle(key) || isQueuedArticle(key);
+  bool isArticlePending(String key) =>
+      isSummarizingArticle(key) || isQueuedArticle(key);
 
   /// Running OR waiting, for the comments summary.
-  bool isCommentsPending(String key) => isSummarizingComments(key) || isQueuedComments(key);
+  bool isCommentsPending(String key) =>
+      isSummarizingComments(key) || isQueuedComments(key);
 
   MorningBriefingState copyWith({
-    List<String>? sources,
+    List<BriefingSource>? sources,
     OnDeviceBriefing? briefing,
     BriefingSchedule? schedule,
     BriefingPhase? phase,
@@ -148,24 +151,25 @@ class MorningBriefingState {
     // new generation that translated fine.
     bool clearTranslationFailure = false,
     bool? modelOnFallbackBackend,
-  }) =>
-      MorningBriefingState(
-        sources: sources ?? this.sources,
-        briefing: briefing ?? this.briefing,
-        schedule: schedule ?? this.schedule,
-        phase: phase ?? this.phase,
-        progressLabel: progressLabel,
-        error: error,
-        summarizingArticles: summarizingArticles ?? this.summarizingArticles,
-        summarizingComments: summarizingComments ?? this.summarizingComments,
-        queuedArticles: queuedArticles ?? this.queuedArticles,
-        queuedComments: queuedComments ?? this.queuedComments,
-        articleFailures: articleFailures ?? this.articleFailures,
-        commentFailures: commentFailures ?? this.commentFailures,
-        translationFailure:
-            clearTranslationFailure ? null : (translationFailure ?? this.translationFailure),
-        modelOnFallbackBackend: modelOnFallbackBackend ?? this.modelOnFallbackBackend,
-      );
+  }) => MorningBriefingState(
+    sources: sources ?? this.sources,
+    briefing: briefing ?? this.briefing,
+    schedule: schedule ?? this.schedule,
+    phase: phase ?? this.phase,
+    progressLabel: progressLabel,
+    error: error,
+    summarizingArticles: summarizingArticles ?? this.summarizingArticles,
+    summarizingComments: summarizingComments ?? this.summarizingComments,
+    queuedArticles: queuedArticles ?? this.queuedArticles,
+    queuedComments: queuedComments ?? this.queuedComments,
+    articleFailures: articleFailures ?? this.articleFailures,
+    commentFailures: commentFailures ?? this.commentFailures,
+    translationFailure: clearTranslationFailure
+        ? null
+        : (translationFailure ?? this.translationFailure),
+    modelOnFallbackBackend:
+        modelOnFallbackBackend ?? this.modelOnFallbackBackend,
+  );
 }
 
 /// Runs the ON-DEVICE morning-briefing pipeline and owns its UI state.
@@ -227,7 +231,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       final sources = await prefs.sources();
       final last = await prefs.lastBriefing();
       final schedule = await prefs.schedule();
-      state = state.copyWith(sources: sources, briefing: last, schedule: schedule);
+      state = state.copyWith(
+        sources: sources,
+        briefing: last,
+        schedule: schedule,
+      );
     } catch (_) {
       // Persistence unavailable (e.g. no platform channel in a widget test) —
       // keep the safe empty default rather than crashing.
@@ -235,26 +243,37 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     await _armTriggers();
   }
 
-  /// Adds [url] to the configured sources (trimmed, de-duplicated) and persists.
-  Future<void> addSource(String url) async {
+  /// Adds a source under [section] (trimmed, de-duplicated by URL).
+  ///
+  /// De-duplication is by URL alone: the same feed filed under two sections
+  /// would be fetched twice and read twice, which is a worse morning than a
+  /// misfiled one.
+  Future<void> addSource(
+    String url, {
+    String section = kDefaultBriefingSection,
+  }) async {
     final trimmed = url.trim();
-    if (trimmed.isEmpty || state.sources.contains(trimmed)) return;
-    final next = [...state.sources, trimmed];
+    if (trimmed.isEmpty) return;
+    if (state.sources.any((s) => s.url == trimmed)) return;
+    final next = [
+      ...state.sources,
+      BriefingSource(url: trimmed, section: section.trim()),
+    ];
     state = state.copyWith(sources: next);
     await _persistSources(next);
   }
 
   /// Removes [url] from the configured sources and persists.
   Future<void> removeSource(String url) async {
-    if (!state.sources.contains(url)) return;
-    final next = state.sources.where((s) => s != url).toList();
+    if (!state.sources.any((s) => s.url == url)) return;
+    final next = state.sources.where((s) => s.url != url).toList();
     state = state.copyWith(sources: next);
     await _persistSources(next);
   }
 
-  Future<void> _persistSources(List<String> urls) async {
+  Future<void> _persistSources(List<BriefingSource> sources) async {
     try {
-      await ref.read(morningBriefingPreferencesProvider).setSources(urls);
+      await ref.read(morningBriefingPreferencesProvider).setSources(sources);
     } catch (_) {
       // Best-effort persistence; in-memory state still reflects the choice.
     }
@@ -288,7 +307,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// mode (device-local, unchanged). Best-effort — failures degrade to local.
   Future<tz.Location?> _overrideLocation() async {
     try {
-      return (await ref.read(effectiveTimezoneProvider.future)).overrideLocation;
+      return (await ref.read(
+        effectiveTimezoneProvider.future,
+      )).overrideLocation;
     } catch (_) {
       return null;
     }
@@ -360,7 +381,10 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<void> generate() async {
     if (state.isGenerating) return;
 
-    state = state.copyWith(phase: BriefingPhase.fetching, progressLabel: 'Leyendo tus fuentes…');
+    state = state.copyWith(
+      phase: BriefingPhase.fetching,
+      progressLabel: 'Leyendo tus fuentes…',
+    );
 
     final fetcher = ref.read(sourceFetcherProvider);
     final extractor = ref.read(sourceContentExtractorProvider);
@@ -370,7 +394,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // Shared fetch+parse stage (also the background task's) with UI progress.
     final harvester = BriefingHarvester(fetcher: fetcher, extractor: extractor);
     final harvests = await harvester.harvestAll(
-      state.sources,
+      [for (final s in state.sources) s.url],
       onFeed: (i, total) => state = state.copyWith(
         phase: BriefingPhase.fetching,
         progressLabel: 'Leyendo fuente ${i + 1} de ${total + 1}…',
@@ -387,7 +411,8 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     if (assembled.isEmpty) {
       state = state.copyWith(
         phase: BriefingPhase.error,
-        error: 'No hay noticias frescas hoy en tus fuentes. Vuelve a intentarlo más tarde.',
+        error:
+            'No hay noticias frescas hoy en tus fuentes. Vuelve a intentarlo más tarde.',
       );
       return;
     }
@@ -421,7 +446,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     );
 
     try {
-      await ref.read(morningBriefingPreferencesProvider).saveLastBriefing(briefing);
+      await ref
+          .read(morningBriefingPreferencesProvider)
+          .saveLastBriefing(briefing);
     } catch (_) {
       // In-memory briefing still shown even if persistence failed.
     }
@@ -446,7 +473,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// Fills in the briefs the feeds did not provide. Best-effort by contract:
   /// a failure here leaves those cards with their hint and never costs the
   /// user the briefing itself.
-  Future<OnDeviceBriefing> _writeMissingBriefs(OnDeviceBriefing briefing) async {
+  Future<OnDeviceBriefing> _writeMissingBriefs(
+    OnDeviceBriefing briefing,
+  ) async {
     try {
       final writer = BriefingBriefWriter(
         engine: ref.read(localLlmEngineProvider),
@@ -457,7 +486,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
         briefing,
         onItem: (i, total) {
           if (_disposed) return;
-          state = state.copyWith(progressLabel: 'Resumiendo noticias ${i + 1} de $total…');
+          state = state.copyWith(
+            progressLabel: 'Resumiendo noticias ${i + 1} de $total…',
+          );
         },
       );
     } catch (_) {
@@ -565,7 +596,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     } catch (_) {
       throw const SummaryFailureException(SummaryFailure.pageUnavailable);
     }
-    final extract = ref.read(sourceContentExtractorProvider).extract(body, url: url);
+    final extract = ref
+        .read(sourceContentExtractorProvider)
+        .extract(body, url: url);
     if (extract.isEmpty) {
       throw const SummaryFailureException(SummaryFailure.pageUnreadable);
     }
@@ -576,7 +609,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<String> _generate(String prompt) async {
     final GenerationResult result;
     try {
-      result = await ref.read(localLlmEngineProvider).generate(
+      result = await ref
+          .read(localLlmEngineProvider)
+          .generate(
             prompt,
             temperature: longsumTemperature,
             topK: longsumTopK,
@@ -617,7 +652,10 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             await _ensureModelReady();
             final comments = await _readableComments(current.hnObjectId);
             final summary = await _generate(_commentsSummaryPrompt(comments));
-            _cacheCommentsUpdate(key, current.copyWith(commentsSummary: summary));
+            _cacheCommentsUpdate(
+              key,
+              current.copyWith(commentsSummary: summary),
+            );
           } on SummaryFailureException catch (e) {
             _setCommentsFailure(key, e.failure, detail: e.detail);
           } catch (_) {
@@ -635,11 +673,15 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<String> _readableComments(String? hnObjectId) async {
     final String body;
     try {
-      body = await ref.read(sourceFetcherProvider).fetch('$hnItemUrlPrefix$hnObjectId');
+      body = await ref
+          .read(sourceFetcherProvider)
+          .fetch('$hnItemUrlPrefix$hnObjectId');
     } catch (_) {
       throw const SummaryFailureException(SummaryFailure.pageUnavailable);
     }
-    final comments = ref.read(sourceContentExtractorProvider).extractHnComments(body);
+    final comments = ref
+        .read(sourceContentExtractorProvider)
+        .extractHnComments(body);
     if (comments.trim().isEmpty) {
       throw const SummaryFailureException(SummaryFailure.commentsMissing);
     }
@@ -725,7 +767,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setArticleFailure(String key, SummaryFailure failure, {EngineFailureDetail? detail}) {
+  void _setArticleFailure(
+    String key,
+    SummaryFailure failure, {
+    EngineFailureDetail? detail,
+  }) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
@@ -776,7 +822,11 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     _persistBriefing(briefing);
   }
 
-  void _setCommentsFailure(String key, SummaryFailure failure, {EngineFailureDetail? detail}) {
+  void _setCommentsFailure(
+    String key,
+    SummaryFailure failure, {
+    EngineFailureDetail? detail,
+  }) {
     if (_disposed) return;
     state = state.copyWith(
       phase: state.phase,
@@ -797,7 +847,9 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   Future<void> _persistBriefing(OnDeviceBriefing? briefing) async {
     if (briefing == null) return;
     try {
-      await ref.read(morningBriefingPreferencesProvider).saveLastBriefing(briefing);
+      await ref
+          .read(morningBriefingPreferencesProvider)
+          .saveLastBriefing(briefing);
     } catch (_) {
       // Best-effort: the cached summary is still shown in memory.
     }
@@ -810,26 +862,34 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// why the feed-native title/description are kept as-is on the card.
   String get _languageCode => ref.read(appLanguageCodeProvider);
 
-  String _articleSummaryPrompt({required String title, required String content}) =>
-      switch (_languageCode) {
-        'en' => 'Summarize the following news article in 3 to 5 sentences, in clear English. '
-            'If it is in another language, translate it into English. '
-            'Return only the summary, with no headings or bullet points.\n\n'
-            'Title: $title\n\nContent:\n$content',
-        _ => 'Resume en 3 a 5 frases, en español neutro y claro, el siguiente artículo de '
-            'noticias. Si está en otro idioma, tradúcelo al español. '
-            'Devuelve solo el resumen, sin encabezados ni viñetas.\n\n'
-            'Título: $title\n\nContenido:\n$content',
-      };
+  String _articleSummaryPrompt({
+    required String title,
+    required String content,
+  }) => switch (_languageCode) {
+    'en' =>
+      'Summarize the following news article in 3 to 5 sentences, in clear English. '
+          'If it is in another language, translate it into English. '
+          'Return only the summary, with no headings or bullet points.\n\n'
+          'Title: $title\n\nContent:\n$content',
+    _ =>
+      'Resume en 3 a 5 frases, en español neutro y claro, el siguiente artículo de '
+          'noticias. Si está en otro idioma, tradúcelo al español. '
+          'Devuelve solo el resumen, sin encabezados ni viñetas.\n\n'
+          'Título: $title\n\nContenido:\n$content',
+  };
 
   String _commentsSummaryPrompt(String comments) => switch (_languageCode) {
-        'en' => 'Summarize these Hacker News comments in 3 to 5 sentences, in English: the main '
-            'opinions and the points of agreement or disagreement. Return only the summary.\n\n$comments',
-        _ => 'Resume estos comentarios de Hacker News en 3 a 5 frases, en español neutro: las '
-            'opiniones principales y los puntos de acuerdo o desacuerdo. Devuelve solo el '
-            'resumen.\n\n$comments',
-      };
+    'en' =>
+      'Summarize these Hacker News comments in 3 to 5 sentences, in English: the main '
+          'opinions and the points of agreement or disagreement. Return only the summary.\n\n$comments',
+    _ =>
+      'Resume estos comentarios de Hacker News en 3 a 5 frases, en español neutro: las '
+          'opiniones principales y los puntos de acuerdo o desacuerdo. Devuelve solo el '
+          'resumen.\n\n$comments',
+  };
 }
 
 final morningBriefingNotifierProvider =
-    NotifierProvider<MorningBriefingNotifier, MorningBriefingState>(MorningBriefingNotifier.new);
+    NotifierProvider<MorningBriefingNotifier, MorningBriefingState>(
+      MorningBriefingNotifier.new,
+    );

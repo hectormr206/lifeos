@@ -29,7 +29,7 @@ abstract class BriefingNotifications {
 /// and coexist in one payload → handler registry (neither clobbers the other).
 class FlutterLocalBriefingNotifications implements BriefingNotifications {
   FlutterLocalBriefingNotifications([AppNotifications? notifications])
-      : _notifications = notifications ?? AppNotifications.instance;
+    : _notifications = notifications ?? AppNotifications.instance;
 
   final AppNotifications _notifications;
 
@@ -52,12 +52,12 @@ class FlutterLocalBriefingNotifications implements BriefingNotifications {
 
   @override
   Future<void> showBriefingReady() => _notifications.show(
-        id: _notificationId,
-        channelId: _channelId,
-        channelName: _channelName,
-        channelDescription: 'Avisos cuando tu boletín matutino está listo.',
-        title: 'Tu boletín está listo',
-        body: 'Toca para leer el boletín matutino que Axi preparó para ti.',
-        payload: _payload,
-      );
+    id: _notificationId,
+    channelId: _channelId,
+    channelName: _channelName,
+    channelDescription: 'Avisos cuando tu boletín matutino está listo.',
+    title: 'Tu boletín está listo',
+    body: 'Toca para leer el boletín matutino que Axi preparó para ti.',
+    payload: _payload,
+  );
 }

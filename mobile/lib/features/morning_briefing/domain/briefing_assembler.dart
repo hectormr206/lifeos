@@ -5,7 +5,11 @@ import 'morning_briefing.dart';
 /// [items] it yielded (possibly empty), and whether the fetch/parse [failed].
 /// A failed OR empty-after-freshness source is recorded as skipped.
 class SourceHarvest {
-  const SourceHarvest({required this.name, this.items = const [], this.failed = false});
+  const SourceHarvest({
+    required this.name,
+    this.items = const [],
+    this.failed = false,
+  });
 
   final String name;
   final List<ParsedFeedItem> items;
@@ -50,21 +54,28 @@ class BriefingAssembler {
         skipped.add(harvest.name);
         continue;
       }
-      final fresh = harvest.items.where((i) => isFresh(i.published, now: now)).toList()
-        ..sort((a, b) => (b.published ?? DateTime(0)).compareTo(a.published ?? DateTime(0)));
+      final fresh =
+          harvest.items.where((i) => isFresh(i.published, now: now)).toList()
+            ..sort(
+              (a, b) => (b.published ?? DateTime(0)).compareTo(
+                a.published ?? DateTime(0),
+              ),
+            );
       if (fresh.isEmpty) {
         skipped.add(harvest.name);
         continue;
       }
       for (final item in fresh.take(cap)) {
-        articles.add(BriefingArticle(
-          sourceName: harvest.name,
-          title: item.title,
-          url: item.link,
-          description: item.description,
-          publishedAt: item.published,
-          hnObjectId: item.hnObjectId,
-        ));
+        articles.add(
+          BriefingArticle(
+            sourceName: harvest.name,
+            title: item.title,
+            url: item.link,
+            description: item.description,
+            publishedAt: item.published,
+            hnObjectId: item.hnObjectId,
+          ),
+        );
       }
     }
 
