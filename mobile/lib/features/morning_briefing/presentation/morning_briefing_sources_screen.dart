@@ -22,25 +22,25 @@ class MorningBriefingSourcesScreen extends ConsumerStatefulWidget {
 class _MorningBriefingSourcesScreenState
     extends ConsumerState<MorningBriefingSourcesScreen> {
   final _controller = TextEditingController();
-  final _sectionController = TextEditingController();
+
+  /// Picked from a fixed list, not typed: free text produced "Tecnologia",
+  /// "tecnología" and "Tech" as three shelves for one idea, and the person who
+  /// had to live with that mess was the user.
+  String _section = kDefaultBriefingSection;
 
   @override
   void dispose() {
     _controller.dispose();
-    _sectionController.dispose();
     super.dispose();
   }
 
   Future<void> _add() async {
     final url = _controller.text.trim();
     if (url.isEmpty) return;
-    final section = _sectionController.text.trim();
+
     await ref
         .read(morningBriefingNotifierProvider.notifier)
-        .addSource(
-          url,
-          section: section.isEmpty ? kDefaultBriefingSection : section,
-        );
+        .addSource(url, section: _section);
     _controller.clear();
     // The section stays: someone adding three Linux feeds types it once.
   }
@@ -72,14 +72,23 @@ class _MorningBriefingSourcesScreenState
                 Row(
                   children: [
                     Expanded(
-                      child: TextField(
-                        controller: _sectionController,
+                      child: DropdownButtonFormField<String>(
+                        initialValue: _section,
+                        isExpanded: true,
                         decoration: const InputDecoration(
                           labelText: 'Sección',
-                          hintText: 'Mundo, México, Linux…',
                           border: OutlineInputBorder(),
                         ),
-                        onSubmitted: (_) => _add(),
+                        items: [
+                          for (final section in kBriefingSections)
+                            DropdownMenuItem(
+                              value: section,
+                              child: Text(section),
+                            ),
+                        ],
+                        onChanged: (value) => setState(
+                          () => _section = value ?? kDefaultBriefingSection,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 8),
