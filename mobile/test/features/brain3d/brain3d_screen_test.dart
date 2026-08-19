@@ -303,4 +303,40 @@ void main() {
       expect(find.byType(Brain3dView), findsOneWidget);
     });
   });
+
+  testWidgets('the merge picker only offers nodes of the same kind',
+      (tester) async {
+    // Seen on the test Pixel with 862: selecting the person "Yo" offered to
+    // fuse it with "peso 82 kg". A weight is not a duplicate of a person, and
+    // a picker that offers the whole graph invites a merge that destroys both
+    // rows — irreversibly, on every device.
+    final now = DateTime.now();
+    GraphNodeRecord row(String uuid, String kind, String label) =>
+        GraphNodeRecord(
+          uuid: uuid,
+          kind: kind,
+          label: label,
+          createdAt: now,
+          updatedAt: now,
+        );
+
+    final store = _FakeLocalGraphStore(nodes: [
+      row('p1', 'person', 'Ana'),
+      row('p2', 'person', 'ana'),
+      row('f1', 'fact', 'peso 82 kg'),
+    ]);
+
+    await tester.pumpWidget(_app(store));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.tap(find.text('Ana'));
+    await tester.pump();
+    await tester.ensureVisible(find.text('Fusionar con…'));
+    await tester.tap(find.text('Fusionar con…'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('ana'), findsOneWidget);
+    expect(find.text('peso 82 kg'), findsNothing,
+        reason: 'a weight is not a duplicate of a person');
+  });
 }

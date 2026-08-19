@@ -199,9 +199,12 @@ class _Brain extends StatelessWidget {
       // "what did Axi learn this week", a question a domain filter does not
       // change the answer to.
       news: news,
+      // Only nodes of the SAME kind: a weight is not a duplicate of a person,
+      // and offering the whole graph invites a merge that destroys two
+      // unrelated memories at once.
       others: [
         for (final n in visible)
-          if (n.uuid != selectedId) n,
+          if (n.uuid != selectedId && n.kind == selected?.kind) n,
       ],
       onClose: () => onSelect(null),
       onSelect: onSelect,
