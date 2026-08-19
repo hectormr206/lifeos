@@ -1238,6 +1238,12 @@ abstract class AppLocalizations {
   /// **'No memories in the local graph yet. Chat with Axi and its brain will grow.'**
   String get brain3dEmpty;
 
+  /// No description provided for @brain3dSparse.
+  ///
+  /// In en, this message translates to:
+  /// **'So far Axi remembers {nodes} thing(s). A brain needs at least three to draw relationships — tell it a couple more and this screen comes alive.'**
+  String brain3dSparse(int nodes);
+
   /// No description provided for @brain3dSummary.
   ///
   /// In en, this message translates to:

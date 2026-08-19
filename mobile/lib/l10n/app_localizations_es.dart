@@ -642,6 +642,11 @@ class AppLocalizationsEs extends AppLocalizations {
       'Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.';
 
   @override
+  String brain3dSparse(int nodes) {
+    return 'Por ahora Axi recuerda $nodes cosa(s). Un cerebro necesita al menos tres para dibujar relaciones — contale un par más y esta pantalla cobra vida.';
+  }
+
+  @override
   String brain3dSummary(int nodes, int edges) {
     return '$nodes nodos · $edges enlaces en el grafo local';
   }

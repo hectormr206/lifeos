@@ -44,7 +44,16 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
       backgroundColor: const Color(0xFF0B0E13),
       appBar: AppBar(title: Text(l10n.brain3dTitle)),
       body: switch (payload) {
-        AsyncData(:final value) when value.nodes.isEmpty =>
+        // Fewer than three memories is not a graph — it is one or two dots in
+        // a black field, which reads as a broken screen rather than as "you
+        // have told Axi two things". Reported twice from a laptop: two specks
+        // twenty pixels apart in the middle of 2560x1430.
+        //
+        // A graph is a picture of RELATIONSHIPS. With nothing to relate, a
+        // sentence is the honest rendering — and it says how many there are,
+        // so an unexpected number is visible instead of being mistaken for a
+        // rendering fault.
+        AsyncData(:final value) when value.nodes.length < 3 =>
           _SummaryFallback(payload: value),
         AsyncData(:final value) => Brain3dView(
             nodes: [
@@ -78,12 +87,18 @@ class _SummaryFallback extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     return Center(
-      child: Text(
-        payload.nodes.isEmpty
-            ? l10n.brain3dEmpty
-            : l10n.brain3dSummary(payload.nodes.length, payload.edges.length),
-        style: const TextStyle(color: Colors.white70),
-        textAlign: TextAlign.center,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 32),
+        child: Text(
+          payload.nodes.isEmpty
+              ? l10n.brain3dEmpty
+              // Says WHY the screen is a sentence and not a graph, and how many
+              // memories there are — so an unexpected number is visible instead
+              // of being mistaken for a rendering fault.
+              : l10n.brain3dSparse(payload.nodes.length),
+          style: const TextStyle(color: Colors.white70, fontSize: 16),
+          textAlign: TextAlign.center,
+        ),
       ),
     );
   }

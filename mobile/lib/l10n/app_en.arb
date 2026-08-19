@@ -286,6 +286,8 @@
   "axiOrganComingSoon": "Coming soon on this device",
   "brain3dTitle": "3D Brain",
   "brain3dEmpty": "No memories in the local graph yet. Chat with Axi and its brain will grow.",
+  "brain3dSparse": "So far Axi remembers {nodes} thing(s). A brain needs at least three to draw relationships — tell it a couple more and this screen comes alive.",
+  "@brain3dSparse": {"placeholders": {"nodes": {"type": "int"}}},
   "brain3dSummary": "{nodes} nodes · {edges} links in the local graph",
   "@brain3dSummary": {
     "placeholders": {

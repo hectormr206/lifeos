@@ -242,6 +242,8 @@
   "axiOrganComingSoon": "Próximamente en este dispositivo",
   "brain3dTitle": "Cerebro 3D",
   "brain3dEmpty": "Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.",
+  "brain3dSparse": "Por ahora Axi recuerda {nodes} cosa(s). Un cerebro necesita al menos tres para dibujar relaciones — contale un par más y esta pantalla cobra vida.",
+  "@brain3dSparse": {"placeholders": {"nodes": {"type": "int"}}},
   "brain3dSummary": "{nodes} nodos · {edges} enlaces en el grafo local",
 
   "chatTitle": "Axi",

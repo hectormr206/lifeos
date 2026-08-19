@@ -78,7 +78,10 @@ void main() {
   testWidgets('renders the graph itself, on every platform', (tester) async {
     final t = DateTime.utc(2026, 1, 1);
     final store = _FakeLocalGraphStore(
-      nodes: [_node('f1', 'fact'), _node('p1', 'person')],
+      // THREE nodes, not two: fewer than three renders as a sentence now.
+      // Two dots in a black field read as a broken screen — reported twice
+      // from a laptop — and a graph with nothing to relate is not a graph.
+      nodes: [_node('f1', 'fact'), _node('p1', 'person'), _node('f2', 'fact')],
       edges: [
         GraphEdgeRecord(
           uuid: 'e1',
