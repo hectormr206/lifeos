@@ -17,49 +17,125 @@ import '../../memory/domain/subject.dart' show foldAccents;
 /// The section used when none was given.
 const String kDefaultBriefingSection = 'General';
 
+/// The sections the user picks from.
+///
+/// A fixed list rather than free text: typing produces "Tecnologia",
+/// "tecnología" and "Tech" as three shelves for one idea, and the person who
+/// has to live with that mess is the user.
+const List<String> kBriefingSections = [
+  'Mundo',
+  'México',
+  'Tecnología',
+  'Inteligencia artificial',
+  'Linux',
+  'Ciencia y salud',
+  'Deportes',
+  'Negocios',
+  'Cultura',
+  kDefaultBriefingSection,
+];
+
 class BriefingSource {
-  const BriefingSource({required this.url, required this.section});
+  const BriefingSource({
+    required this.url,
+    required this.section,
+    this.enabled = true,
+    this.builtIn = false,
+  });
 
   final String url;
   final String section;
+
+  /// Disabled sources stay in the list and are skipped when fetching.
+  ///
+  /// Turning one off is not the same as losing it: a curated default someone
+  /// mutes in a bad week is one they can turn back on, while a deleted one
+  /// means going to find the URL again — which nobody does.
+  final bool enabled;
+
+  /// Shipped with the app. These can be disabled but never deleted, so the
+  /// starting set stays recoverable.
+  final bool builtIn;
+
+  bool get canDelete => !builtIn;
+  bool get canDisable => true;
+
+  /// The same source, marked as shipped with the app.
+  BriefingSource asBuiltIn() => BriefingSource(
+    url: url,
+    section: section,
+    enabled: enabled,
+    builtIn: true,
+  );
+
+  BriefingSource copyWith({bool? enabled, String? section}) => BriefingSource(
+    url: url,
+    section: section ?? this.section,
+    enabled: enabled ?? this.enabled,
+    builtIn: builtIn,
+  );
 
   /// Never blank: an empty heading looks like a rendering bug.
   String get displaySection =>
       section.trim().isEmpty ? kDefaultBriefingSection : section.trim();
 
-  /// One storage line: `section|url`.
+  /// One storage line: `section|flags|url`.
   ///
-  /// The section goes FIRST and the split is on the first separator only, so a
-  /// URL full of query-string pipes survives the round trip.
-  String encode() => '${displaySection}|$url';
+  /// The URL goes LAST and the split stops after two separators, so a URL full
+  /// of query-string pipes survives the round trip.
+  String encode() =>
+      '$displaySection|${enabled ? 'on' : 'off'}${builtIn ? '+b' : ''}|$url';
 
   static BriefingSource decode(String line) {
-    final at = line.indexOf('|');
-    // No separator: a bare URL saved before sections existed. Everything
-    // already on someone's phone looks like this, and losing a list they
-    // curated by hand would be unforgivable.
-    if (at < 0) {
+    final first = line.indexOf('|');
+    // No separator: a bare URL from before any of this existed. Reading it as
+    // disabled would silently empty someone's briefing; reading it as built-in
+    // would stop them deleting a feed they added themselves.
+    if (first < 0) {
       return BriefingSource(url: line, section: kDefaultBriefingSection);
     }
+    final second = line.indexOf('|', first + 1);
+    // Only one separator: the section|url format, before enable/disable.
+    if (second < 0) {
+      return BriefingSource(
+        section: line.substring(0, first),
+        url: line.substring(first + 1),
+      );
+    }
+    final flags = line.substring(first + 1, second);
     return BriefingSource(
-      section: line.substring(0, at),
-      url: line.substring(at + 1),
+      section: line.substring(0, first),
+      url: line.substring(second + 1),
+      enabled: !flags.startsWith('off'),
+      builtIn: flags.contains('+b'),
     );
   }
 
   @override
   bool operator ==(Object other) =>
-      other is BriefingSource && other.url == url && other.section == section;
+      other is BriefingSource &&
+      other.url == url &&
+      other.section == section &&
+      other.enabled == enabled &&
+      other.builtIn == builtIn;
 
   @override
-  int get hashCode => Object.hash(url, section);
+  int get hashCode => Object.hash(url, section, enabled, builtIn);
 
   @override
   String toString() => 'BriefingSource($section, $url)';
 }
 
 /// The starting set. Verified reachable on 2026-08-19.
-const List<BriefingSource> defaultBriefingSources = [
+///
+/// `builtIn` is applied to the whole list below rather than written on each
+/// entry: relying on eighteen separate reminders is how one ends up deletable
+/// by accident.
+List<BriefingSource> get defaultBriefingSources => [
+  for (final source in _shipped) source.asBuiltIn(),
+];
+
+const List<BriefingSource> _shipped = [
   // Mundo
   BriefingSource(
     url: 'https://feeds.bbci.co.uk/mundo/rss.xml',
@@ -143,3 +219,9 @@ Map<String, List<BriefingSource>> groupBriefingSources(
   }
   return grouped;
 }
+
+/// The sources that actually get fetched.
+List<BriefingSource> enabledBriefingSources(List<BriefingSource> sources) => [
+  for (final source in sources)
+    if (source.enabled) source,
+];

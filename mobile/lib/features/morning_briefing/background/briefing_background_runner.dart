@@ -1,3 +1,4 @@
+import '../domain/briefing_source.dart';
 import 'dart:async';
 
 import 'package:timezone/timezone.dart' as tz;
@@ -125,8 +126,10 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
 
   final sources = await deps.preferences.sources();
   // The harvester fetches URLs; the section is what the user reads them under.
+  // Only the ENABLED ones: a source turned off must not keep being fetched in
+  // the background, or "desactivada" means nothing.
   final harvests = await deps.harvester.harvestAll([
-    for (final s in sources) s.url,
+    for (final s in enabledBriefingSources(sources)) s.url,
   ]);
   final assembled = deps.assembler.assemble(
     harvests,

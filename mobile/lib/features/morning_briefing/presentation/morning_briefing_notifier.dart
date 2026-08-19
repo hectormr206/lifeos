@@ -263,9 +263,27 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     await _persistSources(next);
   }
 
+  /// Turn a source on or off without losing it.
+  ///
+  /// The built-in ones can only ever reach this, never [removeSource]: a
+  /// curated default someone mutes in a bad week should be one tap from coming
+  /// back, and a deleted one means going to find the URL again.
+  Future<void> setSourceEnabled(String url, bool enabled) async {
+    final next = [
+      for (final source in state.sources)
+        if (source.url == url) source.copyWith(enabled: enabled) else source,
+    ];
+    state = state.copyWith(sources: next);
+    await _persistSources(next);
+  }
+
   /// Removes [url] from the configured sources and persists.
   Future<void> removeSource(String url) async {
-    if (!state.sources.any((s) => s.url == url)) return;
+    // A shipped source is never deleted, only disabled — enforced here as well
+    // as in the UI, because a list that can lose its defaults cannot get them
+    // back.
+    final target = state.sources.where((s) => s.url == url);
+    if (target.isEmpty || !target.first.canDelete) return;
     final next = state.sources.where((s) => s.url != url).toList();
     state = state.copyWith(sources: next);
     await _persistSources(next);
@@ -394,7 +412,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // Shared fetch+parse stage (also the background task's) with UI progress.
     final harvester = BriefingHarvester(fetcher: fetcher, extractor: extractor);
     final harvests = await harvester.harvestAll(
-      [for (final s in state.sources) s.url],
+      [for (final s in enabledBriefingSources(state.sources)) s.url],
       onFeed: (i, total) => state = state.copyWith(
         phase: BriefingPhase.fetching,
         progressLabel: 'Leyendo fuente ${i + 1} de ${total + 1}…',

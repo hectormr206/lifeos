@@ -123,15 +123,45 @@ class _MorningBriefingSourcesScreenState
                               source.url,
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
+                              style: source.enabled
+                                  ? null
+                                  : TextStyle(
+                                      color: Theme.of(context).disabledColor,
+                                      decoration: TextDecoration.lineThrough,
+                                    ),
                             ),
-                            trailing: IconButton(
-                              icon: const Icon(Icons.delete_outline),
-                              tooltip: 'Eliminar',
-                              onPressed: () => ref
-                                  .read(
-                                    morningBriefingNotifierProvider.notifier,
-                                  )
-                                  .removeSource(source.url),
+                            // Disabled sources stay visible, or there would be
+                            // no way to turn one back on.
+                            subtitle: source.enabled
+                                ? null
+                                : const Text('Desactivada'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Switch(
+                                  value: source.enabled,
+                                  onChanged: (on) => ref
+                                      .read(
+                                        morningBriefingNotifierProvider
+                                            .notifier,
+                                      )
+                                      .setSourceEnabled(source.url, on),
+                                ),
+                                // Only the user's own can be deleted: a shipped
+                                // source that is gone means going to find the
+                                // URL again, which nobody does.
+                                if (source.canDelete)
+                                  IconButton(
+                                    icon: const Icon(Icons.delete_outline),
+                                    tooltip: 'Eliminar',
+                                    onPressed: () => ref
+                                        .read(
+                                          morningBriefingNotifierProvider
+                                              .notifier,
+                                        )
+                                        .removeSource(source.url),
+                                  ),
+                              ],
                             ),
                           ),
                       ],
