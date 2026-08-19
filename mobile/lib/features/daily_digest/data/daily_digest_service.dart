@@ -9,6 +9,7 @@ import '../../local_model/domain/local_llm_engine.dart';
 import '../../memory/domain/person_directory.dart';
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_aggregator.dart';
+import '../domain/digest_insights.dart';
 
 /// FIXED, internal narration instruction that shapes the on-device model's
 /// natural-language wrap-up over the deterministically-assembled facts.
@@ -69,6 +70,27 @@ class DailyDigestService {
     return aggregateDailyDigest(entriesByDomain, now: now, directory: directory, location: location);
   }
 
+  /// Cross-day lines for the summary, best-effort.
+  ///
+  /// A failure here degrades to the inventory the summary already was, never
+  /// to a wrong claim about someone's habits.
+  Future<List<String>> _insights({required DateTime now}) async {
+    try {
+      final timestamps = <String, List<DateTime>>{};
+      for (final descriptor in domainDescriptors) {
+        final entries = await _repository.list(descriptor.key,
+            period: LocalEntryPeriod.todo);
+        timestamps[descriptor.key] = [for (final e in entries) e.timestamp];
+      }
+      return digestInsights(
+        digestDaysFrom(timestamps, today: now),
+        today: now,
+      );
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// Generate a full digest for [now]. The model wrap-up is shaped by the fixed
   /// internal [kDailyDigestNarrationInstruction] (not user-configurable).
   /// Deterministic facts are always produced; the wrap-up is best-effort.
@@ -79,10 +101,19 @@ class DailyDigestService {
     // device-local rendering unchanged).
     final facts = renderDigestFacts(data, location: location);
 
+    // What changed ACROSS days. The summary used to be an inventory of today —
+    // correct, and saying nothing the user could not get by opening the list.
+    // Streaks and gaps are the part worth reading, and they are plain counting:
+    // nothing here interprets, advises or claims a correlation.
+    final insights = await _insights(now: now);
+    final factsWithInsights =
+        insights.isEmpty ? facts : '$facts\n\n${insights.join('\n')}';
+
     if (data.isEmpty) {
       return DailyDigest(
         generatedAt: now,
-        deterministicText: facts,
+        // Even on a blank day the streak that just broke is worth saying.
+        deterministicText: factsWithInsights,
         wrapUp: '',
         entriesCount: 0,
       );
@@ -105,7 +136,7 @@ class DailyDigestService {
 
     return DailyDigest(
       generatedAt: now,
-      deterministicText: facts,
+      deterministicText: factsWithInsights,
       wrapUp: wrapUp,
       entriesCount: data.totalEntries,
     );
