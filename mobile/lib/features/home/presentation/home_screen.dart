@@ -267,13 +267,13 @@ class _HomeSections extends ConsumerWidget {
           ),
 
           // 4) Settings & system — least prominent, at the bottom.
+          //
+          // No "Ajustes" row here: the app bar's gear already goes to the same
+          // screen, and offering one destination twice makes someone opening
+          // the app for the first time stop and wonder whether they are
+          // different. The two rows below are shortcuts to places INSIDE
+          // Ajustes that are worth reaching in one tap.
           _SectionHeader(label: l10n.homeSectionSystem),
-          _NavButton(
-            icon: Icons.tune,
-            label: l10n.homeSettings,
-            onPressed: () => context.push('/settings'),
-          ),
-          const SizedBox(height: 12),
           _NavButton(
             icon: Icons.offline_bolt_outlined,
             label: l10n.homeLocalModel,

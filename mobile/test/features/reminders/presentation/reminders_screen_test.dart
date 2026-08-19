@@ -1,218 +1,33 @@
-// Proves the ENGINE-VIEWER half of RemindersScreen (now the "Desde tu
-// laptop" tab — roadmap slice C2 added a LOCAL tab next to it): renders the
-// upcoming/pending list, the NL quick-create bar (reusing the chat
-// endpoint), and a "mark done" action per reminder that calls the
-// repository's cancel(). No live engine — both repositories faked. The
-// LOCAL tab has its own suite (local_reminders_notifier_test.dart).
+// The reminders screen — a single LOCAL surface.
+//
+// The engine-viewer tests that used to live here went with the tab they
+// covered: reminders on a paired server are not a thing any more, because
+// every device runs its own model and the graph syncs the results. What is
+// left is this device's own composer and list.
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:lifeos/core/connectivity/connectivity_status.dart';
-import 'package:lifeos/features/chat/data/chat_repository.dart';
-import 'dart:typed_data';
-
-import 'package:lifeos/features/chat/domain/chat_message.dart';
-import 'package:lifeos/features/chat/presentation/chat_notifier.dart';
-import 'package:lifeos/features/reminders/data/reminders_repository.dart';
-import 'package:lifeos/features/reminders/domain/reminder.dart';
-import 'package:lifeos/features/reminders/presentation/reminders_notifier.dart';
 import 'package:lifeos/features/reminders/presentation/reminders_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
-class _FixedConnectivityNotifier extends ConnectivityNotifier {
-  _FixedConnectivityNotifier(this._fixed);
-
-  final ConnectivityStatus _fixed;
-
-  @override
-  ConnectivityStatus build() => _fixed;
-}
-
-class _FakeRemindersRepository implements RemindersRepository {
-  _FakeRemindersRepository({this.reminders = const [], this.listError});
-
-  final List<ReminderModel> reminders;
-  final RemindersException? listError;
-  int listCalls = 0;
-  String? lastCancelledId;
-
-  @override
-  Future<List<ReminderModel>> list({String status = 'pending'}) async {
-    listCalls++;
-    if (listError != null) throw listError!;
-    return reminders;
-  }
-
-  @override
-  Future<void> cancel(String id) async {
-    lastCancelledId = id;
-  }
-}
-
-class _FakeChatRepository implements ChatRepository {
-  int sendCalls = 0;
-  String? lastText;
-
-  @override
-  Future<List<ChatMessage>> loadHistory() async => const [];
-
-  @override
-  Future<ChatMessage> sendImages(String text, List<Uint8List> images) =>
-      throw UnimplementedError();
-
-  @override
-  Future<ChatMessage> sendMessage(String text) async {
-    sendCalls++;
-    lastText = text;
-    return ChatMessage(id: 'a', role: ChatRole.axi, text: 'listo', timestamp: DateTime.now());
-  }
-}
-
-/// Switches to the "Desde el motor Axi" tab (the engine viewer under test here)
-/// and pumps past the tab animation so the LOCAL tab's page is disposed —
-/// finders then only see the engine tab's widgets.
-Future<void> openEngineTab(WidgetTester tester) async {
-  await tester.pump();
-  await tester.tap(find.text('Desde el motor Axi'));
-  await tester.pump();
-  await tester.pump(const Duration(milliseconds: 350));
-  await tester.pump();
-}
-
-/// The screen's tab labels are localized now, so the test app must carry the
-/// delegates. Pinned to Spanish: an English CI host would otherwise render
-/// "From the Axi engine" and [openEngineTab] would be asserting the machine's
-/// locale rather than the screen.
-Widget _localizedApp() => MaterialApp(
-      locale: const Locale('es'),
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      home: const RemindersScreen(),
+Widget _localizedApp() => const ProviderScope(
+      child: MaterialApp(
+        locale: Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: RemindersScreen(),
+      ),
     );
+
+/// The local tab keeps a progress indicator running while it loads, so
+/// `pumpAndSettle` would wait for an animation that is the point of the
+/// screen.
+Future<void> _settleEnough(WidgetTester tester) async {
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 200));
+}
 
 void main() {
-  testWidgets('renders pending reminders with their message', (tester) async {
-    final reminder =
-        ReminderModel(id: 'r1', whenTs: DateTime.utc(2026, 7, 15, 15), message: 'Llamar al doctor', status: 'pending');
-    final repo = _FakeRemindersRepository(reminders: [reminder]);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-
-    expect(find.text('Llamar al doctor'), findsOneWidget);
-  });
-
-  testWidgets('shows an empty state when there are no reminders', (tester) async {
-    final repo = _FakeRemindersRepository();
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-
-    expect(find.text('No tienes recordatorios pendientes.'), findsOneWidget);
-  });
-
-  testWidgets('shows an error state with a retry button on failure', (tester) async {
-    final repo = _FakeRemindersRepository(listError: RemindersException('boom'));
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-
-    expect(find.text('boom'), findsOneWidget);
-    expect(find.text('Reintentar'), findsOneWidget);
-  });
-
-  testWidgets('the create bar sends text through the chat endpoint and refreshes the list', (tester) async {
-    final repo = _FakeRemindersRepository();
-    final chat = _FakeChatRepository();
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-          chatRepositoryProvider.overrideWithValue(chat),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-    expect(repo.listCalls, 1);
-
-    await tester.enterText(find.byType(TextField), 'recuérdame llamar al doctor mañana a las 3');
-    await tester.tap(find.byIcon(Icons.add));
-    await tester.pump();
-    await tester.pump();
-
-    expect(chat.sendCalls, 1);
-    expect(chat.lastText, 'recuérdame llamar al doctor mañana a las 3');
-    expect(repo.listCalls, 2);
-  });
-
-  testWidgets('tapping the done action marks the reminder done and refreshes the list', (tester) async {
-    final reminder =
-        ReminderModel(id: 'r1', whenTs: DateTime.utc(2026, 7, 15, 15), message: 'Llamar al doctor', status: 'pending');
-    final repo = _FakeRemindersRepository(reminders: [reminder]);
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-    expect(repo.listCalls, 1);
-
-    await tester.tap(find.byIcon(Icons.check_circle_outline));
-    await tester.pump();
-    await tester.pump();
-
-    expect(repo.lastCancelledId, 'r1');
-    expect(repo.listCalls, 2);
-  });
-
-  testWidgets('shows the offline banner when connectivity is offlineWithCache (M3 slice 1)', (tester) async {
-    final reminder =
-        ReminderModel(id: 'r1', whenTs: DateTime.utc(2026, 7, 15, 15), message: 'Llamar al doctor', status: 'pending');
-    final repo = _FakeRemindersRepository(reminders: [reminder]);
-    final fixed = ConnectivityStatus(state: ConnectivityState.offlineWithCache, lastSyncAt: DateTime.now());
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-          connectivityStatusProvider.overrideWith(() => _FixedConnectivityNotifier(fixed)),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await openEngineTab(tester);
-
-    expect(find.byIcon(Icons.cloud_off), findsOneWidget);
-    expect(find.textContaining('Sin conexión'), findsOneWidget);
-  });
-
   testWidgets('the create button is dead until there is something to create',
       (tester) async {
     // Seen on the test Pixel: with the box empty, tapping the alarm icon did
@@ -220,21 +35,8 @@ void main() {
     // early on empty text while the button still looked and behaved like a
     // live control, so the only thing the app communicated was that it was
     // broken. A disabled button says "not yet" by being grey.
-    final repo = _FakeRemindersRepository();
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    // Not pumpAndSettle: the local tab keeps a progress indicator spinning
-    // while it loads, and settling would wait for an animation that is the
-    // point of the screen.
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpWidget(_localizedApp());
+    await _settleEnough(tester);
 
     final button = find.widgetWithIcon(IconButton, Icons.alarm_add);
     expect(tester.widget<IconButton>(button).onPressed, isNull,
@@ -248,18 +50,8 @@ void main() {
   });
 
   testWidgets('whitespace alone does not count as text', (tester) async {
-    final repo = _FakeRemindersRepository();
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          remindersRepositoryProvider.overrideWithValue(repo),
-        ],
-        child: _localizedApp(),
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 200));
+    await tester.pumpWidget(_localizedApp());
+    await _settleEnough(tester);
 
     await tester.enterText(find.byType(TextField).first, '   ');
     await tester.pump();

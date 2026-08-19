@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 
 import '../domain/domain_descriptor.dart';
@@ -15,7 +17,10 @@ class DomainsHubScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Mis datos')),
+      // The same words the home screen used to get here. A destination that
+      // renames itself on arrival makes people wonder whether they tapped the
+      // wrong thing.
+      appBar: AppBar(title: Text(AppLocalizations.of(context).homeMyData)),
       body: GridView.count(
         padding: const EdgeInsets.all(16),
         crossAxisCount: 2,

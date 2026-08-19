@@ -7,6 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
 import 'package:lifeos/features/domains/presentation/domains_hub_screen.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
 
 void main() {
   testWidgets('shows a card for each registered domain', (tester) async {
@@ -16,7 +17,15 @@ void main() {
     await tester.binding.setSurfaceSize(const Size(800, 1600));
     addTearDown(() => tester.binding.setSurfaceSize(null));
 
-    await tester.pumpWidget(const MaterialApp(home: DomainsHubScreen()));
+    // Localized: the title now comes from the same string the home row uses,
+    // so the screen needs the delegates to build at all.
+    await tester.pumpWidget(const MaterialApp(
+      locale: Locale('es'),
+      localizationsDelegates: AppLocalizations.localizationsDelegates,
+      supportedLocales: AppLocalizations.supportedLocales,
+      home: DomainsHubScreen(),
+    ));
+    await tester.pump();
 
     for (final descriptor in domainDescriptors) {
       expect(find.text(descriptor.title), findsOneWidget);

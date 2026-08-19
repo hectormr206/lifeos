@@ -1,4 +1,8 @@
-// Proves the on-device-first routing: local mode is ALWAYS ON now, so an
+// /chat needs no pairing: the model runs on the device.
+//
+// The other half of this file asserted that an engine-only route still
+// redirected to the connection screen. There are no engine-only routes any
+// more, and no connection screen to redirect to.
 // UNPAIRED device can always reach /chat (it is effectively never pairing-
 // gated). The pairing gate itself is UNCHANGED for the other engine-only
 // routes — an unpaired device still redirects those to the connection screen,
@@ -34,20 +38,5 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Axi'), findsOneWidget);
-  });
-
-  testWidgets('unpaired: an engine-only route still redirects to connection', (tester) async {
-    final container = _unpairedContainer();
-    await tester.pumpWidget(
-      UncontrolledProviderScope(container: container, child: const LifeOSApp()),
-    );
-    await tester.pump();
-
-    // /body is not the on-device chat, so the pairing gate is unchanged: an
-    // unpaired device is redirected to the connection screen.
-    container.read(goRouterProvider).go('/body');
-    await tester.pumpAndSettle();
-
-    expect(find.text('Conexión'), findsOneWidget);
   });
 }

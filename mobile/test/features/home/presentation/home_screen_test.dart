@@ -298,7 +298,10 @@ void main() {
     expect(find.text('Resumen de hoy'), findsOneWidget);
   });
 
-  testWidgets('on-device (unpaired): shows the "Ajustes" CTA', (tester) async {
+  // Ajustes is reached from the app bar's gear, not from a row: it used to be
+  // offered twice, and two doors into one room is a moment of doubt for
+  // someone opening the app for the first time.
+  testWidgets('Ajustes is NOT duplicated as a row (unpaired)', (tester) async {
     await tester.pumpWidget(
       ProviderScope(
         overrides: [tokenStoreProvider.overrideWithValue(FakeTokenStore())],
@@ -307,10 +310,10 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.text('Ajustes'), findsOneWidget);
+    expect(find.text('Ajustes'), findsNothing);
   });
 
-  testWidgets('shows the "Ajustes" CTA when paired', (tester) async {
+  testWidgets('Ajustes is NOT duplicated as a row (paired)', (tester) async {
     final store = FakeTokenStore(
       const StoredConnection(engineUrl: 'https://10.66.66.2:8081', token: 'tok', deviceId: 'dev-1'),
     );
@@ -326,7 +329,7 @@ void main() {
     await tester.pump();
     await tester.pump();
 
-    expect(find.text('Ajustes'), findsOneWidget);
+    expect(find.text('Ajustes'), findsNothing);
   });
 
   // "Reuniones" was a READ-ONLY viewer of recordings the laptop makes — the
@@ -352,7 +355,6 @@ void main() {
       ('Mi vida', 'MI VIDA'),
       ('Registrar por categoría', 'DOMAINS'),
       ('Recordatorios', 'REMINDERS'),
-      ('Ajustes', 'SETTINGS'),
     ]) {
       await tester.pumpWidget(
         ProviderScope(

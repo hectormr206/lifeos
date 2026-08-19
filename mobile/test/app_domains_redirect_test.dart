@@ -5,6 +5,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
+import 'package:lifeos/features/domains/presentation/domains_hub_screen.dart';
 import 'package:lifeos/core/api/api_providers.dart';
 import 'package:lifeos/core/auth/token_store.dart';
 import 'package:lifeos/features/domains/data/domain_repository.dart';
@@ -40,7 +41,10 @@ void main() {
 
     await _pumpAppAndGo(tester, container, '/domains');
 
-    expect(find.text('Mis datos'), findsOneWidget);
+    // By type, not by text: this test builds the app's real router with no
+    // locale forced, so the title comes back in whichever language the host
+    // is set to. The title's WORDING is pinned in home_no_duplicates_test.
+    expect(find.byType(DomainsHubScreen), findsOneWidget);
   });
 
   testWidgets('paired: /domains renders the domains hub', (tester) async {
@@ -52,7 +56,10 @@ void main() {
 
     await _pumpAppAndGo(tester, container, '/domains');
 
-    expect(find.text('Mis datos'), findsOneWidget);
+    // By type, not by text: this test builds the app's real router with no
+    // locale forced, so the title comes back in whichever language the host
+    // is set to. The title's WORDING is pinned in home_no_duplicates_test.
+    expect(find.byType(DomainsHubScreen), findsOneWidget);
   });
 
   testWidgets('/domains/health renders the health domain screen (local tab, ungated)', (tester) async {

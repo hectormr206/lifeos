@@ -18,17 +18,12 @@ import 'features/app_update/presentation/app_update_notifier.dart';
 import 'features/app_update/presentation/app_update_providers.dart';
 import 'features/app_update/presentation/app_updates_screen.dart';
 import 'features/assistant/presentation/assistant_providers.dart';
-import 'features/body/presentation/body_screen.dart';
-import 'features/briefings/presentation/briefings_screen.dart';
 import 'features/chat/presentation/chat_screen.dart';
-import 'features/connection/domain/connection_status.dart';
 import 'features/data_control/presentation/backups_screen.dart';
 import 'features/sync/presentation/sync_routes.dart';
 import 'features/data_control/presentation/danger_zone_menu_screen.dart';
 import 'features/data_control/presentation/danger_zone_screen.dart';
 import 'features/data_control/presentation/data_control_providers.dart';
-import 'features/connection/presentation/connection_notifier.dart';
-import 'features/connection/presentation/connection_screen.dart';
 import 'features/daily_digest/presentation/daily_digest_notifier.dart';
 import 'features/daily_digest/presentation/daily_digest_providers.dart';
 import 'features/daily_digest/presentation/daily_digest_screen.dart';
@@ -36,22 +31,15 @@ import 'core/platform/app_platform.dart';
 import 'core/platform/platform_providers.dart';
 import 'features/dictation/presentation/dictate_screen.dart';
 import 'features/dictation/presentation/dictation_setup_screen.dart';
-import 'features/digest/presentation/digest_screen.dart';
 import 'features/domains/domain/domain_descriptor.dart';
 import 'features/domains/presentation/domain_list_screen.dart';
 import 'features/domains/presentation/domains_hub_screen.dart';
 import 'features/brain3d/presentation/brain3d_screen.dart';
 import 'features/backup/presentation/backup_settings_screen.dart';
-import 'features/graph/presentation/graph_browser_screen.dart';
-import 'features/graph/presentation/graph_node_screen.dart';
 import 'features/graph/presentation/local_graph_browser_screen.dart';
 import 'features/graph/presentation/local_graph_node_screen.dart';
 import 'features/home/presentation/home_screen.dart';
-import 'features/insights/presentation/insights_screen.dart';
-import 'features/local_model/presentation/local_model_providers.dart';
 import 'features/local_model/presentation/local_model_screen.dart';
-import 'features/meetings/presentation/meeting_detail_screen.dart';
-import 'features/meetings/presentation/meetings_screen.dart';
 import 'features/mi_vida/presentation/mi_vida_screen.dart';
 import 'features/morning_briefing/presentation/morning_briefing_notifier.dart';
 import 'features/morning_briefing/presentation/morning_briefing_providers.dart';
@@ -66,7 +54,6 @@ import 'features/reminders/presentation/reminders_screen.dart';
 import 'features/security/presentation/app_lock_gate.dart';
 import 'features/security/presentation/app_lock_providers.dart';
 import 'features/settings/presentation/settings_hub_screen.dart';
-import 'features/settings/presentation/settings_screen.dart';
 import 'features/settings/presentation/timezone_settings_screen.dart';
 import 'features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'features/voice_settings/presentation/voice_settings_screen.dart';
@@ -76,6 +63,7 @@ import 'theme/lifeos_theme.dart';
 import 'theme/theme_providers.dart';
 import 'package:lifeos/core/graph/graph_providers.dart';
 import 'package:lifeos/core/sync/keys.dart';
+import 'package:lifeos/features/sync/data/sync_after_pass.dart';
 import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
 import 'package:lifeos/features/sync/data/sync_status_store.dart';
@@ -150,32 +138,12 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       if (gate == OnboardingGate.done && loc == '/onboarding') {
         return '/';
       }
-      // Roadmap slice C2: `/reminders` is no longer pairing-gated — its
-      // LOCAL tab (on-device store + scheduling) must work unpaired, same
-      // rationale as `/settings/graph`. The engine-viewer tab inside the
-      // screen degrades to its own connection error when unpaired.
-      // Native domain CRUD: `/domains` (hub + per-domain screens) is ungated
-      // the same way — each domain's "En este dispositivo" tab is full local
-      // CRUD over the on-device graph; the "Desde el motor Axi" tab degrades to
-      // its own connection error when unpaired.
-      final needsPairing = loc == '/chat' ||
-          loc == '/body' ||
-          loc == '/insights' ||
-          loc == '/briefings' ||
-          loc == '/digest' ||
-          loc == '/settings/engine' ||
-          loc.startsWith('/graph') ||
-          loc.startsWith('/meetings');
-      if (needsPairing && ref.read(connectionNotifierProvider) is! ConnectionPaired) {
-        // Roadmap SLICE 1 (safe, additive): the on-device chat mode needs no
-        // pairing, so let `/chat` through when local-model mode is ON even on
-        // an unpaired device. Behavior is UNCHANGED when the toggle is OFF
-        // (the normal paired flow) and for every other gated route.
-        final localChatAllowed = loc == '/chat' && ref.read(localModelEnabledProvider);
-        if (!localChatAllowed) {
-          return '/settings/connection';
-        }
-      }
+      // There is no pairing gate any more. Every route this app still has
+      // runs on the device: its own model, its own graph, its own reminders.
+      // The gate existed for the engine — a bigger model on a stronger
+      // machine, shared with everything else — and with the engine gone the
+      // gate could only redirect people to a screen offering to pair with
+      // nothing.
       return null;
     },
     routes: [
@@ -183,7 +151,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // First-launch permissions onboarding (shown once via the onboarding
       // gate above). Not pairing-gated — it runs before anything else.
       GoRoute(path: '/onboarding', builder: (context, state) => const PermissionsOnboardingScreen()),
-      GoRoute(path: '/settings/connection', builder: (context, state) => const ConnectionScreen()),
       GoRoute(path: '/chat', builder: (context, state) => const ChatScreen()),
       // "Dictar" — speak, transcribe on-device, review, send. Cross-platform
       // (Android + the desktop shells); distinct from the Android-only Axi
@@ -194,15 +161,11 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: '/domains/:key',
         builder: (context, state) => DomainListScreen(descriptor: domainDescriptorFor(state.pathParameters['key']!)),
       ),
-      GoRoute(path: '/body', builder: (context, state) => const BodyScreen()),
       // Unified "Mi vida" view: all local domain data (by domain + person) plus
       // the notifications (reminders + daily digest), each entry editable in
       // place. Local-only, so NOT pairing-gated (no gate entry matches).
       GoRoute(path: '/mi-vida', builder: (context, state) => const MiVidaScreen()),
       GoRoute(path: '/reminders', builder: (context, state) => const RemindersScreen()),
-      GoRoute(path: '/insights', builder: (context, state) => const InsightsScreen()),
-      GoRoute(path: '/briefings', builder: (context, state) => const BriefingsScreen()),
-      GoRoute(path: '/digest', builder: (context, state) => const DigestScreen()),
       // App-shell slice: `/settings` is now the offline-reachable Settings hub
       // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
       // exact-match `loc == '/settings'` was removed from the gate above) so the
@@ -210,7 +173,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/settings', builder: (context, state) => const SettingsHubScreen()),
       // The engine config editor (laptop `/config` parity) relocated here from
       // `/settings`; still gated behind pairing via `loc == '/settings/engine'`.
-      GoRoute(path: '/settings/engine', builder: (context, state) => const SettingsScreen()),
       // Roadmap SLICE 1: on-device model manager. Not pairing-gated (no gate
       // entry matches this sub-path) so it is reachable offline/unpaired.
       GoRoute(path: '/settings/local-model', builder: (context, state) => const LocalModelScreen()),
@@ -291,16 +253,6 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // (mobile parity of the laptop's /brain3d). Reached from the brain of
       // Axi's animated body on the home screen and from "Mi memoria".
       GoRoute(path: '/brain3d', builder: (context, state) => const Brain3dScreen()),
-      GoRoute(path: '/graph', builder: (context, state) => const GraphBrowserScreen()),
-      GoRoute(
-        path: '/graph/:id',
-        builder: (context, state) => GraphNodeScreen(nodeId: int.parse(state.pathParameters['id']!)),
-      ),
-      GoRoute(path: '/meetings', builder: (context, state) => const MeetingsScreen()),
-      GoRoute(
-        path: '/meetings/:id',
-        builder: (context, state) => MeetingDetailScreen(meetingId: int.parse(state.pathParameters['id']!)),
-      ),
     ],
   );
 });
@@ -415,6 +367,14 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
       // An automatic pass nobody records is one the user cannot see.
       onReport: (report) async {
         await SyncStatusStore().record(report);
+        // A reminder created on the laptop arrives here as a graph row, but
+        // the ALARM is per-device: without this it stayed unscheduled until
+        // someone opened the Recordatorios screen, so the same reminder rang
+        // on one machine and not the other.
+        await runAfterSyncPass(report, rearm: () async {
+          final service = await ref.read(localRemindersServiceProvider.future);
+          await service.reschedulePending(now: DateTime.now());
+        });
         if (!mounted) return;
         ref.invalidate(syncStatusProvider);
         ref.invalidate(syncPeerProvider);
@@ -721,3 +681,40 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
     );
   }
 }
+
+/// Every route this app registers.
+///
+/// Declared next to the router so a test can assert what the app CAN reach
+/// without navigating: the engine routes were removed, and the way to keep
+/// them gone is to state the inventory and check it.
+const List<String> kLifeosRoutePaths = [
+  '/',
+  '/onboarding',
+  '/chat',
+  '/dictate',
+  '/domains',
+  '/domains/:key',
+  '/mi-vida',
+  '/reminders',
+  '/settings',
+  '/settings/local-model',
+  '/settings/dictation',
+  '/settings/updates',
+  '/settings/briefing',
+  '/settings/daily-digest',
+  '/settings/briefing/sources',
+  '/settings/permissions',
+  '/settings/timezone',
+  '/settings/web-search',
+  '/settings/voice',
+  '/settings/voice/catalog',
+  '/settings/sync',
+  '/settings/sync/conflicts',
+  '/settings/backups',
+  '/settings/backups/server',
+  '/settings/danger-zone',
+  '/settings/danger',
+  '/settings/graph',
+  '/settings/graph/:uuid',
+  '/brain3d',
+];

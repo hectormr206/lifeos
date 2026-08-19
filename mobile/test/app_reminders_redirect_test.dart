@@ -1,7 +1,7 @@
-// Roadmap slice C2 changed the contract: /reminders is NO LONGER pairing-gated
-// (local on-device reminders must work with no engine), so both paired and
-// unpaired navigation render the Recordatorios screen with its two tabs.
-// (Previously this file asserted the old redirect-to-connection behavior.)
+// /reminders is reachable with no engine and no pairing: reminders live in
+// the on-device graph and are scheduled on the device. The screen used to
+// carry two tabs, "En este dispositivo" and "Desde el motor Axi"; the engine
+// is gone, so there is one surface and no tab labels to find.
 import 'package:flutter/material.dart';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -55,8 +55,9 @@ void main() {
       find.descendant(of: find.byType(AppBar), matching: find.text('Recordatorios')),
       findsOneWidget,
     );
-    expect(find.text('En este dispositivo'), findsOneWidget);
-    expect(find.text('Desde el motor Axi'), findsOneWidget);
+    expect(find.text('Recordatorios'), findsWidgets);
+    // And the engine tab is not there to find.
+    expect(find.text('Desde el motor Axi'), findsNothing);
   });
 
   testWidgets('paired: /reminders renders the reminders screen', (tester) async {
@@ -79,6 +80,6 @@ void main() {
       find.descendant(of: find.byType(AppBar), matching: find.text('Recordatorios')),
       findsOneWidget,
     );
-    expect(find.text('En este dispositivo'), findsOneWidget);
+    expect(find.text('Recordatorios'), findsWidgets);
   });
 }
