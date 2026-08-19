@@ -64,6 +64,8 @@ import 'theme/theme_providers.dart';
 import 'package:lifeos/core/graph/graph_providers.dart';
 import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
+import 'package:lifeos/features/memory/data/birthday_notifications.dart';
+import 'package:lifeos/features/memory/data/birthday_scheduling.dart';
 import 'package:lifeos/features/sync/data/sync_after_pass.dart';
 import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
@@ -378,6 +380,14 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
         await runAfterSyncPass(report, rearm: () async {
           final service = await ref.read(localRemindersServiceProvider.future);
           await service.reschedulePending(now: DateTime.now());
+          // Birthdays too: a person added on the laptop has to ring here
+          // without anyone opening the Relaciones screen. Same trigger, same
+          // reason — the maths was right all along and never reached anyone.
+          await scheduleBirthdayNudges(
+            store: await ref.read(localGraphStoreProvider.future),
+            notifications: BirthdayNotifications(),
+            now: DateTime.now(),
+          );
         });
         if (!mounted) return;
         ref.invalidate(syncStatusProvider);

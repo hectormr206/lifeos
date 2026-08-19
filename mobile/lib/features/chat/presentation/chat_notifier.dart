@@ -27,6 +27,7 @@ import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
 import '../domain/conversation_subject.dart';
 import '../domain/person_answer.dart';
+import '../domain/person_facts.dart';
 import '../domain/chat_message.dart';
 import 'chat_context_providers.dart';
 import 'chat_providers.dart';
@@ -410,6 +411,21 @@ class ChatNotifier extends Notifier<ChatUiState> {
     );
     final text = attributeToSubject(rawText, _subject);
 
+    // What was just said ABOUT a person, when we know who that is. This is
+    // the dinner-two-months-from-now feature: "su hijo Mateo tiene 8" is what
+    // makes someone feel remembered, and the generic capture stored it as an
+    // orphan sentence attached to nobody.
+    //
+    // Read in Dart, never from the model: an invented detail about someone's
+    // family gets repeated to their face.
+    final subject = _subject;
+    if (subject != null && !subject.isQuestion) {
+      final facts = personFactsIn(rawText, subject: subject.name);
+      if (facts.isNotEmpty) {
+        return _rememberPersonFactsOrModel(facts, text, userMessage);
+      }
+    }
+
     // A stated BOND is stored before anything else looks at the turn. The
     // generic capture accepted the sentence and wrote nothing from it, so being
     // told about someone's sister left no trace at all.
@@ -429,6 +445,37 @@ class ChatNotifier extends Notifier<ChatUiState> {
       return _answerAboutPersonOrModel(text, userMessage);
     }
     return _sendTextToModel(text, userMessage);
+  }
+
+  /// Store what was said about a person; fall back to the model if nothing
+  /// could be written.
+  ///
+  /// Never acknowledges a save that did not happen — the one lie this codebase
+  /// treats as unforgivable, and here it would be a lie the user only finds out
+  /// about in front of the person whose life was supposedly remembered.
+  Future<void> _rememberPersonFactsOrModel(
+    List<PersonFact> facts,
+    String text,
+    ChatMessage userMessage,
+  ) async {
+    try {
+      final ack =
+          await ref.read(chatContextBuilderProvider).rememberPersonFacts(facts);
+      if (ack == null) return _sendTextToModel(text, userMessage);
+      if (_disposed) return;
+      final reply = ChatMessage(
+        id: 'person-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: ack,
+        timestamp: DateTime.now(),
+      );
+      state = state.copyWith(messages: [...state.messages, reply]);
+      _persist(reply);
+      // A new person may have appeared, so the next turn can recognise them.
+      _loadKnownPeople();
+    } catch (_) {
+      return _sendTextToModel(text, userMessage);
+    }
   }
 
   /// Store a stated bond; fall back to the model if it could not be written.

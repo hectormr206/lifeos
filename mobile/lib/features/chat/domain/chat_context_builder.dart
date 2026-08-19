@@ -31,6 +31,7 @@ import '../../domains/data/local_domain_repository.dart';
 import '../../domains/domain/local_entry_config.dart';
 import '../../embedding/domain/rag_service.dart';
 import '../../local_model/domain/local_llm_engine.dart';
+import 'person_facts.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart';
 import '../../memory/domain/health_parser.dart';
@@ -753,6 +754,36 @@ class ChatContextBuilder {
       return languageCode() == 'en'
           ? 'Noted: your $bond is $name.'
           : 'Anotado: tu $bond es $name.';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Store what was just said about a person, and acknowledge it in their own
+  /// terms.
+  ///
+  /// The value of this feature lives two months from now, at a dinner: knowing
+  /// that Juan's son Mateo is 8 is what makes someone feel remembered. So the
+  /// acknowledgement repeats the DETAIL back — if Axi says "anotado" and got
+  /// the name wrong, the user finds out now instead of in front of Juan.
+  ///
+  /// Returns null when nothing was written, so the caller falls through to the
+  /// model rather than claiming a save that did not happen.
+  Future<String?> rememberPersonFacts(List<PersonFact> facts) async {
+    if (facts.isEmpty) return null;
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return null;
+
+      final lines = describePersonFacts(facts);
+      for (final line in lines) {
+        await deps.writer.writeFact(
+          domain: 'relationships',
+          label: line,
+          subject: facts.first.subject,
+        );
+      }
+      return 'Anotado: ${lines.join(' ')}';
     } catch (_) {
       return null;
     }
