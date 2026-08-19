@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
+import '../../../core/graph/graph_records.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/brain3d_payload.dart';
 import '../domain/brain3d_palette.dart';
@@ -35,6 +36,10 @@ class Brain3dScreen extends ConsumerStatefulWidget {
 }
 
 class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
+  /// The node whose details are open. Null closes the panel and clears every
+  /// label, which is what makes the graph readable again.
+  String? _selectedId;
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -42,7 +47,24 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
 
     return Scaffold(
       backgroundColor: const Color(0xFF0B0E13),
-      appBar: AppBar(title: Text(l10n.brain3dTitle)),
+      appBar: AppBar(
+        title: Text(l10n.brain3dTitle),
+        // The count, as the desktop Cerebro has always shown it. Without it a
+        // sparse-looking graph is indistinguishable from a broken one — which
+        // cost this session two wrong fixes.
+        actions: [
+          if (payload case AsyncData(:final value))
+            Padding(
+              padding: const EdgeInsets.only(right: 16),
+              child: Center(
+                child: Text(
+                  '${value.nodes.length} · ${value.edges.length}',
+                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: switch (payload) {
         // Fewer than three memories is not a graph — it is one or two dots in
         // a black field, which reads as a broken screen rather than as "you
@@ -55,17 +77,42 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
         // rendering fault.
         AsyncData(:final value) when value.nodes.length < 3 =>
           _SummaryFallback(payload: value),
-        AsyncData(:final value) => Brain3dView(
-            nodes: [
-              for (final n in value.nodes)
-                Brain3dVisualNode(
-                  id: n.uuid,
-                  label: n.label,
-                  color: brain3dColorFor(domain: n.domain, kind: n.kind),
+        AsyncData(:final value) => Stack(
+            children: [
+              Positioned.fill(
+                child: Brain3dView(
+                  selectedId: _selectedId,
+                  onSelect: (id) => setState(() => _selectedId = id),
+                  nodes: [
+                    for (final n in value.nodes)
+                      Brain3dVisualNode(
+                        id: n.uuid,
+                        label: n.label,
+                        color: brain3dColorFor(domain: n.domain, kind: n.kind),
+                      ),
+                  ],
+                  edges: [
+                    for (final e in value.edges) (e.srcUuid, e.dstUuid),
+                  ],
                 ),
-            ],
-            edges: [
-              for (final e in value.edges) (e.srcUuid, e.dstUuid),
+              ),
+              if (_selectedId != null)
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  child: _NodeDetails(
+                    node: value.nodes.firstWhere(
+                      (n) => n.uuid == _selectedId,
+                      orElse: () => value.nodes.first,
+                    ),
+                    relations: value.edges
+                        .where((e) =>
+                            e.srcUuid == _selectedId || e.dstUuid == _selectedId)
+                        .length,
+                    onClose: () => setState(() => _selectedId = null),
+                  ),
+                ),
             ],
           ),
         AsyncError(:final error) =>
@@ -102,4 +149,82 @@ class _SummaryFallback extends StatelessWidget {
       ),
     );
   }
+}
+
+/// What a memory IS, shown when you tap it.
+///
+/// The desktop Cerebro has had this from the start: a panel with the label, its
+/// kind and domain, when it was created and how many relationships it has. The
+/// phone port shipped without it and painted every label permanently instead —
+/// less useful AND uglier.
+class _NodeDetails extends StatelessWidget {
+  const _NodeDetails({
+    required this.node,
+    required this.relations,
+    required this.onClose,
+  });
+
+  final GraphNodeRecord node;
+  final int relations;
+  final VoidCallback onClose;
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Material(
+      color: const Color(0xFF161A22),
+      child: SafeArea(
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(20, 16, 8, 16),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      node.label,
+                      style: text.titleMedium?.copyWith(color: Colors.white),
+                    ),
+                    const SizedBox(height: 6),
+                    Wrap(
+                      spacing: 8,
+                      children: [
+                        for (final tag in [node.kind, ?node.domain])
+                          Chip(
+                            label: Text(tag),
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: const Color(0xFF222833),
+                            labelStyle: const TextStyle(
+                                color: Colors.white70, fontSize: 12),
+                            side: BorderSide.none,
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      // The date the memory was BORN — which now travels
+                      // between devices, so it reads the same on both.
+                      'Creado: ${_day(node.createdAt)}  ·  '
+                      '${relations == 1 ? "1 relación" : "$relations relaciones"}',
+                      style: text.bodySmall?.copyWith(color: Colors.white54),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.white54),
+                onPressed: onClose,
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  static String _day(DateTime t) =>
+      '${t.day}/${t.month}/${t.year}';
 }

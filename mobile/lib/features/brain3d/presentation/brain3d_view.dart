@@ -20,6 +20,7 @@ import 'package:flutter/scheduler.dart';
 
 import '../domain/force_layout.dart';
 import '../domain/label_placement.dart';
+import '../domain/node_hit_test.dart';
 
 /// One node as the view needs it: where it goes, what colour, what it says.
 class Brain3dVisualNode {
@@ -43,6 +44,8 @@ class Brain3dView extends StatefulWidget {
     required this.edges,
     this.onNodeTap,
     this.seed = 7,
+    this.selectedId,
+    this.onSelect,
   });
 
   final List<Brain3dVisualNode> nodes;
@@ -52,6 +55,16 @@ class Brain3dView extends StatefulWidget {
   /// Fixed by default so the same graph looks the same on every open —
   /// a memory map that rearranged itself each visit would be unreadable.
   final int seed;
+
+  /// The node whose label is shown. Everything else stays a bare dot.
+  ///
+  /// The desktop Cerebro has always worked this way, and it is why it reads as
+  /// a constellation while this port — which painted every label always — read
+  /// as a pile of words.
+  final String? selectedId;
+
+  /// Called with the tapped node, or null when the tap hit empty space.
+  final void Function(String?)? onSelect;
 
   @override
   State<Brain3dView> createState() => _Brain3dViewState();
@@ -139,9 +152,11 @@ class _Brain3dViewState extends State<Brain3dView>
           _zoom = (_zoom * details.scale).clamp(0.4, 4.0);
         }
       }),
-      onTapUp: widget.onNodeTap == null ? null : _handleTap,
+      // Always live: a tap on empty space is how the details panel closes.
+      onTapUp: _handleTap,
       child: CustomPaint(
         painter: Brain3dPainter(
+          selectedId: widget.selectedId,
           nodes: widget.nodes,
           edges: widget.edges,
           positions: _layout.positions,
@@ -166,19 +181,24 @@ class _Brain3dViewState extends State<Brain3dView>
       pitch: _pitch,
       zoom: _zoom,
     );
-    // Nearest node within a finger-sized radius. Front-most wins, because that
-    // is the one the user can see.
-    Brain3dVisualNode? hit;
-    var bestDepth = -double.infinity;
-    for (final p in projected) {
-      if ((p.offset - details.localPosition).distance <= 24 &&
-          p.depth > bestDepth) {
-        hit = p.node;
-        bestDepth = p.depth;
-      }
-    }
-    if (hit != null) widget.onNodeTap!(hit);
+    // One rule, in one place, with tests: `nodeAt`. This used to be an inline
+    // loop with a hard-coded radius and no test of its own, which is how a
+    // second copy of the same rule ends up drifting from the first.
+    final id = nodeAt(details.localPosition, [
+      for (final p in projected)
+        HitCandidate(
+          id: p.node.id,
+          centre: p.offset,
+          radius: p.node.radius * p.scale * 1.4,
+          depth: p.depth,
+        ),
+    ]);
+    widget.onSelect?.call(id);
+    if (id == null) return;
+    final hit = widget.nodes.where((n) => n.id == id);
+    if (hit.isNotEmpty) widget.onNodeTap?.call(hit.first);
   }
+
 }
 
 /// A node after projection: where it lands and how near the camera it is.
@@ -195,6 +215,7 @@ class ProjectedNode {
 
 class Brain3dPainter extends CustomPainter {
   const Brain3dPainter({
+    this.selectedId,
     required this.nodes,
     required this.edges,
     required this.positions,
@@ -211,6 +232,9 @@ class Brain3dPainter extends CustomPainter {
   final double pitch;
   final double zoom;
   final Color background;
+
+  /// The one node whose label is drawn.
+  final String? selectedId;
 
   /// Distance from the camera to the origin. Large enough that perspective
   /// reads as depth rather than as a fisheye.
@@ -378,9 +402,23 @@ class Brain3dPainter extends CustomPainter {
     for (final p in projected) {
       // Depth cues do the work WebGL lighting would: nearer is bigger and more
       // opaque. Without them the projection reads as a flat scatter.
-      final paint = Paint()..color = p.node.color.withValues(alpha: 0.45 + 0.55 * p.scale);
-      final radius = p.node.radius * p.scale * 1.4;
+      final selected = p.node.id == selectedId;
+      final paint = Paint()
+        ..color = p.node.color.withValues(alpha: 0.45 + 0.55 * p.scale);
+      final radius = p.node.radius * p.scale * 1.4 * (selected ? 1.6 : 1.0);
       canvas.drawCircle(p.offset, radius, paint);
+      // A ring, because on a dark graph a slightly bigger dot is not an answer
+      // to "which one did I just tap?".
+      if (selected) {
+        canvas.drawCircle(
+          p.offset,
+          radius + 5,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 2
+            ..color = Colors.white.withValues(alpha: 0.85),
+        );
+      }
     }
 
     // Labels are laid out SEPARATELY, after every circle is drawn, because
@@ -391,10 +429,16 @@ class Brain3dPainter extends CustomPainter {
     // "presión 125/78 pulso 82" until none of it could be read. A label nobody
     // can read is worse than no label — it hides the legible ones and makes the
     // whole screen look broken.
+    // ONLY the selected node is labelled.
+    //
+    // The desktop Cerebro has always worked this way: bare dots, and the words
+    // in a panel when you click one. Painting every label always is what turned
+    // this screen into a pile of overlapping text — legible in a golden with
+    // five nodes, unreadable with eighty-eight.
     final labelled = [
       for (final p in projected)
-        if (p.scale >= 0.95 && p.node.label.isNotEmpty) p,
-    ]..sort((a, b) => b.scale.compareTo(a.scale));
+        if (p.node.id == selectedId && p.node.label.isNotEmpty) p,
+    ];
 
     final painters = <TextPainter>[];
     final offsets = <Offset>[];
@@ -433,6 +477,7 @@ class Brain3dPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant Brain3dPainter old) =>
+      old.selectedId != selectedId ||
       old.yaw != yaw ||
       old.pitch != pitch ||
       old.zoom != zoom ||
