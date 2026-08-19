@@ -71,7 +71,16 @@ class GraphSyncEngine {
 
   final DatabaseExecutor _db;
 
-  Future<void> ensureReady() => ensureSyncTables(_db);
+  /// Tables, and the one-time lift of everything written before the clock.
+  ///
+  /// The backfill runs HERE rather than at first use: a row still at lamport 0
+  /// when a pass starts is a row that pass will exclude for ever once the
+  /// cursor moves past 0 — which is how one device ended up with a fraction of
+  /// the other's memories while both reported a healthy sync.
+  Future<void> ensureReady() async {
+    await ensureSyncTables(_db);
+    await backfillSyncStamps(_db);
+  }
 
   /// How far this peer has confirmed. Unknown peers start at [kCursorUnsynced].
   Future<int> peerCursor(String peerUuid) async {

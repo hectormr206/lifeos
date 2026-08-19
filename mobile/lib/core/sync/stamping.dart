@@ -216,3 +216,57 @@ Future<bool> rememberApplied(DatabaseExecutor db, String envId) async {
   );
   return changed != 0;
 }
+
+/// Give the rows that predate the clock a place in it.
+///
+/// THE BUG THIS EXISTS FOR, measured on real devices: the phone showed many
+/// memories, the laptop two, and both reported a healthy sync. They were
+/// synced — of everything the cursor could see.
+///
+/// Every row written before stamping shipped sits at `lamport = 0`. The first
+/// pass sends them (0 > -1), the peer applies them and echoes a high-water of
+/// 0, the sender advances its cursor to 0 — and from that moment every
+/// remaining lamport-0 row fails `lamport > cursor` and is excluded FOR EVER.
+/// Part of the graph crosses, the rest silently never does, and neither device
+/// has anything to report.
+///
+/// `axi/src/axi/sync/stamping.py` has had this since the first slice. This is
+/// the port that was never written.
+///
+/// Idempotent, and safe to call at every startup: only rows still at 0 are
+/// touched. A row that ARRIVED from another device keeps its author —
+/// overwriting it would make this device claim authorship of everything it
+/// ever received, and the deterministic tiebreak would stop meaning anything.
+Future<int> backfillSyncStamps(DatabaseExecutor db) async {
+  await ensureSyncTables(db);
+  final origin = await localOrigin(db);
+  var next = await nextLamport(db);
+  var touched = 0;
+
+  for (final table in const ['nodes', 'edges']) {
+    final stale = await db.query(
+      table,
+      // origin_node too, or the update below reads null for EVERY row and
+      // stamps this device as the author of memories another one wrote. The
+      // test caught exactly that.
+      columns: ['uuid', 'origin_node'],
+      where: 'lamport IS NULL OR lamport = 0',
+      orderBy: 'created_at ASC, uuid ASC',
+    );
+    for (final row in stale) {
+      await db.update(
+        table,
+        {
+          'lamport': next,
+          // COALESCE in spirit: only fill an author that is missing.
+          'origin_node': row['origin_node'] ?? origin,
+        },
+        where: 'uuid = ? AND (lamport IS NULL OR lamport = 0)',
+        whereArgs: [row['uuid']],
+      );
+      next++;
+      touched++;
+    }
+  }
+  return touched;
+}

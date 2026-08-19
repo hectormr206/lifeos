@@ -240,4 +240,54 @@ void main() {
       );
     });
   });
+
+  group('memories older than the clock still cross', () {
+    // The reported failure, in one sentence: the phone showed many memories,
+    // the laptop two, and both said they were synced.
+    //
+    // Rows written before stamping shipped sit at lamport 0. The first pass
+    // sends them, the peer echoes a high-water of 0, the sender's cursor moves
+    // to 0 — and every remaining lamport-0 row fails `lamport > cursor` from
+    // then on. Part of the graph crosses and the rest never does, with nothing
+    // to report on either side.
+
+    Future<void> insertPreClock(Database db, String uuid) => db.insert('nodes', {
+          'uuid': uuid,
+          'kind': 'fact',
+          'label': 'vieja $uuid',
+          'data': '{}',
+          'created_at': 1000.0,
+          'updated_at': 1000.0,
+          'lamport': 0,
+        });
+
+    test('ALL of them cross, not just the first batch', () async {
+      for (var i = 0; i < 12; i++) {
+        await insertPreClock(dbA, 'old$i');
+      }
+      await engineA.ensureReady();
+
+      // Several passes, exactly as a real pair would do.
+      for (var i = 0; i < 3; i++) {
+        await push(engineA, engineB, fromPeer: 'A', toPeer: 'B');
+      }
+
+      final landed = await storeB.listNodesByKind('fact');
+      expect(landed, hasLength(12),
+          reason: 'the cursor moved past the rows still stuck at lamport 0');
+    });
+
+    test('and a row written afterwards still crosses too', () async {
+      // The backfill must not consume the clock in a way that strands new
+      // writes below the cursor.
+      await insertPreClock(dbA, 'vieja');
+      await engineA.ensureReady();
+      await push(engineA, engineB, fromPeer: 'A', toPeer: 'B');
+
+      final fresh = await storeA.createNode(kind: 'fact', label: 'nueva');
+      await push(engineA, engineB, fromPeer: 'A', toPeer: 'B');
+
+      expect(await storeB.getNodeByUuid(fresh.uuid), isNotNull);
+    });
+  });
 }
