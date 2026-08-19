@@ -25,6 +25,7 @@ import '../../web_search/presentation/web_search_providers.dart';
 import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
+import '../domain/conversation_subject.dart';
 import '../domain/person_answer.dart';
 import '../domain/chat_message.dart';
 import 'chat_context_providers.dart';
@@ -128,6 +129,12 @@ class ChatNotifier extends Notifier<ChatUiState> {
   final Queue<_OutgoingRequest> _queue = Queue<_OutgoingRequest>();
   bool _draining = false;
 
+  /// Who the conversation is about right now, and the people already stored.
+  /// Both live on the notifier because a subject that reset with the widget
+  /// would lose the thread every time the screen rebuilt.
+  ConversationSubject? _subject;
+  List<String> _knownPeople = const [];
+
   /// Set once the provider is disposed (chat screen closed, on-device toggle
   /// flipped). The [_drain] loop and [_loadHistory] check this after every
   /// `await` and bail WITHOUT touching `state` — mutating a disposed Notifier
@@ -154,7 +161,35 @@ class ChatNotifier extends Notifier<ChatUiState> {
   ChatUiState build() {
     ref.onDispose(_handleDispose);
     _bootstrapFuture = _loadHistory();
+    _loadKnownPeople();
     return const ChatUiState();
+  }
+
+  /// The people already in the graph, so a name typed mid-conversation is
+  /// recognised as a PERSON rather than as one more capitalised word — the
+  /// difference between "Juan vive en Puebla" staying about Juan and the
+  /// conversation quietly switching to a city.
+  ///
+  /// Best-effort: a chat that cannot read the store still works, it just
+  /// tracks the thread less confidently.
+  void _loadKnownPeople() {
+    // Reads the store only if it is ALREADY open — never awaits the future
+    // that opens it. Awaiting it blocked the chat's bootstrap, and in a test
+    // with no store override that future never resolves at all, so every chat
+    // test hung. Timing out instead left a pending Timer, which the test
+    // binding rightly refuses.
+    //
+    // Missing the list only makes the subject logic less confident, never
+    // wrong, and the next turn tries again.
+    final store = ref.read(localGraphStoreProvider).value;
+    if (store == null) return;
+    store.listNodesByKind('person').then((people) {
+      if (_disposed) return;
+      _knownPeople = [
+        for (final p in people)
+          if (p.label.trim().isNotEmpty) p.label.trim(),
+      ];
+    }).catchError((_) {});
   }
 
   /// Tears the queue down deterministically when the provider is disposed.
@@ -354,7 +389,27 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// The capture triage ([ChatContextBuilder.looksCapturable]) is SYNCHRONOUS,
   /// model-free and store-free, so an ordinary message goes straight to the
   /// model with no extra async hop or store read.
-  Future<void> _answer(String text, ChatMessage userMessage) {
+  Future<void> _answer(String rawText, ChatMessage userMessage) {
+    // WHO this turn is about, tracked in Dart rather than left to the model.
+    //
+    // "tiene dos hijos" names nobody, so the capture layer had nothing to
+    // attach it to and the fact either vanished or landed on whoever was
+    // handy. Naming the subject before the sentence is read fixes that
+    // without touching a single capture rule.
+    //
+    // `resolveConversationSubject` returns null when it is NOT sure — two
+    // people named, or a thread gone cold — and null means "change nothing".
+    // Unattributed is recoverable; misattributed is not, because nobody goes
+    // looking for a fact filed under the wrong person.
+    if (_knownPeople.isEmpty) _loadKnownPeople();
+    _subject = resolveConversationSubject(
+      message: rawText,
+      knownPeople: _knownPeople,
+      now: DateTime.now(),
+      previous: _subject,
+    );
+    final text = attributeToSubject(rawText, _subject);
+
     // A stated BOND is stored before anything else looks at the turn. The
     // generic capture accepted the sentence and wrote nothing from it, so being
     // told about someone's sister left no trace at all.

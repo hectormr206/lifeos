@@ -1,0 +1,224 @@
+// WHO the conversation is about right now.
+//
+// Asked for directly: "ese chat tiene que estar aprendiendo de qué le estamos
+// platicando de esa misma persona, o si cambiamos de repente a otra persona,
+// sepa de qué estamos hablando, para evitar que vaya a guardar cosas de una
+// persona en otra".
+//
+// That last clause is the whole feature. Telling Axi about Juan's daughter and
+// having it stored against Laura is not a small bug: the app's promise is that
+// it remembers your people correctly, and a memory that quietly mixes two
+// people up is worse than one that forgot.
+//
+// So this decides the subject IN CODE, never by asking the model to keep
+// track. A ~2B model loses the thread within three turns, and this project has
+// already learned that lesson twice — the decision belongs in Dart.
+//
+// The rule that matters most: when it is not SURE, it says so. A null subject
+// means "ask the user who this is about", never "guess the last one".
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/chat/domain/conversation_subject.dart';
+
+void main() {
+  final t0 = DateTime(2026, 8, 19, 12, 0);
+  const known = ['Juan', 'Laura', 'Sofía', 'Ana'];
+
+  ConversationSubject? resolve(
+    String message, {
+    ConversationSubject? previous,
+    Duration since = Duration.zero,
+  }) =>
+      resolveConversationSubject(
+        message: message,
+        knownPeople: known,
+        previous: previous,
+        now: t0.add(since),
+      );
+
+  group('a name in the message decides it', () {
+    test('a known name becomes the subject', () {
+      expect(resolve('Juan tiene dos hijos')!.name, 'Juan');
+    });
+
+    test('an accented known name is matched', () {
+      expect(resolve('Sofía cumple años en marzo')!.name, 'Sofía');
+    });
+
+    test('a name typed without its accent still matches the known one', () {
+      // People do not type accents on a phone keyboard.
+      expect(resolve('Sofia entra a la escuela')!.name, 'Sofía');
+    });
+
+    test('a name nobody has mentioned before is still a subject', () {
+      // Meeting someone new is the main way this gets used.
+      expect(resolve('Conocí a Roberto en la oficina')!.name, 'Roberto');
+    });
+  });
+
+  group('it refuses to guess', () {
+    test('two names in one message is ambiguous, not the first one', () {
+      // "Juan me contó que Laura se casa" is about Laura, or about Juan, and
+      // picking one silently is how facts land on the wrong person.
+      expect(resolve('Juan me contó que Laura se casa'), isNull);
+    });
+
+    test('no name and no previous subject is nobody', () {
+      expect(resolve('tiene tres hijos'), isNull);
+    });
+
+    test('a stale subject is not reused', () {
+      // An hour later, "su esposa se llama Marta" is almost certainly about
+      // someone else. Carrying the old subject forward would attribute it
+      // confidently and wrongly.
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(
+        resolve('tiene tres hijos',
+            previous: previous, since: const Duration(hours: 1)),
+        isNull,
+      );
+    });
+  });
+
+  group('the thread holds while it is still the same conversation', () {
+    test('a follow-up with no name keeps the subject', () {
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      final subject = resolve('tiene dos hijos',
+          previous: previous, since: const Duration(minutes: 1));
+
+      expect(subject!.name, 'Juan');
+    });
+
+    test('a pronoun keeps the subject', () {
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(
+        resolve('él trabaja en Puebla',
+                previous: previous, since: const Duration(minutes: 2))!
+            .name,
+        'Juan',
+      );
+    });
+
+    test('a place is not mistaken for a person', () {
+      // "Juan vive en Puebla" must stay about Juan. A capitalised word is not
+      // a person just because it is capitalised, and attributing a life to a
+      // city is the same class of mistake as attributing it to the wrong
+      // friend.
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(
+        resolve('él trabaja en Puebla',
+                previous: previous, since: const Duration(minutes: 2))!
+            .name,
+        'Juan',
+      );
+    });
+
+    test('naming someone else switches the subject', () {
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(
+        resolve('Laura cambió de trabajo',
+                previous: previous, since: const Duration(minutes: 1))!
+            .name,
+        'Laura',
+      );
+    });
+
+    test('the timestamp advances so the window follows the conversation', () {
+      // Otherwise a long chat about one person would go stale mid-sentence.
+      final previous = ConversationSubject(name: 'Juan', at: t0);
+
+      final subject = resolve('tiene dos hijos',
+          previous: previous, since: const Duration(minutes: 5));
+
+      expect(subject!.at, t0.add(const Duration(minutes: 5)));
+    });
+  });
+
+  group('what the user is told when it does not know', () {
+    test('an ambiguous subject asks, naming the candidates', () {
+      final question = askWhoThisIsAbout(['Juan', 'Laura']);
+
+      expect(question, contains('Juan'));
+      expect(question, contains('Laura'));
+      expect(question, contains('?'));
+    });
+
+    test('with no candidates it still asks rather than assuming', () {
+      expect(askWhoThisIsAbout(const []), contains('?'));
+    });
+  });
+
+  group('a question is not a statement about someone', () {
+    test('asking about a person sets the subject but stores nothing', () {
+      // "¿quién es Laura?" is about Laura, and it must NOT be recorded as a
+      // fact about her.
+      final subject = resolve('¿quién es Laura?');
+
+      expect(subject!.name, 'Laura');
+      expect(subject.isQuestion, isTrue);
+    });
+
+    test('a statement is marked as one', () {
+      expect(resolve('Laura tiene dos hijos')!.isQuestion, isFalse);
+    });
+  });
+
+  group('a follow-up is attributed to whoever the thread is about', () {
+    // The point of tracking a subject at all. "tiene dos hijos" carries no
+    // name, so the capture layer had nothing to attach it to — and a fact with
+    // no owner either gets dropped or, worse, lands on whoever was handy.
+
+    test('a nameless statement is rewritten to name the subject', () {
+      final subject = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(attributeToSubject('tiene dos hijos', subject),
+          'Juan tiene dos hijos');
+    });
+
+    test('a pronoun is replaced, not doubled up', () {
+      final subject = ConversationSubject(name: 'Juan', at: t0);
+
+      // "él Juan trabaja en Puebla" would be nonsense to store and to read.
+      expect(attributeToSubject('él trabaja en Puebla', subject),
+          'Juan trabaja en Puebla');
+    });
+
+    test('a message that already names the subject is left alone', () {
+      final subject = ConversationSubject(name: 'Juan', at: t0);
+
+      expect(attributeToSubject('Juan tiene dos hijos', subject),
+          'Juan tiene dos hijos');
+    });
+
+    test('with no subject the message is untouched', () {
+      // Never invent an owner. Unattributed is recoverable; misattributed is
+      // not, because nobody goes looking for a fact filed under the wrong
+      // person.
+      expect(attributeToSubject('tiene dos hijos', null), 'tiene dos hijos');
+    });
+
+    test('a question is never rewritten', () {
+      // "¿cuántos hijos tiene?" is a question about the subject, not a fact to
+      // store about them.
+      final subject =
+          ConversationSubject(name: 'Juan', at: t0, isQuestion: true);
+
+      expect(attributeToSubject('¿cuántos hijos tiene?', subject),
+          '¿cuántos hijos tiene?');
+    });
+
+    test('the possessive keeps its meaning', () {
+      final subject = ConversationSubject(name: 'Juan', at: t0);
+
+      // "su esposa se llama Marta" is Juan's wife, and it has to READ that way
+      // once the name is in it.
+      expect(attributeToSubject('su esposa se llama Marta', subject),
+          'la esposa de Juan se llama Marta');
+    });
+  });
+}
+
