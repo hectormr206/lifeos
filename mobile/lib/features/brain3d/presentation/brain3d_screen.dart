@@ -435,7 +435,10 @@ class _Hint extends StatelessWidget {
       borderRadius: BorderRadius.circular(8),
     ),
     child: const Text(
-      'Orbitar: arrastrar · Zoom: pellizcar · Toca: seleccionar',
+      // Both ways named, because both work and the app runs on both kinds of
+      // device. Naming only the pinch told a laptop user to do something their
+      // machine cannot do.
+      'Orbitar: arrastrar · Zoom: rueda o pellizco · Toca: seleccionar',
       style: TextStyle(color: Colors.white38, fontSize: 11),
     ),
   );

@@ -19,6 +19,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/gestures.dart';
 
 import '../domain/force_layout.dart';
 import '../domain/label_placement.dart';
@@ -90,6 +91,11 @@ class _Brain3dViewState extends State<Brain3dView>
   double _yaw = 0.6;
   double _pitch = 0.3;
   double _zoom = 1;
+
+  /// One pair of limits for BOTH ways of zooming. Past them every node sits in
+  /// a single pixel or behind the camera, with no way back but leaving.
+  static const double _minZoom = 0.4;
+  static const double _maxZoom = 4.0;
 
   @override
   void initState() {
@@ -197,32 +203,50 @@ class _Brain3dViewState extends State<Brain3dView>
       return const Center(child: CircularProgressIndicator());
     }
 
-    return GestureDetector(
-      onScaleStart: (_) {},
-      onScaleUpdate: (details) => setState(() {
-        _yaw += details.focalPointDelta.dx * 0.01;
-        _pitch = (_pitch + details.focalPointDelta.dy * 0.01).clamp(
-          -math.pi / 2,
-          math.pi / 2,
-        );
-        if (details.scale != 1.0) {
-          _zoom = (_zoom * details.scale).clamp(0.4, 4.0);
-        }
-      }),
-      // Always live: a tap on empty space is how the details panel closes.
-      onTapUp: _handleTap,
-      child: CustomPaint(
-        painter: Brain3dPainter(
-          selectedId: widget.selectedId,
-          nodes: widget.nodes,
-          edges: widget.edges,
-          positions: _layout.positions,
-          yaw: _yaw,
-          pitch: _pitch,
-          zoom: _zoom,
-          background: Theme.of(context).colorScheme.surface,
+    // Listener rather than another gesture recognizer: a scroll wheel sends a
+    // pointer SIGNAL, not a gesture, and GestureDetector never sees it. Without
+    // this the graph could not be zoomed at all on a desktop — a control the
+    // phone has and the laptop does not.
+    return Listener(
+      onPointerSignal: (event) {
+        if (event is! PointerScrollEvent) return;
+        // Up (negative dy) zooms in, the direction every map and editor uses.
+        // The exponential keeps each notch a constant PROPORTION, so zooming
+        // feels the same whether you are far out or close in.
+        setState(() {
+          _zoom = (_zoom * math.exp(-event.scrollDelta.dy / 400)).clamp(
+            _minZoom,
+            _maxZoom,
+          );
+        });
+      },
+      child: GestureDetector(
+        onScaleStart: (_) {},
+        onScaleUpdate: (details) => setState(() {
+          _yaw += details.focalPointDelta.dx * 0.01;
+          _pitch = (_pitch + details.focalPointDelta.dy * 0.01).clamp(
+            -math.pi / 2,
+            math.pi / 2,
+          );
+          if (details.scale != 1.0) {
+            _zoom = (_zoom * details.scale).clamp(_minZoom, _maxZoom);
+          }
+        }),
+        // Always live: a tap on empty space is how the details panel closes.
+        onTapUp: _handleTap,
+        child: CustomPaint(
+          painter: Brain3dPainter(
+            selectedId: widget.selectedId,
+            nodes: widget.nodes,
+            edges: widget.edges,
+            positions: _layout.positions,
+            yaw: _yaw,
+            pitch: _pitch,
+            zoom: _zoom,
+            background: Theme.of(context).colorScheme.surface,
+          ),
+          size: Size.infinite,
         ),
-        size: Size.infinite,
       ),
     );
   }
