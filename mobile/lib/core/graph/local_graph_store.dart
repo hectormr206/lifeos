@@ -84,6 +84,18 @@ abstract class LocalGraphStore {
   /// Soft-delete a single edge. Returns true if a live edge was tombstoned.
   Future<bool> softDeleteEdge(String uuid);
 
+  /// Fold [loserUuid] into [winnerUuid]: every live relationship of the loser
+  /// is re-pointed at the winner, then the loser is tombstoned.
+  ///
+  /// Returns false, having changed NOTHING, when either node is missing or
+  /// they are the same node. The picker that feeds this can hand it the same
+  /// uuid twice, and answering that by deleting the node would be the worst
+  /// possible outcome.
+  Future<bool> mergeNodes({
+    required String loserUuid,
+    required String winnerUuid,
+  });
+
   /// Lexical substring search over node `label` + `data`, newest-created
   /// first. A stand-in until the FTS5 slice (B1); a blank query returns `[]`.
   Future<List<GraphNodeRecord>> searchNodes(String query, {int limit = 20, bool includeDeleted = false});
@@ -384,6 +396,50 @@ class SqfliteLocalGraphStore implements LocalGraphStore {
     );
     if (affected > 0) syncChangeSignal.changed();
     return affected > 0;
+  }
+
+  @override
+  Future<bool> mergeNodes({
+    required String loserUuid,
+    required String winnerUuid,
+  }) async {
+    if (loserUuid == winnerUuid) return false;
+    if (await getNodeByUuid(loserUuid) == null) return false;
+    if (await getNodeByUuid(winnerUuid) == null) return false;
+
+    // What the winner is already related to, so the merge does not create a
+    // second identical edge. Keyed by direction + relation + far endpoint,
+    // because "Ana vive en Puebla" and "Puebla vive en Ana" are different
+    // claims and only one of them is true.
+    final existing = <String>{
+      for (final e in await edgesForNode(winnerUuid))
+        '${e.srcUuid == winnerUuid ? 'out' : 'in'}|${e.relation}|'
+            '${e.srcUuid == winnerUuid ? e.dstUuid : e.srcUuid}',
+    };
+
+    for (final edge in await edgesForNode(loserUuid)) {
+      final far = edge.srcUuid == loserUuid ? edge.dstUuid : edge.srcUuid;
+      // An edge that already joined the two would become a loop on the winner.
+      final loop = far == winnerUuid || far == loserUuid;
+      final outgoing = edge.srcUuid == loserUuid;
+      final key = '${outgoing ? 'out' : 'in'}|${edge.relation}|$far';
+
+      if (!loop && existing.add(key)) {
+        await createEdge(
+          srcUuid: outgoing ? winnerUuid : far,
+          dstUuid: outgoing ? far : winnerUuid,
+          relation: edge.relation,
+          data: edge.data,
+        );
+      }
+      // The old edge goes either way: kept, it would point at a tombstone.
+      await softDeleteEdge(edge.uuid);
+    }
+
+    // Last, so an interrupted merge leaves the loser alive with its edges
+    // rather than a deleted node whose relationships never arrived.
+    await softDeleteNode(loserUuid);
+    return true;
   }
 
   @override

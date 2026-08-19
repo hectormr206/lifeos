@@ -41,6 +41,27 @@ class _FakeLocalGraphStore implements LocalGraphStore {
         .toList();
   }
 
+  /// What the screen ASKED the store to do. The panel's two destructive
+  /// actions are the only place in this app where a tap removes something the
+  /// user told Axi, so the test asserts the call, not the repaint.
+  final List<String> forgotten = [];
+  final List<(String loser, String winner)> merged = [];
+
+  @override
+  Future<bool> softDeleteNode(String uuid) async {
+    forgotten.add(uuid);
+    return true;
+  }
+
+  @override
+  Future<bool> mergeNodes({
+    required String loserUuid,
+    required String winnerUuid,
+  }) async {
+    merged.add((loserUuid, winnerUuid));
+    return true;
+  }
+
   @override
   dynamic noSuchMethod(Invocation invocation) =>
       throw UnimplementedError('${invocation.memberName} not needed in tests');
@@ -115,5 +136,171 @@ void main() {
           'Aún no hay recuerdos en el grafo local. Conversa con Axi y su cerebro crecerá.'),
       findsOneWidget,
     );
+  });
+
+  group('the three actions of the original Cerebro', () {
+    GraphNodeRecord named(String uuid, String label, DateTime when) =>
+        GraphNodeRecord(
+          uuid: uuid,
+          kind: 'person',
+          label: label,
+          createdAt: when,
+          updatedAt: when,
+        );
+
+    _FakeLocalGraphStore threePeople({DateTime? when}) {
+      final t = when ?? DateTime.now().subtract(const Duration(days: 1));
+      return _FakeLocalGraphStore(
+        nodes: [
+          named('a', 'Ana', t),
+          named('a2', 'ana', t),
+          named('s', 'Sofía', t),
+        ],
+      );
+    }
+
+    Future<void> open(WidgetTester tester, LocalGraphStore store) async {
+      await tester.pumpWidget(_app(store));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+    }
+
+    testWidgets('with nothing selected it shows the week\'s news',
+        (tester) async {
+      await open(tester, threePeople());
+
+      expect(find.text('Novedades de la semana'), findsOneWidget);
+      // And the news are the memories themselves, not a count.
+      expect(find.text('Ana'), findsOneWidget);
+    });
+
+    testWidgets('an old graph shows no news rather than filler',
+        (tester) async {
+      await open(
+        tester,
+        threePeople(when: DateTime.now().subtract(const Duration(days: 90))),
+      );
+
+      // Inventing a "novedad" in a memory app is a lie about the user's life.
+      expect(find.text('Ana'), findsNothing);
+    });
+
+    testWidgets('tapping a news item opens that memory', (tester) async {
+      await open(tester, threePeople());
+      await tester.tap(find.text('Ana'));
+      await tester.pump();
+
+      expect(find.text('Olvidar este nodo'), findsOneWidget);
+    });
+
+    testWidgets('forgetting asks first, and a cancel forgets nothing',
+        (tester) async {
+      final store = threePeople();
+      await open(tester, store);
+      await tester.tap(find.text('Ana'));
+      await tester.pump();
+
+      await tester.ensureVisible(find.text('Olvidar este nodo'));
+      await tester.tap(find.text('Olvidar este nodo'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Cancelar'));
+      await tester.pumpAndSettle();
+
+      expect(store.forgotten, isEmpty,
+          reason: 'a cancelled dialog must never delete a memory');
+    });
+
+    testWidgets('confirming actually forgets that node', (tester) async {
+      final store = threePeople();
+      await open(tester, store);
+      await tester.tap(find.text('Ana'));
+      await tester.pump();
+
+      await tester.ensureVisible(find.text('Olvidar este nodo'));
+      await tester.tap(find.text('Olvidar este nodo'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Olvidar'));
+      await tester.pumpAndSettle();
+
+      expect(store.forgotten, ['a']);
+    });
+
+    testWidgets('merging folds the OTHER node into the one on screen',
+        (tester) async {
+      // Direction matters and is invisible: whichever node survives keeps its
+      // label, and getting it backwards silently renames the user's memory.
+      final store = threePeople();
+      await open(tester, store);
+      await tester.tap(find.text('Ana'));
+      await tester.pump();
+
+      await tester.ensureVisible(find.text('Fusionar con…'));
+      await tester.tap(find.text('Fusionar con…'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('ana').last);
+      await tester.pumpAndSettle();
+
+      expect(store.merged, [('a2', 'a')],
+          reason: 'the node you are looking at is the one that survives');
+    });
+
+    testWidgets('the merge picker never offers the node itself',
+        (tester) async {
+      final store = threePeople();
+      await open(tester, store);
+      await tester.tap(find.text('Ana'));
+      await tester.pump();
+
+      await tester.ensureVisible(find.text('Fusionar con…'));
+      await tester.tap(find.text('Fusionar con…'));
+      await tester.pumpAndSettle();
+
+      // Only the title of the panel behind it; no row to tap.
+      expect(find.text('Ana'), findsOneWidget);
+    });
+  });
+
+  group('the news panel never takes the screen from the graph', () {
+    // Measured on the test Pixel with 860: twelve news items on a phone-sized
+    // screen and the panel filled EVERYTHING — the brain was not visible at
+    // all. A bottom-anchored Positioned has no height of its own, so a
+    // shrink-wrapped list simply grows until it owns the screen.
+    //
+    // The widget tests passed because they asserted that texts existed. Text
+    // existing is not the same as the user being able to see the graph, and
+    // this is the second time in this session that a layout regression got
+    // through a green test for exactly that reason.
+
+    testWidgets('a busy week still leaves most of the screen to the brain',
+        (tester) async {
+      tester.view.physicalSize = const Size(1080, 2400);
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+
+      final now = DateTime.now();
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          for (var i = 0; i < 20; i++)
+            GraphNodeRecord(
+              uuid: 'n$i',
+              kind: 'fact',
+              label: 'memoria $i',
+              createdAt: now.subtract(Duration(hours: i)),
+              updatedAt: now,
+            ),
+        ],
+      );
+
+      await tester.pumpWidget(_app(store));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 100));
+
+      final screen = tester.getSize(find.byType(Brain3dScreen)).height;
+      final panel = tester.getSize(find.byKey(const ValueKey('brain3d-panel'))).height;
+
+      expect(panel, lessThan(screen * 0.5),
+          reason: 'the panel covered the graph it is supposed to sit beside');
+      expect(find.byType(Brain3dView), findsOneWidget);
+    });
   });
 }
