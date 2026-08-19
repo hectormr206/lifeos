@@ -223,7 +223,13 @@ class SyncSettingsRoute extends ConsumerWidget {
       deviceNickname:
           ref.watch(deviceNicknameProvider).value ?? 'Este dispositivo',
       enablementKnown: enablement.hasValue,
-      lastSyncLine: describeSyncStatus(ref.watch(syncStatusProvider).value),
+      lastSyncLine: describeSyncStatus(
+        ref.watch(syncStatusProvider).value,
+        // The same provider the card above uses for "Sin pareja", so the two
+        // halves of this screen cannot disagree — which is precisely what was
+        // reported: "Sin pareja" over "Al día · hace un momento".
+        hasPeer: ref.watch(syncPeerProvider).value != null,
+      ),
       thisDeviceId: ref.watch(thisDeviceShortIdProvider).value ?? '······',
       peerDeviceId: ref.watch(syncPeerProvider).value?.shortId,
       lastStatus: ref.watch(syncStatusProvider).value,

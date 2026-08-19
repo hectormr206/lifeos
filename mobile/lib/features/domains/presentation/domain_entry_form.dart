@@ -166,6 +166,14 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
   Widget build(BuildContext context) {
     return Form(
       key: _formKey,
+      // Re-validate as the user types, but only AFTER they have touched the
+      // field. Seen on the test Pixel: with 118 and 78 already entered, both
+      // "Este campo es obligatorio." messages were still on screen, because
+      // the form only re-validated on the next save — the app telling someone
+      // off for something they had already fixed. The default (disabled) also
+      // has the opposite failure: eager validation would greet a first-time
+      // user with a wall of red before they typed anything.
+      autovalidateMode: AutovalidateMode.onUserInteraction,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [

@@ -31,21 +31,3 @@ const Color kDefaultNodeColor = Color(0xFF888888);
 /// read as a category that does not exist.
 Color brain3dColorFor({String? domain, String? kind}) =>
     kDomainColors[domain] ?? kDomainColors[kind] ?? kDefaultNodeColor;
-
-/// The Spanish name of a domain, as the desktop Cerebro lists them.
-///
-/// The graph stores English keys ('health', 'relationships'); the user has
-/// never seen those words and should not start now.
-String brain3dDomainLabel(String key) => switch (key) {
-      'health' => 'Salud',
-      'finance' => 'Finanzas',
-      'relationships' => 'Relaciones',
-      'exercise' => 'Ejercicio',
-      'calendar' => 'Calendario',
-      'lifeos-events' => 'Eventos',
-      'conversation' => 'Conversación',
-      'fact' => 'Hecho',
-      'person' => 'Persona',
-      'event' => 'Evento',
-      _ => key,
-    };

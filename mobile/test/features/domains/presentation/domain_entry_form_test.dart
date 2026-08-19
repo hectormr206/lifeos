@@ -255,4 +255,51 @@ void main() {
     expect(button.onPressed, isNull);
     expect(find.byType(CircularProgressIndicator), findsOneWidget);
   });
+
+  testWidgets('an error clears as soon as the field is corrected',
+      (tester) async {
+    // Seen on the test Pixel: after saving an empty blood-pressure form, the
+    // two "Este campo es obligatorio." messages stayed on screen even with
+    // 118 and 78 already typed in. The form only re-validated on the next
+    // save, so the app was telling the user off for something they had
+    // already fixed — and on a form they are filling for the first time, that
+    // reads as "the app is broken", not "keep going".
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: DomainEntryForm(spec: _financeSpec, onSubmit: (_) {}),
+        ),
+      ),
+    ));
+
+    await tester.tap(find.text('Guardar'));
+    await tester.pumpAndSettle();
+    final complaints = find.text('Este campo es obligatorio.').evaluate().length;
+    expect(complaints, greaterThan(0));
+
+    await tester.enterText(
+        find.widgetWithText(TextFormField, 'Título'), 'Café');
+    await tester.pumpAndSettle();
+
+    expect(
+      find.text('Este campo es obligatorio.').evaluate().length,
+      lessThan(complaints),
+      reason: 'the message outlived the problem it was reporting',
+    );
+  });
+
+  testWidgets('a form opens clean, with no errors on fields never touched',
+      (tester) async {
+    // The other half of the same setting: validating too eagerly would greet
+    // someone with a wall of red before they have typed anything.
+    await tester.pumpWidget(MaterialApp(
+      home: Scaffold(
+        body: SingleChildScrollView(
+          child: DomainEntryForm(spec: _financeSpec, onSubmit: (_) {}),
+        ),
+      ),
+    ));
+
+    expect(find.text('Este campo es obligatorio.'), findsNothing);
+  });
 }

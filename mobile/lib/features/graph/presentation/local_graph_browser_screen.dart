@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../../core/graph/domain_labels.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -169,7 +171,9 @@ class _NodeList extends StatelessWidget {
     final domain = node.domain;
     final parts = <String>[
       kindLabel,
-      if (domain != null && domain.isNotEmpty) domain,
+      // Translated, not raw: this screen showed 'health' and 'relationships'
+      // beside the user's own memories.
+      if (domain != null && domain.isNotEmpty) domainLabel(domain),
       _formatDate(node.createdAt),
     ];
     return parts.join(' · ');

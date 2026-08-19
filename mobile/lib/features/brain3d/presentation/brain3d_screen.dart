@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
+import '../../../core/graph/domain_labels.dart';
 import '../../../core/graph/graph_records.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/brain3d_payload.dart';
@@ -409,7 +410,7 @@ class _DomainList extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
-                  '· ${brain3dDomainLabel(d)}',
+                  '· ${domainLabel(d)}',
                   style: TextStyle(
                     color: selected == d
                         ? const Color(0xFF12D6A0)
@@ -599,7 +600,7 @@ class _Details extends StatelessWidget {
                 children: [
                   for (final tag in [n.kind, ?n.domain])
                     Chip(
-                      label: Text(brain3dDomainLabel(tag)),
+                      label: Text(domainLabel(tag)),
                       visualDensity: VisualDensity.compact,
                       backgroundColor: const Color(0xFF222833),
                       labelStyle: const TextStyle(

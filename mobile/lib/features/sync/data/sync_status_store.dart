@@ -89,7 +89,12 @@ class SyncStatusStore {
 /// Always carries the TIME on success: "sincronizado" with no timestamp reads
 /// as "just now" even when the last pass was a week ago, which is exactly the
 /// misreading that makes someone trust a device that has been offline for days.
-String describeSyncStatus(SyncStatus? status, {DateTime? now}) {
+/// [hasPeer] is what stops the reassuring half of this line being a lie.
+/// A pass with no peer applies nothing and sends nothing, which looks exactly
+/// like a pass that had nothing to do — so with no peer known, "Al día" would
+/// tell someone their devices agree when there is no other device at all.
+/// Null means the caller does not know, and keeps the original wording.
+String describeSyncStatus(SyncStatus? status, {DateTime? now, bool? hasPeer}) {
   if (status == null) return 'Todavía no se ha sincronizado.';
   if (!status.ok) return status.message ?? 'La última sincronización falló.';
 
@@ -102,6 +107,11 @@ String describeSyncStatus(SyncStatus? status, {DateTime? now}) {
   };
 
   if (status.applied == 0 && status.sent == 0) {
+    // Rows moving is proof a peer exists whatever the local table says, so
+    // only the idle case is re-worded.
+    if (hasPeer == false) {
+      return 'Sin otro dispositivo todavía · $when';
+    }
     return 'Al día · $when';
   }
   return 'Recibí ${status.applied} y envié ${status.sent} · $when';

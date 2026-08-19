@@ -212,4 +212,63 @@ void main() {
     expect(find.byIcon(Icons.cloud_off), findsOneWidget);
     expect(find.textContaining('Sin conexión'), findsOneWidget);
   });
+
+  testWidgets('the create button is dead until there is something to create',
+      (tester) async {
+    // Seen on the test Pixel: with the box empty, tapping the alarm icon did
+    // absolutely nothing — no form, no message, no hint. The handler returned
+    // early on empty text while the button still looked and behaved like a
+    // live control, so the only thing the app communicated was that it was
+    // broken. A disabled button says "not yet" by being grey.
+    final repo = _FakeRemindersRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
+      ),
+    );
+    // Not pumpAndSettle: the local tab keeps a progress indicator spinning
+    // while it loads, and settling would wait for an animation that is the
+    // point of the screen.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    final button = find.widgetWithIcon(IconButton, Icons.alarm_add);
+    expect(tester.widget<IconButton>(button).onPressed, isNull,
+        reason: 'an empty box offers nothing to create');
+
+    await tester.enterText(find.byType(TextField).first, 'comprar pan');
+    await tester.pump();
+
+    expect(tester.widget<IconButton>(button).onPressed, isNotNull,
+        reason: 'with text typed the button must come alive');
+  });
+
+  testWidgets('whitespace alone does not count as text', (tester) async {
+    final repo = _FakeRemindersRepository();
+
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          remindersRepositoryProvider.overrideWithValue(repo),
+        ],
+        child: _localizedApp(),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 200));
+
+    await tester.enterText(find.byType(TextField).first, '   ');
+    await tester.pump();
+
+    expect(
+      tester
+          .widget<IconButton>(find.widgetWithIcon(IconButton, Icons.alarm_add))
+          .onPressed,
+      isNull,
+    );
+  });
 }

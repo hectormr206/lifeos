@@ -140,4 +140,82 @@ void main() {
       expect(line, contains('5 min'));
     });
   });
+
+  group('with nobody to sync with, it does not claim to be up to date', () {
+    // Seen on the test Pixel: the card said "Sin pareja · Todavía no hay otro
+    // dispositivo" and, four lines below, "Última sincronización: Al día ·
+    // hace un momento". A pass with no peer applies nothing and sends
+    // nothing, which is indistinguishable from a pass that had nothing to do —
+    // so the honest-looking line was the reassuring one, and reassurance you
+    // have not earned is the failure this codebase treats as unforgivable.
+
+    test('a successful pass with no peer says so instead of "Al día"', () {
+      final line = describeSyncStatus(
+        SyncStatus(
+          ok: true,
+          at: DateTime(2026, 8, 19, 12),
+          applied: 0,
+          sent: 0,
+          message: null,
+        ),
+        now: DateTime(2026, 8, 19, 12),
+        hasPeer: false,
+      );
+
+      expect(line, isNot(contains('Al día')));
+      expect(line.toLowerCase(), contains('dispositivo'));
+    });
+
+    test('with a peer, an idle pass still reads "Al día"', () {
+      final line = describeSyncStatus(
+        SyncStatus(
+          ok: true,
+          at: DateTime(2026, 8, 19, 12),
+          applied: 0,
+          sent: 0,
+          message: null,
+        ),
+        now: DateTime(2026, 8, 19, 12),
+        hasPeer: true,
+      );
+
+      expect(line, contains('Al día'));
+    });
+
+    test('a pass that MOVED rows reports them even without a known peer', () {
+      // Rows arriving is proof a peer exists, whatever the local peer table
+      // happens to say — reporting "no device" over real traffic would be the
+      // same lie pointing the other way.
+      final line = describeSyncStatus(
+        SyncStatus(
+          ok: true,
+          at: DateTime(2026, 8, 19, 12),
+          applied: 3,
+          sent: 1,
+          message: null,
+        ),
+        now: DateTime(2026, 8, 19, 12),
+        hasPeer: false,
+      );
+
+      expect(line, contains('Recibí 3'));
+    });
+
+    test('unknown peer state keeps the old wording', () {
+      // Callers that have not been taught about peers must not start showing
+      // a different message by accident.
+      final line = describeSyncStatus(
+        SyncStatus(
+          ok: true,
+          at: DateTime(2026, 8, 19, 12),
+          applied: 0,
+          sent: 0,
+          message: null,
+        ),
+        now: DateTime(2026, 8, 19, 12),
+      );
+
+      expect(line, contains('Al día'));
+    });
+  });
 }

@@ -214,10 +214,17 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
                   ),
                 ),
                 const SizedBox(width: 8),
-                IconButton(
-                  icon: const Icon(Icons.alarm_add),
-                  tooltip: 'Crear recordatorio local',
-                  onPressed: _create,
+                // Disabled while the box is empty. `_create` returned early
+                // on empty text, so tapping did nothing at all — no form, no
+                // message, no hint — and the only thing that communicated was
+                // that the app was broken. Grey says "not yet".
+                ValueListenableBuilder<TextEditingValue>(
+                  valueListenable: _controller,
+                  builder: (context, value, _) => IconButton(
+                    icon: const Icon(Icons.alarm_add),
+                    tooltip: 'Crear recordatorio local',
+                    onPressed: value.text.trim().isEmpty ? null : _create,
+                  ),
                 ),
               ],
             ),
