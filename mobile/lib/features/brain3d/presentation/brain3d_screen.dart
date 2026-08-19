@@ -228,28 +228,19 @@ class _Brain extends StatelessWidget {
                   ],
                 )
               : LayoutBuilder(
-                  builder: (context, constraints) => Stack(
+                  builder: (context, constraints) => Column(
                     children: [
-                      Positioned.fill(child: graph),
-                      // Floating over the graph, so it appears only when it has
-                      // something to say. An empty panel here would cover the
-                      // gesture hint to tell the user the panel is empty.
+                      Expanded(child: graph),
+                      // Beside the graph, never on top of it: floating, the
+                      // panel hid the bottom of the layout and edges ran off
+                      // under it. The graph gets what is left, so it FITS
+                      // itself to the space it actually has.
                       if (selected != null || news.isNotEmpty)
-                        Positioned(
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          // A bottom-anchored Positioned has NO height of its
-                          // own, so the shrink-wrapped news list grew until it
-                          // owned the screen and the brain was not visible at
-                          // all (measured on the Pixel with 860). The panel is
-                          // a companion to the graph, never a replacement.
-                          child: ConstrainedBox(
-                            constraints: BoxConstraints(
-                              maxHeight: constraints.maxHeight * 0.42,
-                            ),
-                            child: details,
+                        ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxHeight: constraints.maxHeight * 0.42,
                           ),
+                          child: details,
                         ),
                     ],
                   ),
