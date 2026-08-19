@@ -60,6 +60,18 @@ const int kForceLayoutMaxStepsPerFrame = 4;
 /// wobbles for a second before it can be read is just a slower map.
 const int kForceLayoutWarmupSteps = 400;
 
+/// The radius of the space the graph is laid out in.
+///
+/// Fruchterman-Reingold's ideal distance is defined RELATIVE to the space the
+/// graph must fill; a constant one only works at the size it was tuned for.
+/// With a fixed 8 the layout held at 13 nodes and fell apart at 23 — measured
+/// min 6.9 against max 1056, which the view then framed as a single blob.
+///
+/// Fixing the SPACE instead and deriving the distance from it means the graph
+/// occupies the same volume whether it holds five memories or five hundred:
+/// what changes is how tightly packed it is, which is the honest picture.
+const double kForceLayoutFrameRadius = 40;
+
 class ForceLayout {
   ForceLayout({
     required List<String> nodeIds,
@@ -95,8 +107,13 @@ class ForceLayout {
   static const double restEnergy = 0.05;
 
   static const int _maxSteps = 400;
-  static const double _idealDistance = 8;
   static const double _initialTemperature = 12;
+
+  /// Ideal edge length for THIS graph: the frame's diameter shared out over
+  /// the cube root of the node count, because the space is three-dimensional.
+  late final double _idealDistance = _ids.isEmpty
+      ? 8
+      : (2 * kForceLayoutFrameRadius) / math.pow(_ids.length, 1 / 3);
 
   final List<String> _ids;
   final List<(String, String)> _edges;
@@ -168,6 +185,13 @@ class ForceLayout {
     // Repulsion: every pair pushes apart. Without it everything collapses to a
     // point, and overlapping nodes render as one — silently under-reporting
     // how much the user actually remembers.
+    //
+    // Every pair, still O(n²), and MEASURED rather than assumed: a spatial
+    // grid that skipped distant pairs saved 11% of the time and cost 42% of
+    // the spread (500 nodes: ratio 0.040 -> 0.023). With the frame fixed the
+    // graph gets denser as it grows, so nearly every node IS a neighbour, and
+    // the only force the grid dropped was the long-range one holding the
+    // picture open. The cost is paid off the UI thread instead.
     for (var i = 0; i < _ids.length; i++) {
       for (var j = i + 1; j < _ids.length; j++) {
         final a = _positions[_ids[i]]!;
@@ -217,14 +241,40 @@ class ForceLayout {
       // Never move further than the temperature allows — the convergence rule.
       final capped = math.min(length, temperature);
       final p = _positions[id]!;
-      _positions[id] = Vec3(
+      _positions[id] = _intoFrame(Vec3(
         p.x + d[0] / length * capped,
         p.y + d[1] / length * capped,
         p.z + d[2] / length * capped,
-      );
+      ));
       moved += capped;
     }
     _energy = _ids.isEmpty ? 0 : moved / _ids.length;
+  }
+
+  /// Keeps a node inside the frame.
+  ///
+  /// A node nothing links to feels only repulsion, so without this it leaves
+  /// for infinity and drags the framing with it — the stray dot in the report,
+  /// with the rest of the graph squeezed into a blob to fit it on screen.
+  static Vec3 _intoFrame(Vec3 p) {
+    final r = math.sqrt(p.x * p.x + p.y * p.y + p.z * p.z);
+    if (r <= kForceLayoutFrameRadius) return p;
+    final k = kForceLayoutFrameRadius / r;
+    return Vec3(p.x * k, p.y * k, p.z * k);
+  }
+
+  /// Take positions computed elsewhere and stop.
+  ///
+  /// Adopting means SETTLED: a layout that kept stepping afterwards would
+  /// animate away from the shape just computed, and the ticker driving it
+  /// would never stop.
+  void adopt(Map<String, Vec3> positions) {
+    for (final id in _ids) {
+      final p = positions[id];
+      if (p != null) _positions[id] = p;
+    }
+    _energy = 0;
+    _step = _maxSteps;
   }
 
   /// Run until settled. Used by tests and by the initial layout; the screen
@@ -239,3 +289,37 @@ class ForceLayout {
     }
   }
 }
+
+/// Lay a graph out and return where everything ended up.
+///
+/// Pure and top-level so it can run in an isolate: at the payload's cap of 500
+/// nodes this takes seconds, and spending them on the UI thread means the
+/// screen is frozen while you wait to look at your own memory.
+Map<String, Vec3> settledPositions({
+  required List<String> nodeIds,
+  required List<(String, String)> edges,
+  required int seed,
+}) {
+  final layout = ForceLayout(
+    nodeIds: nodeIds,
+    edges: edges,
+    seed: seed,
+    warmupSteps: 0,
+  )..settle();
+  return layout.positions;
+}
+
+/// Positions as plain numbers, for crossing an isolate boundary.
+///
+/// Flat triples rather than a map of objects: what travels between isolates is
+/// data, and keeping the encoding boring is what stops an axis going missing.
+Map<String, List<double>> encodeLayoutPositions(Map<String, Vec3> positions) =>
+    {
+      for (final e in positions.entries) e.key: [e.value.x, e.value.y, e.value.z],
+    };
+
+/// The inverse of [encodeLayoutPositions].
+Map<String, Vec3> decodeLayoutPositions(Map<String, List<double>> encoded) => {
+      for (final e in encoded.entries)
+        e.key: Vec3(e.value[0], e.value[1], e.value[2]),
+    };

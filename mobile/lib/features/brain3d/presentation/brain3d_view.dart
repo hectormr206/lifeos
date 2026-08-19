@@ -18,6 +18,8 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 
+import 'package:flutter/foundation.dart';
+
 import '../domain/force_layout.dart';
 import '../domain/label_placement.dart';
 import '../domain/node_hit_test.dart';
@@ -79,6 +81,12 @@ class _Brain3dViewState extends State<Brain3dView>
   /// by the time that actually passed.
   Duration _lastElapsed = Duration.zero;
 
+  /// True while a big graph is being laid out in an isolate.
+  bool _computing = false;
+
+  /// Guards against a stale isolate result landing on a newer graph.
+  int _generation = 0;
+
   double _yaw = 0.6;
   double _pitch = 0.3;
   double _zoom = 1;
@@ -100,11 +108,35 @@ class _Brain3dViewState extends State<Brain3dView>
   }
 
   void _build() {
-    _layout = ForceLayout(
-      nodeIds: [for (final n in widget.nodes) n.id],
-      edges: widget.edges,
-      seed: widget.seed,
-    );
+    final ids = [for (final n in widget.nodes) n.id];
+    final generation = ++_generation;
+
+    if (ids.length > kBrain3dLayoutOffThreadAbove) {
+      // Measured at the payload's cap of 500 nodes: 8.3 s of layout, all of it
+      // in this constructor and all of it on the UI thread. Today's graph is
+      // 23 nodes and 71 ms — but a memory that is being told a life GROWS, and
+      // the freeze arrives silently the day it does.
+      _layout = ForceLayout(
+        nodeIds: ids,
+        edges: widget.edges,
+        seed: widget.seed,
+        warmupSteps: 0,
+      );
+      _computing = true;
+      _settleOffThread(ids, generation);
+    } else {
+      _computing = false;
+      _layout = ForceLayout(
+        nodeIds: ids,
+        edges: widget.edges,
+        seed: widget.seed,
+      );
+    }
+    // The ticker is created either way. Returning early on the isolate path
+    // left it uninitialised, and leaving the screen before the layout arrived
+    // then threw out of dispose() — a crash on the way OUT of looking at your
+    // own memory.
+
     // Stepped on a ticker rather than settled up front so the graph is SEEN to
     // unfold. It also stops on its own: the ticker halts the moment the layout
     // converges, so an idle screen costs nothing.
@@ -115,15 +147,32 @@ class _Brain3dViewState extends State<Brain3dView>
     // half, the violent opening, is now warmed up before the first paint.
     _lastElapsed = Duration.zero;
     _ticker = createTicker((elapsed) {
-      if (_layout.done) {
+      if (_layout.done || _computing) {
         _ticker.stop();
         return;
       }
       final delta = elapsed - _lastElapsed;
       _lastElapsed = elapsed;
       setState(() => _layout.advance(delta));
-    })
-      ..start();
+    })..start();
+  }
+
+  Future<void> _settleOffThread(List<String> ids, int generation) async {
+    final encoded = await compute(_settleLayoutJob, {
+      'ids': ids,
+      'edges': [
+        for (final e in widget.edges) [e.$1, e.$2],
+      ],
+      'seed': widget.seed,
+    });
+    // The graph may have changed while the isolate worked — a filter, a merge,
+    // a node forgotten. Adopting an older shape would redraw memories that are
+    // no longer there.
+    if (!mounted || generation != _generation) return;
+    setState(() {
+      _layout.adopt(decodeLayoutPositions(encoded));
+      _computing = false;
+    });
   }
 
   @override
@@ -142,12 +191,20 @@ class _Brain3dViewState extends State<Brain3dView>
       _ticker.stop();
     }
 
+    if (_computing) {
+      // A half-settled graph is not a preview, it is a scramble — the exact
+      // thing the warm-up exists to keep off the screen.
+      return const Center(child: CircularProgressIndicator());
+    }
+
     return GestureDetector(
       onScaleStart: (_) {},
       onScaleUpdate: (details) => setState(() {
         _yaw += details.focalPointDelta.dx * 0.01;
-        _pitch = (_pitch + details.focalPointDelta.dy * 0.01)
-            .clamp(-math.pi / 2, math.pi / 2);
+        _pitch = (_pitch + details.focalPointDelta.dy * 0.01).clamp(
+          -math.pi / 2,
+          math.pi / 2,
+        );
         if (details.scale != 1.0) {
           _zoom = (_zoom * details.scale).clamp(0.4, 4.0);
         }
@@ -198,7 +255,6 @@ class _Brain3dViewState extends State<Brain3dView>
     final hit = widget.nodes.where((n) => n.id == id);
     if (hit.isNotEmpty) widget.onNodeTap?.call(hit.first);
   }
-
 }
 
 /// A node after projection: where it lands and how near the camera it is.
@@ -250,16 +306,25 @@ class Brain3dPainter extends CustomPainter {
 
   /// Where one point lands on screen, relative to the centre, at [scale].
   /// Shared so the measuring pass and the drawing pass cannot drift apart.
-  static Offset _flatten(Vec3 p, double cx, double cy, double cz, double yaw,
-      double pitch, double scale) {
+  static Offset _flatten(
+    Vec3 p,
+    double cx,
+    double cy,
+    double cz,
+    double yaw,
+    double pitch,
+    double scale,
+  ) {
     final px = p.x - cx, py = p.y - cy, pz = p.z - cz;
     final x1 = px * math.cos(yaw) + pz * math.sin(yaw);
     final z1 = -px * math.sin(yaw) + pz * math.cos(yaw);
     final y2 = py * math.cos(pitch) - z1 * math.sin(pitch);
     final z2 = py * math.sin(pitch) + z1 * math.cos(pitch);
-    final perspective = (_cameraDistance /
-            math.max(_cameraDistance + z2 * 0.6, 1.0))
-        .clamp(_minPerspective, _maxPerspective);
+    final perspective =
+        (_cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0)).clamp(
+          _minPerspective,
+          _maxPerspective,
+        );
     return Offset(x1 * scale * perspective, y2 * scale * perspective);
   }
 
@@ -294,9 +359,12 @@ class Brain3dPainter extends CustomPainter {
     var extent = 1.0;
     for (final p in positions.values) {
       extent = math.max(
-          extent,
-          math.max((p.x - cx).abs(),
-              math.max((p.y - cy).abs(), (p.z - cz).abs())));
+        extent,
+        math.max(
+          (p.x - cx).abs(),
+          math.max((p.y - cy).abs(), (p.z - cz).abs()),
+        ),
+      );
     }
     // A provisional scale, refined below. Fitting by the 3D extent alone is
     // what left the graph occupying a fifth of a phone screen: after the yaw,
@@ -318,7 +386,8 @@ class Brain3dPainter extends CustomPainter {
     // along are the two you can actually see.
     final base = _facingRotation(positions, cx, cy, cz);
     final cosY = math.cos(yaw + base.yaw), sinY = math.sin(yaw + base.yaw);
-    final cosP = math.cos(pitch + base.pitch), sinP = math.sin(pitch + base.pitch);
+    final cosP = math.cos(pitch + base.pitch),
+        sinP = math.sin(pitch + base.pitch);
 
     // Pass 1 measures where the nodes actually land; pass 2 scales that box to
     // the viewport. Two cheap loops over a capped node count, and the graph
@@ -326,8 +395,15 @@ class Brain3dPainter extends CustomPainter {
     var minX = double.infinity, maxX = -double.infinity;
     var minY = double.infinity, maxY = -double.infinity;
     for (final p in positions.values) {
-      final o = _flatten(p, cx, cy, cz, yaw + base.yaw, pitch + base.pitch,
-          provisional);
+      final o = _flatten(
+        p,
+        cx,
+        cy,
+        cz,
+        yaw + base.yaw,
+        pitch + base.pitch,
+        provisional,
+      );
       minX = math.min(minX, o.dx);
       maxX = math.max(maxX, o.dx);
       minY = math.min(minY, o.dy);
@@ -337,7 +413,8 @@ class Brain3dPainter extends CustomPainter {
     // graph scaled to the very edge pushes half of them off-screen.
     final spanX = math.max(maxX - minX, 1.0);
     final spanY = math.max(maxY - minY, 1.0);
-    final fit = provisional *
+    final fit =
+        provisional *
         math.min(size.width * 0.82 / spanX, size.height * 0.82 / spanY) *
         zoom;
 
@@ -364,15 +441,19 @@ class Brain3dPainter extends CustomPainter {
       //
       // Depth should say "nearer" and "further", never "everything" and
       // "nothing".
-      final perspective = (_cameraDistance /
-              math.max(_cameraDistance + z2 * 0.6, 1.0))
-          .clamp(_minPerspective, _maxPerspective);
-      out.add(ProjectedNode(
-        node,
-        centre + Offset(x1 * fit * perspective, y2 * fit * perspective),
-        -z2,
-        perspective,
-      ));
+      final perspective =
+          (_cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0)).clamp(
+            _minPerspective,
+            _maxPerspective,
+          );
+      out.add(
+        ProjectedNode(
+          node,
+          centre + Offset(x1 * fit * perspective, y2 * fit * perspective),
+          -z2,
+          perspective,
+        ),
+      );
     }
     // Painter's algorithm: far first, so near nodes overlap them.
     out.sort((a, b) => a.depth.compareTo(b.depth));
@@ -382,8 +463,14 @@ class Brain3dPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     if (nodes.isEmpty) return;
-    final projected =
-        project(nodes: nodes, positions: positions, size: size, yaw: yaw, pitch: pitch, zoom: zoom);
+    final projected = project(
+      nodes: nodes,
+      positions: positions,
+      size: size,
+      yaw: yaw,
+      pitch: pitch,
+      zoom: zoom,
+    );
     final byId = {for (final p in projected) p.node.id: p};
 
     // Edges under the nodes, and faint: they are context, not content. A graph
@@ -394,8 +481,11 @@ class Brain3dPainter extends CustomPainter {
     for (final (from, to) in edges) {
       final a = byId[from], b = byId[to];
       if (a == null || b == null) continue;
-      edgePaint.color = Color.lerp(a.node.color, b.node.color, 0.5)!
-          .withValues(alpha: 0.22);
+      edgePaint.color = Color.lerp(
+        a.node.color,
+        b.node.color,
+        0.5,
+      )!.withValues(alpha: 0.22);
       canvas.drawLine(a.offset, b.offset, edgePaint);
     }
 
@@ -460,7 +550,8 @@ class Brain3dPainter extends CustomPainter {
       // Flip the label to the left when it would run off the right edge.
       // A truncated label on a memory map is worse than a shifted one: the
       // user cannot tell which memory the node IS.
-      final wouldOverflow = p.offset.dx + radius + 4 + painter.width > size.width;
+      final wouldOverflow =
+          p.offset.dx + radius + 4 + painter.width > size.width;
       final dx = wouldOverflow ? -(radius + 4 + painter.width) : radius + 4;
       final at = p.offset + Offset(dx, -painter.height / 2);
       painters.add(painter);
@@ -515,4 +606,23 @@ class Brain3dPainter extends CustomPainter {
   if (sz <= sx && sz <= sy) return (yaw: 0, pitch: 0);
   if (sx <= sy) return (yaw: math.pi / 2, pitch: 0); // x becomes depth
   return (yaw: 0, pitch: math.pi / 2); // y becomes depth
+}
+
+/// How many nodes before the layout is computed in an isolate.
+///
+/// Below this the inline path costs under a second and keeps the code the user
+/// sees today unchanged; above it the wait is long enough to read as the app
+/// having frozen.
+const int kBrain3dLayoutOffThreadAbove = 120;
+
+/// The isolate entry point. Top-level and plain-data in, plain-data out.
+Map<String, List<double>> _settleLayoutJob(Map<String, dynamic> job) {
+  final ids = (job['ids'] as List).cast<String>();
+  final edges = [
+    for (final e in (job['edges'] as List))
+      ((e as List)[0] as String, e[1] as String),
+  ];
+  return encodeLayoutPositions(
+    settledPositions(nodeIds: ids, edges: edges, seed: job['seed'] as int),
+  );
 }
