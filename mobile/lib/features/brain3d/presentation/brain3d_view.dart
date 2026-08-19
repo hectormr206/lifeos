@@ -216,6 +216,14 @@ class Brain3dPainter extends CustomPainter {
   /// reads as depth rather than as a fisheye.
   static const double _cameraDistance = 60;
 
+  /// How much nearness may magnify, and farness may shrink.
+  ///
+  /// Chosen so depth stays legible while a node can never dominate the screen
+  /// or vanish from it: a 4 px dot renders between 3 px and 11 px, a label
+  /// between 6 pt and 20 pt.
+  static const double _minPerspective = 0.55;
+  static const double _maxPerspective = 2.0;
+
   /// Where one point lands on screen, relative to the centre, at [scale].
   /// Shared so the measuring pass and the drawing pass cannot drift apart.
   static Offset _flatten(Vec3 p, double cx, double cy, double cz, double yaw,
@@ -225,8 +233,9 @@ class Brain3dPainter extends CustomPainter {
     final z1 = -px * math.sin(yaw) + pz * math.cos(yaw);
     final y2 = py * math.cos(pitch) - z1 * math.sin(pitch);
     final z2 = py * math.sin(pitch) + z1 * math.cos(pitch);
-    final perspective =
-        _cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0);
+    final perspective = (_cameraDistance /
+            math.max(_cameraDistance + z2 * 0.6, 1.0))
+        .clamp(_minPerspective, _maxPerspective);
     return Offset(x1 * scale * perspective, y2 * scale * perspective);
   }
 
@@ -321,8 +330,19 @@ class Brain3dPainter extends CustomPainter {
 
       // Perspective divide. Clamped so a node that drifts behind the camera
       // does not invert and fly off to infinity.
-      final perspective =
-          _cameraDistance / math.max(_cameraDistance + z2 * 0.6, 1.0);
+      // BOUNDED, not merely non-zero.
+      //
+      // The old clamp stopped a division by zero and nothing else: a node close
+      // to the camera drove the denominator to 1 and this factor to SIXTY. A
+      // 4 px node rendered at 336 px and an 11 px label at 660 — one memory
+      // filling a phone screen, which is what the user photographed. The far
+      // side had the mirror problem: a speck nobody can see or tap.
+      //
+      // Depth should say "nearer" and "further", never "everything" and
+      // "nothing".
+      final perspective = (_cameraDistance /
+              math.max(_cameraDistance + z2 * 0.6, 1.0))
+          .clamp(_minPerspective, _maxPerspective);
       out.add(ProjectedNode(
         node,
         centre + Offset(x1 * fit * perspective, y2 * fit * perspective),

@@ -235,7 +235,7 @@ void main() {
         row.keys.toSet(),
         {
           'uuid', 'kind', 'label', 'data', 'lamport',
-          'origin_node', 'deleted_at', 'updated_at',
+          'origin_node', 'deleted_at', 'created_at', 'updated_at',
         },
       );
     });

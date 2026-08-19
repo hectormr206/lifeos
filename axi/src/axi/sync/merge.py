@@ -178,7 +178,9 @@ def apply_node(conn, row: dict[str, Any]) -> Outcome:
                 row.get("kind") or "fact",
                 row.get("label") or "",
                 row.get("data") or "{}",
-                row.get("updated_at") or time.time(),
+                # The row's own birthday when the sender knew it; only fall
+                # back to updated_at when an older peer omitted it.
+                row.get("created_at") or row.get("updated_at") or time.time(),
                 row.get("updated_at") or time.time(),
                 incoming_clock,
                 row.get("origin_node"),

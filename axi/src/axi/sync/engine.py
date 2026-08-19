@@ -83,7 +83,8 @@ def changes_for(conn, peer_uuid: str, *, limit: int = 500) -> ChangeSet:
         dict(r)
         for r in conn.execute(
             "SELECT uuid, kind, label, data, lamport, origin_node, deleted_at,"
-            " updated_at FROM nodes WHERE lamport > ? ORDER BY lamport ASC LIMIT ?",
+            " created_at, updated_at FROM nodes WHERE lamport > ?"
+            " ORDER BY lamport ASC LIMIT ?",
             (cursor, limit),
         )
     ]
@@ -91,8 +92,8 @@ def changes_for(conn, peer_uuid: str, *, limit: int = 500) -> ChangeSet:
         dict(r)
         for r in conn.execute(
             "SELECT uuid, src_uuid, dst_uuid, relation, data, lamport, origin_node,"
-            " deleted_at, updated_at FROM edges WHERE lamport > ? ORDER BY lamport ASC"
-            " LIMIT ?",
+            " deleted_at, created_at, updated_at FROM edges WHERE lamport > ?"
+            " ORDER BY lamport ASC LIMIT ?",
             (cursor, limit),
         )
     ]

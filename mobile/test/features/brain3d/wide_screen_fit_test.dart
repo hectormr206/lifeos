@@ -132,4 +132,135 @@ void main() {
           reason: 'a plane seen edge-on shows nothing');
     });
   });
+
+  group('the scale is bounded at BOTH ends', () {
+    // Reported from the phone: one node filling the whole screen, its label
+    // letters taller than the viewport. The mirror image of the laptop's
+    // speck, and the same root — when the projected cloud is nearly a point,
+    // the span clamps to one pixel and the fit explodes to a thousand times
+    // what it should be.
+    //
+    // A picture of memories has to stay a picture at any data shape.
+
+    ({double x, double y}) spreadOfPositions(Map<String, Vec3> positions) {
+      final projected = Brain3dPainter.project(
+        nodes: [
+          for (final id in positions.keys)
+            Brain3dVisualNode(id: id, label: id, color: Colors.teal, radius: 6),
+        ],
+        positions: positions,
+        size: desktop,
+        yaw: 0.3,
+        pitch: 0.2,
+        zoom: 1,
+      );
+      var minX = double.infinity, maxX = -double.infinity;
+      var minY = double.infinity, maxY = -double.infinity;
+      for (final p in projected) {
+        minX = p.offset.dx < minX ? p.offset.dx : minX;
+        maxX = p.offset.dx > maxX ? p.offset.dx : maxX;
+        minY = p.offset.dy < minY ? p.offset.dy : minY;
+        maxY = p.offset.dy > maxY ? p.offset.dy : maxY;
+      }
+      return (x: maxX - minX, y: maxY - minY);
+    }
+
+    test('a cloud collapsed to a point does not explode', () {
+      // Every node within a hair of every other: the degenerate case.
+      final spread = spreadOfPositions({
+        for (var i = 0; i < 6; i++)
+          'n$i': Vec3(i * 0.001, i * 0.001, i * 0.001),
+      });
+
+      expect(spread.x, lessThan(desktop.width),
+          reason: 'one node filled the screen');
+      expect(spread.y, lessThan(desktop.height));
+    });
+
+    test('two nodes a hair apart do not fill the screen', () {
+      final spread = spreadOfPositions({
+        'a': const Vec3(0, 0, 0),
+        'b': const Vec3(0.002, 0, 0),
+      });
+
+      expect(spread.x, lessThan(desktop.width));
+    });
+
+    test('an ordinary cloud is still laid out generously', () {
+      // The bound must not cost the normal case its framing.
+      final spread = spreadOfPositions({
+        for (var i = 0; i < 8; i++)
+          'n$i': Vec3(i * 3.0 - 12, (i % 3) * 4.0 - 4, (i % 2) * 3.0),
+      });
+
+      expect(spread.x + spread.y, greaterThan(desktop.height * 0.3));
+    });
+  });
+
+  group('perspective magnifies, it does not devour', () {
+    // THE screenshot: one node filling a phone screen, the letters of its
+    // label taller than the viewport.
+    //
+    // `perspective = 60 / max(60 + z * 0.6, 1)`. The clamp stops a division by
+    // zero and nothing else: a node close to the camera drives the denominator
+    // to 1 and the factor to SIXTY. A 4 px node becomes 336 px, an 11 px label
+    // becomes 660 px. The far side has the mirror problem — the speck.
+    //
+    // Depth should say "nearer" and "further", not "everything" and "nothing".
+
+    List<ProjectedNode> projectWith(Map<String, Vec3> positions) =>
+        Brain3dPainter.project(
+          nodes: [
+            for (final id in positions.keys)
+              Brain3dVisualNode(id: id, label: id, color: Colors.teal, radius: 4),
+          ],
+          positions: positions,
+          size: desktop,
+          yaw: 0,
+          pitch: 0,
+          zoom: 1,
+        );
+
+    test('a node right against the camera is not blown up', () {
+      final projected = projectWith({
+        'near': const Vec3(0, 0, -200),
+        'far': const Vec3(0, 0, 200),
+        'mid': const Vec3(5, 5, 0),
+      });
+
+      for (final p in projected) {
+        expect(p.scale, lessThan(2.5),
+            reason: 'a 4 px node became ${(4 * p.scale * 1.4).round()} px');
+      }
+    });
+
+    test('a node far behind is still visible', () {
+      final projected = projectWith({
+        'near': const Vec3(0, 0, -200),
+        'far': const Vec3(0, 0, 200),
+        'mid': const Vec3(5, 5, 0),
+      });
+
+      for (final p in projected) {
+        expect(p.scale, greaterThan(0.25),
+            reason: 'it shrank to a speck nobody can see or tap');
+      }
+    });
+
+    test('depth still reads as depth', () {
+      // The bound must not flatten the picture: nearer must still be bigger.
+      // z must stay the SMALLEST-varying axis, or the auto-facing rotation
+      // correctly turns it into the screen plane and there is no depth left to
+      // measure. That rotation defeated the first draft of this test.
+      final projected = projectWith({
+        'near': const Vec3(-30, -20, -6),
+        'far': const Vec3(30, 20, 6),
+        'mid': const Vec3(0, 25, 0),
+      });
+
+      final near = projected.firstWhere((p) => p.node.id == 'near');
+      final far = projected.firstWhere((p) => p.node.id == 'far');
+      expect(near.scale, greaterThan(far.scale));
+    });
+  });
 }

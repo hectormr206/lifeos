@@ -157,13 +157,14 @@ class GraphSyncEngine {
 
     final nodes = await _db.rawQuery(
       'SELECT uuid, kind, label, data, lamport, origin_node, deleted_at,'
-      ' updated_at FROM nodes WHERE lamport > ? ORDER BY lamport ASC LIMIT ?',
+      ' created_at, updated_at FROM nodes WHERE lamport > ? ORDER BY lamport ASC'
+      ' LIMIT ?',
       [cursor, limit],
     );
     final edges = await _db.rawQuery(
       'SELECT uuid, src_uuid, dst_uuid, relation, data, lamport, origin_node,'
-      ' deleted_at, updated_at FROM edges WHERE lamport > ? ORDER BY lamport ASC'
-      ' LIMIT ?',
+      ' deleted_at, created_at, updated_at FROM edges WHERE lamport > ?'
+      ' ORDER BY lamport ASC LIMIT ?',
       [cursor, limit],
     );
 
@@ -325,10 +326,14 @@ class GraphSyncEngine {
   Map<String, Object?> _insertColumns(String table, Map<String, Object?> row) {
     final updatedAt =
         row['updated_at'] ?? DateTime.now().millisecondsSinceEpoch / 1000.0;
+    // The row's OWN birthday when the sender knew it. Falling back to
+    // `updated_at` is what made a memory written on Monday and edited on Friday
+    // be born on Friday on the receiving device — and the 3D view, which orders
+    // by creation date, drew a different picture from the same data.
     final common = <String, Object?>{
       'uuid': row['uuid'],
       'data': row['data'] ?? '{}',
-      'created_at': updatedAt,
+      'created_at': row['created_at'] ?? updatedAt,
       'updated_at': updatedAt,
       'lamport': row['lamport'] ?? 0,
       'origin_node': row['origin_node'],
