@@ -9,6 +9,7 @@ import '../../local_model/domain/local_llm_engine.dart';
 import '../../memory/domain/person_directory.dart';
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_aggregator.dart';
+import '../domain/cross_domain_patterns.dart';
 import '../domain/digest_insights.dart';
 
 /// FIXED, internal narration instruction that shapes the on-device model's
@@ -82,10 +83,15 @@ class DailyDigestService {
             period: LocalEntryPeriod.todo);
         timestamps[descriptor.key] = [for (final e in entries) e.timestamp];
       }
-      return digestInsights(
-        digestDaysFrom(timestamps, today: now),
-        today: now,
-      );
+      final days = digestDaysFrom(timestamps, today: now);
+      return [
+        ...digestInsights(days, today: now),
+        // Cross-domain observations come LAST and only once there is enough
+        // history: they are the most interesting line in the summary and the
+        // easiest to over-read, so they arrive after the plain facts rather
+        // than leading with them.
+        ...crossDomainPatterns(days, today: now),
+      ];
     } catch (_) {
       return const [];
     }
