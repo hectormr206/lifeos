@@ -68,8 +68,26 @@ const Set<String> _notNames = {
   'today', 'yesterday', 'tomorrow', 'now', 'also', 'he', 'she',
 };
 
+/// Prepositions after which a capitalised word is usually a PLACE.
+///
+/// "Se muda a Monterrey en noviembre" attributed a whole life to a city, which
+/// is the same class of mistake as attributing it to the wrong friend. Note
+/// that "a" is here: it introduces places ("a Monterrey") as often as people
+/// ("vi a Juan"), so it is only treated as a place marker when a thread is
+/// already running — see [namesIn]'s `afterPreposition`.
+const Set<String> _placeMarkers = {
+  'a', 'en', 'hacia', 'desde', 'hasta', 'por', 'para', 'sobre',
+  'to', 'in', 'into', 'from', 'toward', 'towards', 'at',
+};
+
 /// Every capitalised word that reads as a person's name.
-List<String> namesIn(String message) {
+///
+/// [afterPreposition] false drops candidates that sit right after a place
+/// marker. The caller passes false only when a thread is already running: with
+/// nothing to fall back on, "Conocí a Roberto" has to keep working, and a
+/// wrong guess there is recoverable because there was no previous subject to
+/// corrupt.
+List<String> namesIn(String message, {bool afterPreposition = true}) {
   final words = RegExp(r"[\p{L}][\p{L}']*", unicode: true)
       .allMatches(message)
       .map((m) => m.group(0)!)
@@ -81,6 +99,11 @@ List<String> namesIn(String message) {
     final first = word[0];
     if (first.toUpperCase() != first || first.toLowerCase() == first) continue;
     if (_notNames.contains(foldAccents(word.toLowerCase()))) continue;
+    if (!afterPreposition &&
+        i > 0 &&
+        _placeMarkers.contains(foldAccents(words[i - 1].toLowerCase()))) {
+      continue;
+    }
     if (!names.contains(word)) names.add(word);
   }
   return names;
@@ -96,7 +119,13 @@ ConversationSubject? resolveConversationSubject({
   ConversationSubject? previous,
 }) {
   final isQuestion = RegExp(r'[?¿]').hasMatch(message);
-  final mentioned = namesIn(message);
+  final threadWarm =
+      previous != null && now.difference(previous.at) <= kSubjectWindow;
+  // With a thread already running, a capitalised word after "a"/"en" is a
+  // place, not a new person: "Se muda a Monterrey" must stay about whoever is
+  // moving. With no thread there is nothing to protect and "Conocí a Roberto"
+  // has to keep working.
+  final mentioned = namesIn(message, afterPreposition: !threadWarm);
 
   String? canonical(String typed) {
     for (final person in knownPeople) {
@@ -127,14 +156,11 @@ ConversationSubject? resolveConversationSubject({
         name: recognised.first, at: now, isQuestion: isQuestion);
   }
 
-  final threadIsWarm =
-      previous != null && now.difference(previous.at) <= kSubjectWindow;
-
   // No known person named. A turn that leans on the thread ("él trabaja en
   // Puebla") stays with whoever it was about: "Puebla" is capitalised and
   // names nobody, and attributing a life to a city is the same class of
   // mistake as attributing it to the wrong friend.
-  if (threadIsWarm && continuesThread(message)) {
+  if (threadWarm && continuesThread(message)) {
     return ConversationSubject(
         name: previous.name, at: now, isQuestion: isQuestion);
   }
@@ -148,8 +174,7 @@ ConversationSubject? resolveConversationSubject({
   if (mentioned.length > 1) return null;
 
   // Nobody named. The thread continues only if it is still warm.
-  if (previous == null) return null;
-  if (now.difference(previous.at) > kSubjectWindow) return null;
+  if (!threadWarm) return null;
 
   return ConversationSubject(
       name: previous.name, at: now, isQuestion: isQuestion);

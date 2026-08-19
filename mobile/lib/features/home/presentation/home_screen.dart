@@ -234,6 +234,19 @@ class _HomeSections extends ConsumerWidget {
           // buttons took their trailing spacer with them and left "Cerebro"
           // flush against the following header.
           const SizedBox(height: 12),
+          // "Desahogo": say the hard thing, be heard, let it go. Named for
+          // what it is FOR, not for the practice it borrows from — "Confesión"
+          // promises a sacrament this cannot give, and a religious label would
+          // shut the door on someone who has no religion.
+          //
+          // On the home screen rather than buried in Settings: the day someone
+          // needs it they are not going to go looking through menus.
+          _NavButton(
+            icon: Icons.self_improvement,
+            label: 'Desahogo',
+            onPressed: () => context.push('/desahogo'),
+          ),
+          const SizedBox(height: 12),
 
           // 3) Notices & summaries.
           _SectionHeader(label: l10n.homeSectionNotices),

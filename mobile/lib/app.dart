@@ -63,6 +63,7 @@ import 'theme/lifeos_theme.dart';
 import 'theme/theme_providers.dart';
 import 'package:lifeos/core/graph/graph_providers.dart';
 import 'package:lifeos/core/sync/keys.dart';
+import 'package:lifeos/features/confession/presentation/confession_screen.dart';
 import 'package:lifeos/features/sync/data/sync_after_pass.dart';
 import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
@@ -166,6 +167,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // place. Local-only, so NOT pairing-gated (no gate entry matches).
       GoRoute(path: '/mi-vida', builder: (context, state) => const MiVidaScreen()),
       GoRoute(path: '/reminders', builder: (context, state) => const RemindersScreen()),
+      // Desahogo: say it, be heard, let it go. Nothing it receives is stored
+      // anywhere — see features/confession.
+      GoRoute(path: '/desahogo', builder: (context, state) => const ConfessionScreen()),
       // App-shell slice: `/settings` is now the offline-reachable Settings hub
       // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
       // exact-match `loc == '/settings'` was removed from the gate above) so the
@@ -696,6 +700,7 @@ const List<String> kLifeosRoutePaths = [
   '/domains/:key',
   '/mi-vida',
   '/reminders',
+  '/desahogo',
   '/settings',
   '/settings/local-model',
   '/settings/dictation',
