@@ -61,6 +61,26 @@ void main() {
     expect(publisher, contains('lifeos-briefing.timer'));
   });
 
+  test('las unidades las coloca la copia que llegó con la release', () {
+    // El actualizador ejecuta el instalador YA INSTALADO, que es el de la
+    // versión anterior. Sin delegar, una release que añade una unidad nueva no
+    // la colocaría hasta la release siguiente, y nadie podría ver por qué.
+    final installer = File('tools/install-linux.sh').readAsStringSync();
+    expect(installer, contains('--install-units'));
+    expect(installer, contains(r'"$BIN_DIR/lifeos-install.sh" --install-units'));
+    expect(installer, contains('install-units) install_units ;;'));
+  });
+
+  test('si la copia vieja no conoce el modo, lo hace ella misma', () {
+    // Un fallback que no existiera dejaría la máquina sin unidades para
+    // siempre en cuanto la delegación fallara por cualquier motivo.
+    final installer = File('tools/install-linux.sh').readAsStringSync();
+    expect(
+      installer,
+      contains('--install-units >/dev/null 2>&1; then\n    install_units'),
+    );
+  });
+
   test('desinstalar se lleva las unidades del usuario', () {
     final installer = File('tools/install-linux.sh').readAsStringSync();
     expect(installer, contains(r'$USER_UNIT_DIR/lifeos-briefing.service'));

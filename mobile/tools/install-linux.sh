@@ -44,7 +44,7 @@ USER_UNIT_DIR="/etc/systemd/user"
 KEY_HEADER="X-LifeOS-Update-Key"
 KEEP_RELEASES=2
 
-MODE="install"          # install | update | uninstall
+MODE="install"          # install | update | uninstall | install-units
 BASE_URL="${UPDATE_BASE_URL:-}"
 ACCESS_KEY="${UPDATE_ACCESS_KEY:-}"
 FORCE=0
@@ -91,6 +91,8 @@ OPTIONS
   --update           Non-interactive upgrade path used by lifeos-updater.service.
                      Reads config from $CONF_FILE. Exits 0 when already current.
   --uninstall        Remove $PREFIX, the launcher, the icon and the systemd units.
+  --install-units    Place and enable the systemd units only. Used internally by
+                     an older installed copy after unpacking a new release.
                      Leaves your data in ~/.local/share and ~/.config alone.
   --force            Reinstall even when the published version is already installed.
   --skip-dep-check   Do not abort on missing system libraries. You are on your own.
@@ -119,6 +121,9 @@ while [ $# -gt 0 ]; do
     --key=*) ACCESS_KEY="${1#--key=}"; shift ;;
     --update) MODE="update"; shift ;;
     --uninstall) MODE="uninstall"; shift ;;
+    # Place and enable the systemd units and nothing else. Used by an older
+    # installed copy to hand that step to the release it just unpacked.
+    --install-units) MODE="install-units"; shift ;;
     --force) FORCE=1; shift ;;
     --skip-dep-check) SKIP_DEP_CHECK=1; shift ;;
     --help|-h) usage; exit 0 ;;
@@ -694,7 +699,16 @@ do_install() {
   ln -sfn "$CURRENT_LINK/bundle/lifeos" "$LAUNCHER_LINK"
 
   install_desktop_entry "$TARGET"
-  install_units
+
+  # Units are installed by the copy of this script that CAME WITH the release,
+  # not by the one already on disk. The updater runs the OLD installer, so a
+  # release that adds a new unit would otherwise not get it placed until the
+  # release after that — a whole cycle late, for no reason the user could see.
+  # An old copy that does not know --install-units simply fails, and we fall
+  # back to doing it ourselves.
+  if ! "$BIN_DIR/lifeos-install.sh" --install-units >/dev/null 2>&1; then
+    install_units
+  fi
   save_config
   prune_old_releases
 
@@ -858,6 +872,10 @@ prune_old_releases() {
 
 # ─────────────────────────────────────────────────────────────────────────────
 case "$MODE" in
-  uninstall) do_uninstall ;;
-  *)         do_install ;;
+  uninstall)     do_uninstall ;;
+  # Only the units. Invoked by an older installed copy right after it unpacked
+  # this release, so a newly added unit is placed by the script that knows
+  # about it instead of waiting a whole update cycle.
+  install-units) install_units ;;
+  *)             do_install ;;
 esac
