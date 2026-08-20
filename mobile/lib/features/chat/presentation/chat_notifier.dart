@@ -27,6 +27,7 @@ import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
 import '../domain/conversation_subject.dart';
 import '../domain/correction.dart';
+import '../domain/opening_line.dart';
 import '../domain/person_answer.dart';
 import '../../memory/domain/when_answer.dart';
 import '../domain/person_facts.dart';
@@ -163,7 +164,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
   @override
   ChatUiState build() {
     ref.onDispose(_handleDispose);
-    _bootstrapFuture = _loadHistory();
+    _bootstrapFuture = _loadHistory().then((_) => _maybeOpenWithSomething());
     _loadKnownPeople();
     return const ChatUiState();
   }
@@ -294,6 +295,51 @@ class ChatNotifier extends Notifier<ChatUiState> {
     );
     state = state.copyWith(messages: [greeting]);
     _persist(greeting);
+  }
+
+  /// Say something first, when there is something worth picking up.
+  ///
+  /// Nothing in the app ever started a conversation, which put the whole
+  /// burden of remembering on the busiest person in the room. This is the
+  /// first line on the screen — not a notification — and it is built from what
+  /// is already in the graph, so it can only mention something the user
+  /// actually said.
+  ///
+  /// NOT persisted: it is a greeting, not memory. It also never repeats within
+  /// the day, because the last message's own timestamp says whether you have
+  /// already been talking.
+  Future<void> _maybeOpenWithSomething() async {
+    if (_disposed || state.messages.isEmpty) return;
+    try {
+      final store = ref.read(localGraphStoreProvider).value;
+      if (store == null) return;
+      final nodes = await store.listNodesByKind('fact', limit: 30);
+      final line = openingLine(
+        [
+          for (final n in nodes)
+            if (n.label.trim().isNotEmpty)
+              OpeningFact(
+                label: n.label.trim(),
+                at: n.occurredAt ?? n.createdAt,
+                domain: n.domain,
+              ),
+        ],
+        now: DateTime.now(),
+        lastSpokeAt: state.messages.last.timestamp,
+      );
+      if (line == null || _disposed) return;
+      state = state.copyWith(messages: [
+        ...state.messages,
+        ChatMessage(
+          id: 'opener-${DateTime.now().microsecondsSinceEpoch}',
+          role: ChatRole.axi,
+          text: line,
+          timestamp: DateTime.now(),
+        ),
+      ]);
+    } catch (_) {
+      // Best-effort: a greeting is never worth breaking the chat for.
+    }
   }
 
   /// App-localized strings for the notifier (no [BuildContext] here): resolve the

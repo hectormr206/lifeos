@@ -16,7 +16,20 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 0.9.19+1
+# EL NOMBRE DE VERSIÓN HAY QUE MOVERLO A MANO, y hay que acordarse.
+#
+# 0.9.19 se quedó congelado desde el 25 de julio de 2026 mientras el
+# versionCode subía de ~700 a 887: casi un mes y decenas de mejoras bajo el
+# mismo nombre. Dos personas diciendo "tengo la 0.9.19" podían tener apps
+# completamente distintas, y eso hace inútil lo único que la gente cita cuando
+# reporta un problema.
+#
+# El versionCode (el +N) NO se toca aquí: sale del número de commits, lo pone
+# `--build-number` en publish-to-vps.sh, y por eso sí se mueve solo.
+#
+# Criterio: sube el MINOR (0.10 -> 0.11) en cada tanda con funciones nuevas o
+# cambios visibles; el PATCH para correcciones sueltas.
+version: 0.10.0+1
 
 environment:
   sdk: ^3.12.2
