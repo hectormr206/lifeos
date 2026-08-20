@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../app_update/presentation/restart_banner.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -35,13 +37,27 @@ class HomeScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: Center(
-        child: SingleChildScrollView(
-          child: switch (connection) {
-            ConnectionPaired(engineUrl: final engineUrl) => _ConnectedView(engineUrl: engineUrl),
-            _ => const _UnpairedView(),
-          },
-        ),
+      body: Column(
+        children: [
+          // A newer build already installed on disk while this process keeps
+          // running the old one. Measured on the user's laptop: installed at
+          // 07:03, app still running the binary it started at 00:23 — and he
+          // reasonably concluded the update had never arrived, because nothing
+          // told him otherwise. Invisible on Android, where installing an APK
+          // restarts the app.
+          const RestartPendingBanner(),
+          Expanded(
+            child: Center(
+              child: SingleChildScrollView(
+                child: switch (connection) {
+                  ConnectionPaired(engineUrl: final engineUrl) =>
+                    _ConnectedView(engineUrl: engineUrl),
+                  _ => const _UnpairedView(),
+                },
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -126,7 +142,10 @@ class _ConnectedView extends ConsumerWidget {
           data: (ok) => Row(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Icon(ok ? Icons.check_circle : Icons.error, color: ok ? Colors.green : Colors.red),
+              Icon(
+                ok ? Icons.check_circle : Icons.error,
+                color: ok ? Colors.green : Colors.red,
+              ),
               const SizedBox(width: 8),
               Text(ok ? l10n.homeEngineReachable : l10n.homeEngineUnreachable),
             ],
