@@ -35,11 +35,8 @@ the laptop lost DNS because AdGuard runs here too. On 2026-08-18 a Gradle build 
    pasó tres veces el 2026-08-19. Si te hace falta más memoria, subí `MEM=`; si necesitás mucho
    más, es señal de que ese build va al CI.
 
-5. **Nunca ejecutes un build pesado sin `build-safe`** — `mobile/tools/publish-to-vps.sh` builds the signed
-   release APK for the OTA, and that one is legitimate — run it deliberately, one at a time, and
-   deprioritise its disk access so the rest of the machine keeps breathing:
-   ```
-   That publish takes ~50 minutes. Do not start it and then walk away into other heavy work.
+5. **El `publish-to-vps.sh` de la OTA tarda ~50 minutos.** Lanzalo a conciencia, uno a la vez, y
+   no te vayas a hacer otro trabajo pesado mientras corre.
 
 `~/.gradle/gradle.properties` already forces `org.gradle.daemon=false`, a 2 GB heap and 3 workers
 (host-wide policy, set 2026-08-18 after 4 GB Gradle daemons kept surviving builds and getting
