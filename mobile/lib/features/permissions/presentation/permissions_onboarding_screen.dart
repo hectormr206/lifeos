@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../../theme/lifeos_theme.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../first_day/domain/first_day_copy.dart';
 import '../domain/app_permission.dart';
 import 'permissions_providers.dart';
 
@@ -26,6 +27,14 @@ class PermissionsOnboardingScreen extends ConsumerStatefulWidget {
 class _PermissionsOnboardingScreenState
     extends ConsumerState<PermissionsOnboardingScreen> {
   bool _requesting = false;
+
+  /// El primer día empieza por la presentación, no por el trámite.
+  ///
+  /// Antes, lo primero que veía alguien que nunca había oído hablar de esto
+  /// era "Permisos de LifeOS" y una lista de casillas: un trámite antes que
+  /// una razón. Los permisos siguen ahí, pero después de saber quién los pide
+  /// y para qué.
+  bool _greeted = false;
 
   /// The permissions this platform actually has — see [permissionsForPlatform].
   /// Onboarding must never ask for a grant that cannot exist here.
@@ -50,6 +59,14 @@ class _PermissionsOnboardingScreenState
 
   Future<void> _skip() => _finish();
 
+  /// Entrar directo al chat. Lo que engancha no es entender la app: es ver qué
+  /// hace con la primera cosa que le cuentas.
+  Future<void> _startTalking() async {
+    await ref.read(onboardingGateProvider.notifier).complete();
+    if (!mounted) return;
+    context.go('/chat');
+  }
+
   Future<void> _finish() async {
     await ref.read(onboardingGateProvider.notifier).complete();
     if (!mounted) return;
@@ -59,6 +76,7 @@ class _PermissionsOnboardingScreenState
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    if (!_greeted) return _buildGreeting(context, scheme);
     return Scaffold(
       body: SafeArea(
         child: Column(
@@ -134,12 +152,95 @@ class _PermissionsOnboardingScreenState
       ),
     );
   }
+  /// La bienvenida: quién es Axi, qué hace con lo que le cuentes y dónde se
+  /// queda. Tres frases, y una invitación a escribir algo — no a leer más.
+  Widget _buildGreeting(BuildContext context, ColorScheme scheme) {
+    final text = Theme.of(context).textTheme;
+    return Scaffold(
+      body: SafeArea(
+        child: Column(
+          children: [
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.fromLTRB(24, 40, 24, 16),
+                children: [
+                  Container(
+                    width: 96,
+                    height: 96,
+                    decoration: BoxDecoration(
+                      color: LifeOSColors.softPink.withValues(alpha: 0.2),
+                      borderRadius: BorderRadius.circular(24),
+                    ),
+                    clipBehavior: Clip.antiAlias,
+                    child: Image.asset(
+                      'assets/branding/axi-512.png',
+                      fit: BoxFit.contain,
+                      errorBuilder: (context, error, stack) => const Icon(
+                          Icons.pets, color: LifeOSColors.pink, size: 44),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                  Text(
+                    kFirstDayGreeting,
+                    style: text.headlineSmall?.copyWith(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Text(
+                    kFirstDayPromise,
+                    style: text.titleMedium?.copyWith(height: 1.35),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    kFirstDayPrivacy,
+                    style: text.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      height: 1.45,
+                    ),
+                  ),
+                  const SizedBox(height: 18),
+                  Text(
+                    kFirstDayInvitation,
+                    style: text.bodyMedium?.copyWith(height: 1.45),
+                  ),
+                ],
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+              child: Column(
+                children: [
+                  SizedBox(
+                    width: double.infinity,
+                    child: FilledButton(
+                      onPressed: _startTalking,
+                      child: const Text(kFirstDayCallToAction),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    // Mirar antes de escribir es legítimo: de aquí se pasa a
+                    // los permisos y a la app, sin haber contado nada.
+                    onPressed: () => setState(() => _greeted = true),
+                    child: const Text(kFirstDayLookAround),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
 }
 
 class _PermissionRow extends StatelessWidget {
   const _PermissionRow({required this.permission});
 
   final AppPermission permission;
+
 
   @override
   Widget build(BuildContext context) {

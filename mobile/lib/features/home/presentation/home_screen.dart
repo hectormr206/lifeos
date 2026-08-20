@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+
 import '../../app_update/presentation/restart_banner.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -11,6 +12,7 @@ import '../../app_update/presentation/update_available_banner.dart';
 import '../../axi_body/presentation/axi_body_widget.dart';
 import '../../connection/domain/connection_status.dart';
 import '../../connection/presentation/connection_notifier.dart';
+import '../../first_day/presentation/backup_reminder.dart';
 import '../../local_model/presentation/local_model_notifier.dart';
 import 'home_providers.dart';
 
@@ -46,6 +48,9 @@ class HomeScreen extends ConsumerWidget {
           // told him otherwise. Invisible on Android, where installing an APK
           // restarts the app.
           const RestartPendingBanner(),
+          // "Si pierdes este teléfono". Aparece sólo cuando ya hay algo que
+          // perder, y desaparece en cuanto existe una copia.
+          const BackupReminderBanner(),
           Expanded(
             child: Center(
               child: SingleChildScrollView(

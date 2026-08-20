@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
+import 'package:lifeos/features/first_day/domain/first_day_copy.dart';
 import 'package:lifeos/core/api/api_providers.dart';
 import 'package:lifeos/core/platform/platform_providers.dart';
 import 'package:lifeos/features/permissions/domain/onboarding_preferences.dart';
@@ -55,11 +56,22 @@ void main() {
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 100));
 
+    // El primer arranque empieza por la presentación, no por el trámite: eso
+    // cambió a propósito. Lo que NO puede cambiar es que un primer arranque
+    // en Android acabe en /onboarding en vez de en la app.
     expect(
-      find.text('Permisos de LifeOS'),
+      find.text(kFirstDayGreeting),
       findsOneWidget,
-      reason: 'the Pixel first-launch flow must not change',
+      reason: 'the Pixel first-launch flow must land on onboarding',
     );
+
+    // Y que los permisos sigan estando, un toque más allá. Sin esto, mover la
+    // bienvenida delante podría haberlos dejado inalcanzables sin que ninguna
+    // prueba se enterara.
+    await tester.tap(find.text(kFirstDayLookAround));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+    expect(find.text('Permisos de LifeOS'), findsOneWidget);
   });
 
   testWidgets('Linux skips it — there is no runtime permission to grant',

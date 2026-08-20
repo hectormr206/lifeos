@@ -21,6 +21,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/first_day/domain/first_day_copy.dart';
 import 'package:lifeos/features/permissions/domain/app_permission.dart';
 import 'package:lifeos/features/permissions/domain/onboarding_preferences.dart';
 import 'package:lifeos/features/permissions/domain/permissions_gateway.dart';
@@ -139,6 +140,12 @@ void main() {
         child: MaterialApp.router(routerConfig: router),
       ));
       await tester.pump();
+
+      // El primer día empieza por la presentación: los permisos están detrás
+      // de "Prefiero mirar primero". Sin este paso, lo de abajo buscaría filas
+      // que todavía no existen.
+      await tester.tap(find.text(kFirstDayLookAround));
+      await tester.pumpAndSettle();
 
       for (final permission in AppPermission.values) {
         final shouldShow = _expected(operatingSystem).contains(permission);
