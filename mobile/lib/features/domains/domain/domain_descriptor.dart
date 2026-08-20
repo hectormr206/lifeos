@@ -97,9 +97,17 @@ const domainDescriptors = <DomainDescriptor>[
     listKey: 'entries',
     routerHint: 'salud física/médica: presión, glucosa, peso, pulso, sueño, '
         'síntomas, dolor, enfermedad, medicamentos, estudios médicos',
+    // 'dormir' (infinitive) is NOT here on purpose: "ya me voy a dormir" is a
+    // goodnight, and it was being filed as a health entry. The conjugated
+    // forms are what a report looks like.
     keywords: <String>[
-      'presion', 'glucosa', 'peso', 'pulso', 'sueno', 'dormi', 'dormir',
-      'sintoma', 'sintomas', 'dolor', 'enfermedad', 'medicamento', 'pastilla',
+      'presion', 'glucosa', 'peso', 'pulso', 'sueno', 'dormi', 'dormido',
+      'desvele', 'sintoma', 'sintomas', 'dolor', 'duele', 'dolia', 'malestar',
+      'enfermedad', 'enfermo', 'enferma', 'gripa', 'fiebre', 'temperatura',
+      'mareo', 'nausea', 'medicamento', 'medicina', 'pastilla', 'receta',
+      // 'doctor' and 'consulta' are NOT here: "recuérdame llamar al doctor
+      // mañana" is an appointment, not a health reading, and routing it to
+      // Salud files a reminder as a medical record.
       'salud', 'azucar', 'frecuencia cardiaca',
     ],
   ),
@@ -112,9 +120,11 @@ const domainDescriptors = <DomainDescriptor>[
     routerHint: 'dinero: gastos, ingresos, ahorros, pagos de deuda, sueldo, '
         'precios, compras, presupuesto, cuentas',
     keywords: <String>[
-      'gasto', 'gaste', 'ingreso', 'ahorro', 'deuda', 'sueldo', 'precio',
-      'compra', 'presupuesto', 'cuenta', 'dinero', 'pago', 'pague', 'gasolina',
-      'factura',
+      'gasto', 'gaste', 'gastamos', 'ingreso', 'ahorro', 'ahorre', 'deuda',
+      'sueldo', 'salario', 'quincena', 'aguinaldo', 'bono', 'precio',
+      'compra', 'compre', 'presupuesto', 'cuenta', 'dinero', 'pago', 'pague',
+      'cobre', 'cobraron', 'pagaron', 'gasolina', 'factura', 'renta',
+      'hipoteca', 'prestamo', 'pesos',
     ],
   ),
   DomainDescriptor(
@@ -126,9 +136,10 @@ const domainDescriptors = <DomainDescriptor>[
     routerHint: 'actividad física: caminar, correr, cardio, pesas/fuerza, yoga, '
         'deportes, gimnasio, entrenar',
     keywords: <String>[
-      'caminar', 'camine', 'correr', 'corri', 'cardio', 'pesas', 'fuerza',
-      'yoga', 'deporte', 'gimnasio', 'entrenar', 'entrene', 'ejercicio',
-      'trote',
+      'caminar', 'camine', 'caminata', 'correr', 'corri', 'cardio', 'pesas',
+      'fuerza', 'yoga', 'deporte', 'gimnasio', 'gym', 'entrenar', 'entrene',
+      'ejercicio', 'trote', 'running', 'bici', 'bicicleta', 'nade', 'natacion',
+      'futbol', 'flexiones', 'sentadillas',
     ],
   ),
   DomainDescriptor(
@@ -155,6 +166,8 @@ const domainDescriptors = <DomainDescriptor>[
     keywords: <String>[
       'reflexion', 'gratitud', 'meditacion', 'medite', 'oracion', 'rece',
       'mindfulness', 'valores', 'proposito', 'paz', 'agradeci', 'espiritual',
+      'iglesia', 'misa', 'templo', 'fe', 'limosna', 'diezmo', 'confesion',
+      'retiro', 'biblia', 'comunion',
     ],
   ),
   DomainDescriptor(
@@ -166,8 +179,9 @@ const domainDescriptors = <DomainDescriptor>[
     routerHint: 'conocimiento: libros, cursos, artículos, ideas, preguntas de '
         'investigación, notas de estudio, citas',
     keywords: <String>[
-      'libro', 'curso', 'articulo', 'idea', 'aprendi', 'estudie', 'lei',
-      'investigacion', 'apunte', 'leccion', 'aprendizaje',
+      'libro', 'curso', 'articulo', 'idea', 'aprendi', 'estudie', 'estudiando',
+      'estudiar', 'estudio', 'lei', 'leyendo', 'repase', 'tarea', 'examen',
+      'investigacion', 'apunte', 'leccion', 'aprendizaje', 'clase',
     ],
   ),
   DomainDescriptor(
