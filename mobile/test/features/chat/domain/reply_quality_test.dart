@@ -69,6 +69,21 @@ void main() {
       );
     });
 
+    test('reformular el eco sigue siendo eco', () {
+      // Medido en el Pixel: a "El 12 de septiembre del 2008 hicimos el amor por
+      // primera vez" contestó "El 12 de septiembre de 2008 fue la primera vez
+      // que hicieron el amor". Mismas palabras, otro orden, y un verbo en otra
+      // persona. Cambiar la forma no lo convierte en escuchar.
+      expect(
+        isEchoReply(
+          userText: 'El 12 de septiembre del 2008 hicimos el amor por primera vez',
+          reply: 'El 12 de septiembre de 2008 fue la primera vez que hicieron '
+              'el amor.',
+        ),
+        isTrue,
+      );
+    });
+
     test('una respuesta que AÑADE algo no es eco', () {
       expect(
         isEchoReply(

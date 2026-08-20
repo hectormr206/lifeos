@@ -42,6 +42,13 @@ List<String> _meaningfulWords(String text) {
   ];
 }
 
+/// La raíz aproximada de una palabra larga.
+///
+/// "hicimos" y "hicieron" son la misma palabra puesta en otra persona, y el
+/// modelo reformula así cuando cree que confirma — medido en el Pixel. Las
+/// palabras cortas se comparan enteras: recortarlas juntaría cosas distintas.
+String _stem(String word) => word.length >= 5 ? word.substring(0, 4) : word;
+
 /// Si la respuesta es, en lo esencial, el mensaje devuelto.
 ///
 /// Una PREGUNTA nunca cuenta como eco: "¿dónde nació mi esposa?" respondida
@@ -63,7 +70,8 @@ bool isEchoReply({required String userText, required String reply}) {
   // quieres saber?" colaba tres palabras nuevas y se escapaba de un umbral que
   // miraba cuánto añadía. Lo que importa no es lo que añade, sino que le está
   // devolviendo su propia frase.
-  final reused = asked.where(answered.contains).length;
+  final stems = answered.map(_stem).toSet();
+  final reused = asked.where((w) => stems.contains(_stem(w))).length;
   return reused >= asked.length * 0.9;
 }
 
