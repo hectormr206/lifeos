@@ -115,7 +115,8 @@ mkdir -p "$ROOT/share/systemd" "$ROOT/bin"
 
 cp -a "$BUNDLE" "$ROOT/bundle"
 cp "$MOBILE_DIR/assets/branding/axi-512.png" "$ROOT/share/lifeos.png"
-for unit in lifeos-updater.service lifeos-updater.timer lifeos-updater.path; do
+for unit in lifeos-updater.service lifeos-updater.timer lifeos-updater.path \
+             lifeos-briefing.service lifeos-briefing.timer; do
   src="$MOBILE_DIR/tools/systemd/$unit"
   [[ -f "$src" ]] || { echo "ERROR: falta $src" >&2; exit 1; }
   cp "$src" "$ROOT/share/systemd/$unit"

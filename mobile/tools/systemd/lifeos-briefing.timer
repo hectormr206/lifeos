@@ -1,0 +1,20 @@
+[Unit]
+Description=Revisar si toca generar el boletín de LifeOS
+
+[Timer]
+# Cada quince minutos, no a la hora del boletín. La hora la elige el usuario y
+# viaja entre sus dispositivos por el sync, así que un OnCalendar fijo aquí se
+# quedaría desfasado en cuanto la cambiara en el teléfono. El generador ya sabe
+# saltarse el trabajo si aún no toca o si el boletín de hoy ya existe, así que
+# despertar de más no cuesta nada.
+OnCalendar=*:0/15
+
+# Una laptop pasa media mañana suspendida. Sin esto, la ejecución que venció
+# mientras dormía simplemente no ocurre — y esa suele ser justo la de las 6.
+Persistent=true
+
+# Que no todas las máquinas salgan a por los mismos feeds en el mismo segundo.
+RandomizedDelaySec=2min
+
+[Install]
+WantedBy=timers.target

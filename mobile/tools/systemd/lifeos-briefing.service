@@ -1,0 +1,39 @@
+[Unit]
+# Genera el boletín de la mañana en la laptop, con la aplicación cerrada.
+#
+# Esto es un servicio de USUARIO, al revés que lifeos-updater. El boletín se
+# escribe en los datos del usuario (~/.local/share/lifeos) y necesita su sesión
+# gráfica: Flutter en Linux crea una FlView de GTK aunque nadie vaya a ver la
+# ventana, así que sin DISPLAY/WAYLAND_DISPLAY el proceso no arranca. Root no
+# tiene ninguna de las dos cosas.
+#
+# El trabajo lo hace el mismo generador headless que usa Android; lo único que
+# faltaba en el escritorio era quién se lo pidiera, porque `workmanager` sólo
+# existe en Android e iOS.
+Description=Generar el boletín de LifeOS
+Documentation=file:///opt/lifeos/current/README-linux.md
+After=graphical-session.target network-online.target
+Wants=network-online.target
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+
+# Si la aplicación ya está abierta, no generamos aquí: la copia abierta lo hace
+# sola, y dos procesos escribiendo las mismas preferencias pueden pisarse. Un
+# ExecCondition que no se cumple deja el servicio en 'condition failed', no en
+# 'failed' — esto no es un error, es que no hacía falta.
+ExecCondition=/bin/sh -c '! pgrep -x lifeos >/dev/null'
+
+ExecStart=/usr/local/bin/lifeos --run-briefing
+
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Descargar veinte feeds y resumirlos con el modelo local no debe competir con
+# lo que el usuario esté haciendo en su máquina.
+Nice=10
+IOSchedulingClass=idle
+
+# El generador ya se corta solo a los 8 minutos; esto es el respaldo por si se
+# queda colgado antes de llegar a su propio reloj.
+TimeoutStartSec=15min

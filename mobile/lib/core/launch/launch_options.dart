@@ -27,15 +27,30 @@ const Set<String> _hiddenLaunchAliases = {
   '--start-minimized',
 };
 
+/// The flag a systemd timer writes to ask for the boletín and nothing else.
+///
+/// `workmanager` covers Android and iOS only, so on the laptop nobody
+/// generated the briefing unless someone opened the app — the one thing a
+/// morning briefing must not depend on. The generator already runs headless;
+/// this is how something outside the app asks for it.
+const String runBriefingFlag = '--run-briefing';
+
 @immutable
 class LaunchOptions {
-  const LaunchOptions({required this.startHidden});
+  const LaunchOptions({required this.startHidden, this.runBriefingAndExit = false});
 
   /// An ordinary, user-initiated launch.
   static const LaunchOptions visible = LaunchOptions(startHidden: false);
 
   /// Whether the window should stay down and only the tray icon appear.
   final bool startHidden;
+
+  /// Generate the briefing and exit, with no window and no tray icon.
+  ///
+  /// This is not "start hidden": the process never reaches `runApp`. It does
+  /// one job and dies, which is what makes it safe to run from a timer while
+  /// the user's own copy of the app may also be open.
+  final bool runBriefingAndExit;
 
   /// Reads the entrypoint arguments the desktop runner handed to `main`.
   ///
@@ -45,15 +60,19 @@ class LaunchOptions {
   /// argument we do not recognise would turn a launcher detail into a dead app.
   factory LaunchOptions.parse(List<String> arguments) => LaunchOptions(
         startHidden: arguments.any(_hiddenLaunchAliases.contains),
+        runBriefingAndExit: arguments.contains(runBriefingFlag),
       );
 
   @override
   bool operator ==(Object other) =>
-      other is LaunchOptions && other.startHidden == startHidden;
+      other is LaunchOptions &&
+      other.startHidden == startHidden &&
+      other.runBriefingAndExit == runBriefingAndExit;
 
   @override
-  int get hashCode => startHidden.hashCode;
+  int get hashCode => Object.hash(startHidden, runBriefingAndExit);
 
   @override
-  String toString() => 'LaunchOptions(startHidden: $startHidden)';
+  String toString() => 'LaunchOptions(startHidden: $startHidden, '
+      'runBriefingAndExit: $runBriefingAndExit)';
 }

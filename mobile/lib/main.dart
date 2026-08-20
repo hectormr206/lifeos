@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:workmanager/workmanager.dart';
@@ -54,6 +56,19 @@ Future<void> main([List<String> arguments = const []]) async {
   } catch (_) {
     // No WorkManager here — the reminder + generate-on-open fallback remains.
   }
+  // Un temporizador nos pidió el boletín y nada más. Hacemos ese trabajo y
+  // salimos: sin ventana, sin icono en la bandeja y sin bloqueo por
+  // biometría, que aquí no tendría a quién preguntarle.
+  //
+  // Es lo que le faltaba al escritorio. `workmanager` sólo existe en Android e
+  // iOS, así que en la laptop el boletín únicamente se generaba si alguien
+  // abría la aplicación — justo lo que un boletín de la mañana no puede
+  // depender. El generador ya corría headless; sólo faltaba quién se lo
+  // pidiera desde fuera.
+  if (launchOptions.runBriefingAndExit) {
+    final ok = await runBriefingJobAndExit();
+    exit(ok ? 0 : 1);
+  }
   final appLockEnabled =
       await resolveInitialAppLockEnabled(SharedPrefsAppLockPreferences());
   runApp(
@@ -68,4 +83,19 @@ Future<void> main([List<String> arguments = const []]) async {
       child: const LifeOSApp(),
     ),
   );
+}
+
+/// El trabajo que hace `--run-briefing`: generar el boletín y decir si salió.
+///
+/// Devuelve `false` en vez de tragarse el fallo, porque quien lo llama es
+/// systemd: un servicio que siempre termina en 0 es un servicio del que nadie
+/// se entera cuando lleva un mes sin generar nada.
+Future<bool> runBriefingJobAndExit() async {
+  try {
+    return await executeMorningBriefingBackgroundTask();
+  } catch (error, stack) {
+    stderr.writeln('lifeos --run-briefing falló: $error');
+    stderr.writeln(stack);
+    return false;
+  }
 }

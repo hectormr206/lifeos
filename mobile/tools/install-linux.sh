@@ -40,6 +40,7 @@ DESKTOP_FILE="/usr/share/applications/lifeos.desktop"
 ICON_FILE="/usr/share/icons/hicolor/512x512/apps/lifeos.png"
 LAUNCHER_LINK="/usr/local/bin/lifeos"
 UNIT_DIR="/etc/systemd/system"
+USER_UNIT_DIR="/etc/systemd/user"
 KEY_HEADER="X-LifeOS-Update-Key"
 KEEP_RELEASES=2
 
@@ -102,6 +103,7 @@ WHAT IT INSTALLS
   $DESKTOP_FILE                     applications-menu entry
   $ICON_FILE                        icon
   $UNIT_DIR/lifeos-updater.{service,timer,path}
+  $USER_UNIT_DIR/lifeos-briefing.{service,timer}
                                     system-level auto-update (survives logout)
 EOF
 }
@@ -520,9 +522,14 @@ do_uninstall() {
       systemctl disable --now "$unit" >/dev/null 2>&1 || true
     done
   fi
+  if [ -z "${SYSTEMCTL_MISSING:-}" ]; then
+    systemctl --global disable lifeos-briefing.timer >/dev/null 2>&1 || true
+  fi
   rm -f "$UNIT_DIR/lifeos-updater.service" \
         "$UNIT_DIR/lifeos-updater.timer" \
-        "$UNIT_DIR/lifeos-updater.path"
+        "$UNIT_DIR/lifeos-updater.path" \
+        "$USER_UNIT_DIR/lifeos-briefing.service" \
+        "$USER_UNIT_DIR/lifeos-briefing.timer"
   if [ -z "${SYSTEMCTL_MISSING:-}" ]; then
     systemctl daemon-reload >/dev/null 2>&1 || true
   fi
@@ -783,6 +790,52 @@ install_units() {
     warn "Could not enable lifeos-updater.timer — updates will not be automatic."
   systemctl enable --now lifeos-updater.path >/dev/null 2>&1 || \
     warn "Could not enable lifeos-updater.path — in-app 'update now' will not work."
+
+  install_briefing_units "$src"
+}
+
+# The morning briefing runs as the USER, not as root: it writes the user's own
+# data and needs their graphical session (Flutter/GTK will not start without a
+# display). So these go to the user-unit directory and are enabled globally —
+# for whoever logs in on this machine, without the installer having to guess
+# which account that is.
+install_briefing_units() {
+  src="$1"
+  mkdir -p "$USER_UNIT_DIR"
+  for unit in lifeos-briefing.service lifeos-briefing.timer; do
+    if [ ! -f "$src/$unit" ]; then
+      warn "Missing unit $unit in the release — the briefing will only be"
+      warn "  generated while the app is open."
+      return 0
+    fi
+    install -m 0644 "$src/$unit" "$USER_UNIT_DIR/$unit"
+  done
+
+  # --global enables it for every user account that logs in from now on, which
+  # is what an installer run as root can honestly promise. It does NOT start it
+  # in a session that is already open, so we also try the live one below.
+  mkdir -p "$USER_UNIT_DIR"
+  systemctl --global enable lifeos-briefing.timer >/dev/null 2>&1 || \
+    warn "Could not enable lifeos-briefing.timer — the briefing will only be generated while the app is open."
+
+  # Start it in the session running right now, if there is one. SUDO_USER is
+  # the human who typed sudo; without it (an unattended --update from the
+  # system timer) there is nothing to start and the --global enable above still
+  # covers the next login.
+  if [ -n "${SUDO_USER:-}" ]; then
+    uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
+    if [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ]; then
+      sudo -u "$SUDO_USER" \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        systemctl --user daemon-reload >/dev/null 2>&1 || true
+      sudo -u "$SUDO_USER" \
+        XDG_RUNTIME_DIR="/run/user/$uid" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
+        systemctl --user enable --now lifeos-briefing.timer >/dev/null 2>&1 || \
+        warn "Could not start lifeos-briefing.timer in this session — it will start at the next login"
+    fi
+  fi
 }
 
 prune_old_releases() {

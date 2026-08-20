@@ -6,6 +6,7 @@ import 'package:lifeos/core/launch/launch_options.dart';
 /// living in the tray. Parsing is pure, so it is asserted here rather than by
 /// launching a real window.
 void main() {
+  _briefingFlag();
   group('LaunchOptions.parse', () {
     test('a bare launch is a normal, visible launch', () {
       expect(LaunchOptions.parse(const []).startHidden, isFalse);
@@ -70,6 +71,52 @@ void main() {
       // never drift, because the failure would be a silent visible window at
       // every login.
       expect(LaunchOptions.parse([hiddenLaunchFlag]).startHidden, isTrue);
+    });
+  });
+}
+
+// El boletín en la laptop, con la aplicación cerrada.
+//
+// `workmanager` sólo cubre Android e iOS, así que en el escritorio nadie
+// generaba el boletín salvo que alguien abriera la aplicación. La pieza que
+// falta no es el generador — ese ya corre headless — sino una forma de
+// pedírselo desde fuera: un temporizador de systemd lanza el mismo binario
+// con `--run-briefing`, genera y sale sin abrir ventana.
+void _briefingFlag() {
+  group('--run-briefing', () {
+    test('lo reconoce', () {
+      expect(
+        LaunchOptions.parse(const ['--run-briefing']).runBriefingAndExit,
+        isTrue,
+      );
+    });
+
+    test('un arranque normal no lo lleva', () {
+      expect(LaunchOptions.parse(const []).runBriefingAndExit, isFalse);
+    });
+
+    test('no se confunde con --hidden', () {
+      final o = LaunchOptions.parse(const ['--hidden']);
+      expect(o.runBriefingAndExit, isFalse);
+      expect(o.startHidden, isTrue);
+    });
+
+    test('un prefijo parecido NO cuenta', () {
+      // Aceptar prefijos convertiría un futuro `--run-briefing-debug` en una
+      // aplicación que se cierra sola sin que nadie sepa por qué.
+      expect(
+        LaunchOptions.parse(const ['--run-briefing-later']).runBriefingAndExit,
+        isFalse,
+      );
+    });
+
+    test('generar no implica ventana oculta: son cosas distintas', () {
+      // Con este flag el proceso ni siquiera llega a runApp; que startHidden
+      // quede en false deja claro que la ventana no entra en la ecuación.
+      expect(
+        LaunchOptions.parse(const ['--run-briefing']).startHidden,
+        isFalse,
+      );
     });
   });
 }

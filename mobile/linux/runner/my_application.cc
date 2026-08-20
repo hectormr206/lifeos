@@ -14,6 +14,10 @@ struct _MyApplication {
   // lib/core/launch/launch_options.dart). LifeOS then comes up in the system
   // tray with no window at all.
   gboolean start_hidden;
+  // TRUE when a systemd timer asked only for the boletín (see
+  // `runBriefingFlag`). Dart does the work and exits; no window is ever
+  // mapped, so nothing appears on the user's screen at 06:00.
+  gboolean headless_job;
 };
 
 G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
@@ -24,6 +28,11 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // the window before Dart can hide it. If the two ever disagree, the Dart side
 // still corrects the visibility (core/window/launch_visibility.dart), so the
 // worst case is a flash, never an unreachable app.
+// Keep in sync with `runBriefingFlag` in lib/core/launch/launch_options.dart.
+static gboolean is_headless_job_flag(const gchar* argument) {
+  return g_strcmp0(argument, "--run-briefing") == 0;
+}
+
 static gboolean is_hidden_launch_flag(const gchar* argument) {
   return g_strcmp0(argument, "--hidden") == 0 ||
          g_strcmp0(argument, "--start-hidden") == 0 ||
@@ -35,7 +44,7 @@ static void first_frame_cb(MyApplication* self, FlView* view) {
   // Started hidden: leave the toplevel unmapped. Dart calls window_manager's
   // show() if — and only if — the tray icon did NOT come up, so the user can
   // never end up with neither a window nor an icon.
-  if (self->start_hidden) {
+  if (self->start_hidden || self->headless_job) {
     return;
   }
   gtk_widget_show(gtk_widget_get_toplevel(GTK_WIDGET(view)));
@@ -109,11 +118,14 @@ static gboolean my_application_local_command_line(GApplication* application,
   self->dart_entrypoint_arguments = g_strdupv(*arguments + 1);
 
   self->start_hidden = FALSE;
+  self->headless_job = FALSE;
   for (gchar** argument = self->dart_entrypoint_arguments;
        argument != nullptr && *argument != nullptr; argument++) {
     if (is_hidden_launch_flag(*argument)) {
       self->start_hidden = TRUE;
-      break;
+    }
+    if (is_headless_job_flag(*argument)) {
+      self->headless_job = TRUE;
     }
   }
 
