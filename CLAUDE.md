@@ -23,10 +23,21 @@ the laptop lost DNS because AdGuard runs here too. On 2026-08-18 a Gradle build 
    I/O-hungry; together they saturate the disk queue and freeze everything, including your own
    session's shell.
 4. **If a build genuinely has to run here** — `mobile/tools/publish-to-vps.sh` builds the signed
+   release APK for the OTA, and that one is legitimate — run it inside its own box with
+   **`build-safe`**, never bare:
+   ```
+   build-safe ./gradlew assembleDebug
+   MEM=4G build-safe ./tools/publish-to-vps.sh "notas del release"
+   ```
+   `build-safe` (en `~/bin`) le pone al build un techo propio de memoria (3 GB por defecto, sin
+   swap) y 2 núcleos. Si se pasa, **muere solo dentro de su caja** con un mensaje claro, en vez
+   de empujar el slice de las sesiones y obligar a `user-mem-guard` a matarlo — que fue lo que
+   pasó tres veces el 2026-08-19. Si te hace falta más memoria, subí `MEM=`; si necesitás mucho
+   más, es señal de que ese build va al CI.
+
+5. **Nunca ejecutes un build pesado sin `build-safe`** — `mobile/tools/publish-to-vps.sh` builds the signed
    release APK for the OTA, and that one is legitimate — run it deliberately, one at a time, and
    deprioritise its disk access so the rest of the machine keeps breathing:
-   ```
-   ionice -c3 nice -n19 ./tools/publish-to-vps.sh "notas del release"
    ```
    That publish takes ~50 minutes. Do not start it and then walk away into other heavy work.
 
