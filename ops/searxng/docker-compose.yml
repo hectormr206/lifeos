@@ -1,0 +1,58 @@
+# SearXNG para LifeOS, cerrado detrás de una puerta con llave.
+#
+# DOS CONTENEDORES, y la separación es el guardarraíl:
+#   * `searxng` no tiene etiquetas de Traefik. No existe una ruta que lleve a
+#     él desde internet; sólo se le llega desde la red interna de Coolify.
+#   * `search-gate` es lo único publicado. Exige la cabecera antes de dejar
+#     pasar nada, y sólo deja pasar /search en formato JSON.
+#
+# Una instancia abierta se convierte en el buscador gratuito de quien encuentre
+# la URL, y se quema nuestra IP y nuestro CPU. Ese es el escenario que esto
+# evita, no un temor abstracto.
+services:
+  searxng:
+    image: 'searxng/searxng:latest'
+    restart: unless-stopped
+    # Un metabuscador es CPU a ráfagas. Sin techo, una ráfaga compite con
+    # Postgres y con las sesiones de trabajo en la misma máquina.
+    mem_limit: 512m
+    mem_reservation: 128m
+    cpus: 1.0
+    environment:
+      # Interno: la URL pública la sirve la puerta, no este contenedor.
+      - 'SEARXNG_BASE_URL=http://searxng:8080/'
+      - 'SEARXNG_SECRET=${SEARXNG_SECRET}'
+    volumes:
+      - '/data/coolify/services/REEMPLAZAR-UUID/searxng-settings.yml:/etc/searxng/settings.yml:ro'
+    networks:
+      - coolify
+    # Deliberadamente SIN labels de traefik: no se publica.
+
+  search-gate:
+    image: 'nginx:alpine'
+    restart: unless-stopped
+    mem_limit: 64m
+    mem_reservation: 16m
+    cpus: 0.25
+    volumes:
+      - '/data/coolify/services/REEMPLAZAR-UUID/search-gate.conf:/etc/nginx/conf.d/default.conf:ro'
+    networks:
+      - coolify
+    depends_on:
+      - searxng
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.routers.lifeos-search.entrypoints=https
+      - traefik.http.routers.lifeos-search.rule=Host(`search.lifeos.hectormr.com`)
+      - traefik.http.routers.lifeos-search.tls=true
+      - traefik.http.routers.lifeos-search.tls.certresolver=cloudflare
+      - traefik.http.routers.lifeos-search.middlewares=lifeos-search-rl
+      # Más bajo que el OTA: una búsqueda cuesta consultas a terceros, y una
+      # clave filtrada no debe poder traducirse en carga ilimitada.
+      - traefik.http.middlewares.lifeos-search-rl.ratelimit.average=10
+      - traefik.http.middlewares.lifeos-search-rl.ratelimit.burst=20
+      - traefik.http.services.lifeos-search.loadbalancer.server.port=80
+networks:
+  coolify:
+    external: true

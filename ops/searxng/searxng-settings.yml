@@ -1,0 +1,59 @@
+# SearXNG para LifeOS. Sólo lo que Axi necesita, nada más encendido.
+#
+# Cada motor activado es una petición a un tercero por cada búsqueda, y cada
+# formato de salida es una superficie más. Aquí se enciende lo mínimo.
+use_default_settings: true
+
+general:
+  # Nadie va a ver esta interfaz: la puerta sólo deja pasar /search?format=json.
+  instance_name: 'LifeOS'
+  # Sin páginas de donación ni enlaces a la instancia pública.
+  donation_url: false
+  contact_url: false
+  enable_metrics: false
+
+search:
+  safe_search: 0
+  autocomplete: ''
+  default_lang: 'es'
+  # JSON y nada más. El HTML convertiría esto en un buscador general para
+  # cualquiera con la clave y un navegador.
+  formats:
+    - json
+
+server:
+  secret_key: "!!! reemplazado por SEARXNG_SECRET en el compose !!!"
+  limiter: true
+  image_proxy: false
+  # Detrás de la puerta nginx, que a su vez está detrás de Traefik.
+  method: 'GET'
+
+ui:
+  static_use_hash: true
+
+outgoing:
+  # Un buscador que tarda más que la paciencia de alguien esperando una
+  # respuesta no sirve: Axi ya tarda unos segundos en escribir.
+  request_timeout: 6.0
+  max_request_timeout: 10.0
+  pool_connections: 20
+  pool_maxsize: 10
+
+# Ningún motor que exija cuenta o clave de pago: esto tiene que funcionar sin
+# registrar a nadie en ningún lado.
+engines:
+  - name: google
+    disabled: false
+  - name: duckduckgo
+    disabled: false
+  - name: brave
+    disabled: false
+  - name: wikipedia
+    disabled: false
+  - name: wikidata
+    disabled: false
+  # Apagados: ruido para lo que Axi necesita responder.
+  - name: currency
+    disabled: true
+  - name: qwant
+    disabled: true

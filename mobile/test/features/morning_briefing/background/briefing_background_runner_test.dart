@@ -212,5 +212,5 @@ void main() {
 /// the hard overall timeout is provable.
 class _HangingFetcher extends FakeSourceFetcher {
   @override
-  Future<String> fetch(String url) => Future<String>.delayed(const Duration(days: 1), () => '');
+  Future<String> fetch(String url, {Map<String, String>? headers}) => Future<String>.delayed(const Duration(days: 1), () => '');
 }

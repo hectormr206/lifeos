@@ -22,11 +22,24 @@ class SearxngBackend implements WebSearchBackend {
     required SourceFetcher fetcher,
     required String baseUrl,
     this.maxResults = 5,
+    String accessKey = '',
   })  : _fetcher = fetcher, // ignore: prefer_initializing_formals
-        _baseUrl = baseUrl; // ignore: prefer_initializing_formals
+        _baseUrl = baseUrl, // ignore: prefer_initializing_formals
+        _accessKey = accessKey;
 
   final SourceFetcher _fetcher;
   final String _baseUrl;
+
+  /// The key for a PRIVATE instance. Empty for a public one the user pointed
+  /// at themselves, which must not receive a header it never asked for.
+  ///
+  /// Sent as a HEADER, never in the query string: there it would land in the
+  /// server's access log, in the history of anyone who pastes the URL, and in
+  /// every proxy in between.
+  final String _accessKey;
+
+  Map<String, String>? get _headers =>
+      _accessKey.isEmpty ? null : {'X-LifeOS-Search-Key': _accessKey};
 
   /// Hard cap on the number of links returned (top hits only).
   final int maxResults;
@@ -59,7 +72,8 @@ class SearxngBackend implements WebSearchBackend {
     if (_normalizeBase(_baseUrl).isEmpty) return const [];
     // Primary path: the JSON API.
     try {
-      final body = await _fetcher.fetch(jsonQueryUrl(_baseUrl, query));
+      final body =
+          await _fetcher.fetch(jsonQueryUrl(_baseUrl, query), headers: _headers);
       final parsed = parseJson(body);
       if (parsed.isNotEmpty) return parsed;
       // A 200 that wasn't JSON (some instances serve the HTML page for
@@ -69,7 +83,8 @@ class SearxngBackend implements WebSearchBackend {
     }
     // Fallback path: scrape the HTML results page.
     try {
-      final html = await _fetcher.fetch(htmlQueryUrl(_baseUrl, query));
+      final html =
+          await _fetcher.fetch(htmlQueryUrl(_baseUrl, query), headers: _headers);
       return parseHtml(html);
     } catch (_) {
       return const [];

@@ -18,13 +18,13 @@ const _searxngJson = '''
 /// Answers every request with a valid SearXNG JSON body → connection succeeds.
 class _OkFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => _searxngJson;
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => _searxngJson;
 }
 
 /// Throws for everything → connection fails.
 class _DownFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => throw Exception('unreachable');
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => throw Exception('unreachable');
 }
 
 class _FakePrefs implements WebSearchPreferences {

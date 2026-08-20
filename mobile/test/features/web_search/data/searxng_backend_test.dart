@@ -15,7 +15,7 @@ class _ScriptedFetcher implements SourceFetcher {
   final List<String> fetched = [];
 
   @override
-  Future<String> fetch(String url) async {
+  Future<String> fetch(String url, {Map<String, String>? headers}) async {
     fetched.add(url);
     final body = bodies[url];
     if (body == null) throw Exception('no body for $url');
@@ -25,7 +25,7 @@ class _ScriptedFetcher implements SourceFetcher {
 
 class _FailingFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => throw Exception('unreachable');
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => throw Exception('unreachable');
 }
 
 const _base = 'https://searx.example';

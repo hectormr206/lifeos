@@ -15,7 +15,7 @@ class _ScriptedFetcher implements SourceFetcher {
   final List<String> fetched = [];
 
   @override
-  Future<String> fetch(String url) async {
+  Future<String> fetch(String url, {Map<String, String>? headers}) async {
     fetched.add(url);
     final body = bodies[url];
     if (body == null) throw Exception('no body for $url');
@@ -26,7 +26,7 @@ class _ScriptedFetcher implements SourceFetcher {
 /// Always throws, simulating DDG (or a page) being unreachable.
 class _FailingFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => throw Exception('network down');
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => throw Exception('network down');
 }
 
 const _ddgHtml = '''

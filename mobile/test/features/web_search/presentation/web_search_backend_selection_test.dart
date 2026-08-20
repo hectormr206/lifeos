@@ -12,7 +12,7 @@ import 'package:lifeos/features/web_search/presentation/web_search_providers.dar
 
 class _NoopFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => '';
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => '';
 }
 
 class _FakePrefs implements WebSearchPreferences {

@@ -14,7 +14,7 @@ import 'package:lifeos/features/web_search/data/web_search_pipeline.dart';
 
 class _NoopFetcher implements SourceFetcher {
   @override
-  Future<String> fetch(String url) async => '';
+  Future<String> fetch(String url, {Map<String, String>? headers}) async => '';
 }
 
 /// A pipeline whose [run] is scripted, so the decorator can be tested in

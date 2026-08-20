@@ -19,7 +19,7 @@ class FakeSourceFetcher implements SourceFetcher {
   final List<String> fetched = [];
 
   @override
-  Future<String> fetch(String url) async {
+  Future<String> fetch(String url, {Map<String, String>? headers}) async {
     fetched.add(url);
     if (failing.contains(url)) throw Exception('boom $url');
     final body = bodies[url];

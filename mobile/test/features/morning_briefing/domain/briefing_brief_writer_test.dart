@@ -33,7 +33,7 @@ class _FakeFetcher implements SourceFetcher {
   final List<String> fetched = [];
 
   @override
-  Future<String> fetch(String url) async {
+  Future<String> fetch(String url, {Map<String, String>? headers}) async {
     fetched.add(url);
     if (fails) throw Exception('sin red');
     return body;

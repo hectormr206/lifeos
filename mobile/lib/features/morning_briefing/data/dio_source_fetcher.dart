@@ -35,8 +35,11 @@ class DioSourceFetcher implements SourceFetcher {
   final Dio _dio;
 
   @override
-  Future<String> fetch(String url) async {
-    final response = await _dio.get<String>(url);
+  Future<String> fetch(String url, {Map<String, String>? headers}) async {
+    final response = await _dio.get<String>(
+      url,
+      options: headers == null ? null : Options(headers: headers),
+    );
     final status = response.statusCode ?? 0;
     if (status >= 400) {
       throw Exception('HTTP $status para $url');
