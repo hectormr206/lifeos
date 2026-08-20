@@ -56,6 +56,19 @@ void main() {
       );
     });
 
+    test('los acentos no salvan a un eco', () {
+      // Medido en el Pixel: el usuario escribe "nacio" sin acento —como se
+      // escribe en un teléfono— y el modelo contesta "nació". Compararlas como
+      // palabras distintas dejaba pasar la frase entera devuelta.
+      expect(
+        isEchoReply(
+          userText: 'Mi esposa nacio en Cadereyta de Montes Queretaro',
+          reply: 'Tu esposa nació en Cadereyta de Montes Querétaro.',
+        ),
+        isTrue,
+      );
+    });
+
     test('una respuesta que AÑADE algo no es eco', () {
       expect(
         isEchoReply(

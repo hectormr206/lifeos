@@ -23,10 +23,19 @@ const Set<String> _noise = {
   'por', 'para', 'con', 'sin', 'lo',
 };
 
+/// Sin acentos. El usuario escribe "nacio" en el teléfono y el modelo
+/// responde "nació": son la misma palabra, y compararlas como distintas dejaba
+/// pasar el eco entero — medido en el Pixel el 2026-08-20.
+String _fold(String text) => text
+    .replaceAll(RegExp(r'[áàäâ]'), 'a')
+    .replaceAll(RegExp(r'[éèëê]'), 'e')
+    .replaceAll(RegExp(r'[íìïî]'), 'i')
+    .replaceAll(RegExp(r'[óòöô]'), 'o')
+    .replaceAll(RegExp(r'[úùüû]'), 'u');
+
 List<String> _meaningfulWords(String text) {
-  final cleaned = text
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^\wáéíóúüñ\s]', unicode: true), ' ');
+  final cleaned = _fold(text.toLowerCase())
+      .replaceAll(RegExp(r'[^\wñ\s]', unicode: true), ' ');
   return [
     for (final word in cleaned.split(RegExp(r'\s+')))
       if (word.isNotEmpty && !_noise.contains(word)) word,
