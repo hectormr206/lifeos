@@ -803,6 +803,42 @@ class ChatContextBuilder {
     }
   }
 
+  /// Replace the most recent fact about the current subject with [corrected].
+  ///
+  /// A correction REPLACES; it never adds. Left to the ordinary capture path,
+  /// "no, Mateo tiene 9" became a second entry beside "Mateo tiene 8", and
+  /// recall could then return either — which is worse than the original error,
+  /// because now the memory contradicts itself.
+  ///
+  /// Returns null when there is nothing to correct, so the caller can say so
+  /// instead of inventing a new fact out of a denial.
+  Future<String?> applyCorrection(String corrected, {String? subject}) async {
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return null;
+
+      // The newest fact that mentions the subject — that is what a person means
+      // by "no, ...": the thing they just said, not something from last month.
+      final candidates = subject == null || subject.isEmpty
+          ? await deps.store.listNodesByKind('fact', limit: 1)
+          : await deps.store.searchNodes(subject, limit: 5);
+      final target = candidates
+          .where((n) => n.kind == 'fact' && !n.isDeleted)
+          .firstOrNull;
+      if (target == null) return null;
+
+      await deps.store.softDeleteNode(target.uuid);
+      await deps.writer.writeFact(
+        domain: target.domain ?? 'relationships',
+        label: corrected,
+        subject: subject,
+      );
+      return 'Corregido: $corrected';
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Answer "¿a qué hora…?" straight from the record, or null.
   ///
   /// Measured on the test Pixel with 881: asked what time he weighed himself,

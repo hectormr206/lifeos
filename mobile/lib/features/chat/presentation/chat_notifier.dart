@@ -26,6 +26,7 @@ import '../data/chat_history_repository.dart';
 import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
 import '../domain/conversation_subject.dart';
+import '../domain/correction.dart';
 import '../domain/person_answer.dart';
 import '../../memory/domain/when_answer.dart';
 import '../domain/person_facts.dart';
@@ -412,6 +413,14 @@ class ChatNotifier extends Notifier<ChatUiState> {
     );
     final text = attributeToSubject(rawText, _subject);
 
+    // A CORRECTION comes before everything that stores. Left to the capture
+    // path, "no, Mateo tiene 9" was written as a SECOND entry beside "Mateo
+    // tiene 8", and recall could then return either — a memory that
+    // contradicts itself is worse than one that was simply wrong.
+    if (looksLikeCorrection(rawText)) {
+      return _applyCorrectionOrModel(rawText, userMessage);
+    }
+
     // "¿A qué hora…?" goes FIRST. Measured on the Pixel: placed after the
     // capture triage, "a qué hora me pesé ayer" was read as a weight entry
     // ("pesé") and handed to the model, which answered 15:16 for something
@@ -455,6 +464,35 @@ class ChatNotifier extends Notifier<ChatUiState> {
       return _answerAboutPersonOrModel(text, userMessage);
     }
     return _sendTextToModel(text, userMessage);
+  }
+
+  /// Apply a spoken correction, or fall back to the model when there is
+  /// nothing to correct.
+  Future<void> _applyCorrectionOrModel(
+    String text,
+    ChatMessage userMessage,
+  ) async {
+    final corrected = correctionPayload(text);
+    // "Me equivoqué" alone says something is wrong without saying what is
+    // right. Deleting on that would erase a real fact and put nothing back.
+    if (corrected == null) return _sendTextToModel(text, userMessage);
+    try {
+      final ack = await ref
+          .read(chatContextBuilderProvider)
+          .applyCorrection(corrected, subject: _subject?.name);
+      if (ack == null) return _sendTextToModel(text, userMessage);
+      if (_disposed) return;
+      final reply = ChatMessage(
+        id: 'fix-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: ack,
+        timestamp: DateTime.now(),
+      );
+      state = state.copyWith(messages: [...state.messages, reply]);
+      _persist(reply);
+    } catch (_) {
+      return _sendTextToModel(text, userMessage);
+    }
   }
 
   /// Answer a time question from the record; fall back to the model when the

@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+
+import '../../data_control/presentation/export_tile.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -149,6 +151,11 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: const Icon(Icons.chevron_right),
             onTap: () => context.push('/settings/backups'),
           ),
+          // Next to the backups because a person reads them as one subject
+          // ("dónde está mi información"), even though they do opposite jobs:
+          // a backup comes back INTO LifeOS, an export goes OUT and stays
+          // readable without us.
+          const ExportTile(),
           // Sync sits next to backups because a user reads them as one subject
           // ("dónde está mi información"), even though they are opposites: a
           // backup is a copy you can restore FROM, sync is the same data living
