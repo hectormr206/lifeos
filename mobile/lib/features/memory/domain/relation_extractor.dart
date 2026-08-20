@@ -35,6 +35,7 @@ import 'dart:convert';
 import '../../../core/graph/local_graph_store.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../data/memory_writer.dart';
+import 'meaningful_entity.dart';
 import 'subject.dart' show canonRelation, foldAccents;
 
 /// One durable open-ended fact the model surfaced.
@@ -291,6 +292,19 @@ class RelationExtractor {
     if (predicate.isEmpty || subject.isEmpty || object.isEmpty) return;
     // Never mint entities out of bare numeric vitals.
     if (isLoggedVital(subject) || isLoggedVital(object)) return;
+    // Ni de palabras que no señalan nada. El modelo devolvía "la otra
+    // persona", "Axi" o "esposa_nació" como si fueran cosas del mundo, y el
+    // Cerebro se llenaba de nodos a los que no se puede volver. "yo" es la
+    // excepción: no es una entidad, es el propio usuario, y abajo se resuelve
+    // como tal.
+    if (!_isUser(subject) &&
+        !isMeaningfulEntity(name: subject, kind: r.subjectKind ?? 'unknown')) {
+      return;
+    }
+    if (!_isUser(object) &&
+        !isMeaningfulEntity(name: object, kind: r.objectKind ?? 'unknown')) {
+      return;
+    }
 
     final canonPredicate =
         canonRelation(foldAccents(predicate.toLowerCase()));

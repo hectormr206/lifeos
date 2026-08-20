@@ -31,7 +31,9 @@ import '../domain/opening_line.dart';
 import '../domain/person_answer.dart';
 import '../../memory/domain/when_answer.dart';
 import '../domain/person_facts.dart';
+import '../domain/acknowledgement.dart';
 import '../domain/chat_message.dart';
+import '../domain/reply_quality.dart';
 import 'chat_context_providers.dart';
 import 'chat_providers.dart';
 
@@ -886,6 +888,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
       userMessageId: userMessage.id,
       run: () => ref.read(chatRepositoryProvider).sendMessage(trimmed),
       errorPrefix: 'No se pudo enviar el mensaje',
+      userText: trimmed,
       // SLICE C1 write-back: after Axi replies, persist the exchange to memory
       // (conversation turn + a fact when the user stated something personal) so
       // Axi remembers next time. On-device only; best-effort and fire-and-forget
@@ -1172,6 +1175,24 @@ class ChatNotifier extends Notifier<ChatUiState> {
     ));
   }
 
+  /// La última puerta antes de que la respuesta se vea.
+  ///
+  /// Medido en el Pixel el 2026-08-20: a "Nos hicimos novios el 12 de mayo del
+  /// 2008" el modelo contestaba esa misma frase, y a lo siguiente "¿Qué
+  /// necesitas, Héctor?". Un eco no es conversar, y esa cortesía después de
+  /// que alguien te cuenta algo suyo es peor todavía.
+  ///
+  /// El prompt YA pedía otra cosa; un modelo de este tamaño no obedece esa
+  /// clase de regla y cada regla nueva afloja la anterior. Así que la decisión
+  /// se toma aquí, mirando lo que devolvió.
+  ChatMessage _worthSaying(String? userText, ChatMessage reply) {
+    if (userText == null || userText.isEmpty) return reply;
+    final bad = isEchoReply(userText: userText, reply: reply.text) ||
+        isEmptyPleasantry(reply.text);
+    if (!bad) return reply;
+    return reply.copyWith(text: acknowledgeStatement(userText));
+  }
+
   /// Appends [request] to the FIFO [_queue] and (re)starts the [_drain] loop.
   /// Returns a future that completes when THIS request has finished (its reply
   /// appended or its error surfaced), so callers can still `await` a single
@@ -1208,7 +1229,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
           final replyFuture = request.run();
           // Handed to the engine/repository → single ✓.
           _setStatus(request.userMessageId, ChatMessageStatus.sent);
-          final reply = await replyFuture;
+          final reply = _worthSaying(request.userText, await replyFuture);
           // Disposed mid-generation → done is completed in `finally`; bail
           // before appending so we never write to a disposed notifier.
           if (_disposed) return;
@@ -1414,9 +1435,16 @@ class _OutgoingRequest {
     required this.run,
     required this.errorPrefix,
     this.onReply,
+    this.userText,
   });
 
   final String userMessageId;
+
+  /// Lo que escribió el usuario en ESTE turno, cuando lo hay.
+  ///
+  /// Sirve para una sola cosa: comprobar que la respuesta del modelo no sea el
+  /// mensaje devuelto. Un turno de imagen no lo lleva — ahí no hay eco posible.
+  final String? userText;
   final Future<ChatMessage> Function() run;
   final String errorPrefix;
 

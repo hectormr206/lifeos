@@ -105,6 +105,7 @@ class ChatMessage {
   /// Returns a copy with the given fields replaced. Used to advance a user
   /// message's [status] (sending → sent → delivered) without rebuilding it.
   ChatMessage copyWith({
+    String? text,
     ChatMessageStatus? status,
     GenerationMetrics? metrics,
     String? transcription,
@@ -113,7 +114,7 @@ class ChatMessage {
       ChatMessage(
         id: id,
         role: role,
-        text: text,
+        text: text ?? this.text,
         timestamp: timestamp,
         kind: kind,
         images: images,
