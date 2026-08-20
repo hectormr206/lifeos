@@ -58,13 +58,18 @@ class SharedPrefsMorningBriefingPreferences
     // as "General" rather than dropping a list the user curated by hand.
     if (stored == null)
       return List<BriefingSource>.from(defaultBriefingSources);
-    return [for (final line in stored) BriefingSource.decode(line)];
+    // Dedupe on the way out, not only on the way in: a list that already
+    // holds the same feed twice (pasted by hand, or filed under two sections)
+    // would otherwise keep showing two identical groups forever.
+    return dedupeBriefingSources([
+      for (final line in stored) BriefingSource.decode(line),
+    ]);
   }
 
   @override
   Future<void> setSources(List<BriefingSource> sources) async =>
       (await _instance).setStringList(sourcesKey, [
-        for (final s in sources) s.encode(),
+        for (final s in dedupeBriefingSources(sources)) s.encode(),
       ]);
 
   @override

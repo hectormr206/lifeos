@@ -565,7 +565,13 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             final summary = await _generate(
               _articleSummaryPrompt(title: current.title, content: extract),
             );
-            _cacheArticleUpdate(key, current.copyWith(fullSummary: summary));
+            // El artículo VIGENTE, no la foto que se tomó al encolar. Con la
+            // foto, un trabajo que termina tarde escribe encima de lo que otro
+            // guardó mientras esperaba en la cola: pedir el resumen completo y
+            // enseguida el de comentarios borraba el primero al terminar el
+            // segundo, y había que ocultarlo y volver a pedirlo.
+            final latest = state.briefing?.articleForKey(key) ?? current;
+            _cacheArticleUpdate(key, latest.copyWith(fullSummary: summary));
           } on SummaryFailureException catch (e) {
             _setArticleFailure(key, e.failure, detail: e.detail);
           } catch (_) {
@@ -692,9 +698,12 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
             await _ensureModelReady();
             final comments = await _readableComments(current.hnObjectId);
             final summary = await _generate(_commentsSummaryPrompt(comments));
+            // El vigente, por lo mismo que arriba: este es justo el trabajo
+            // que borraba el resumen completo al terminar después.
+            final latest = state.briefing?.articleForKey(key) ?? current;
             _cacheCommentsUpdate(
               key,
-              current.copyWith(commentsSummary: summary),
+              latest.copyWith(commentsSummary: summary),
             );
           } on SummaryFailureException catch (e) {
             _setCommentsFailure(key, e.failure, detail: e.detail);

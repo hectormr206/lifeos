@@ -8,7 +8,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../domain/app_version_info.dart';
 import '../domain/restart_pending.dart';
 import '../presentation/app_update_providers.dart';
 

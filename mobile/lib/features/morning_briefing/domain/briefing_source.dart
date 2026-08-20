@@ -183,8 +183,11 @@ const List<BriefingSource> _shipped = [
   BriefingSource(url: 'https://www.linuxadictos.com/feed/', section: 'Linux'),
   BriefingSource(url: 'https://blog.desdelinux.net/feed/', section: 'Linux'),
   // Ciencia y salud
+  // BBC retiró su feed de ciencia: esa URL responde 301 al feed general, así
+  // que enviarla dejaba "BBC Mundo" dos veces con las mismas noticias
+  // (medido el 2026-08-20). Muy Interesante cubre el hueco en español.
   BriefingSource(
-    url: 'https://feeds.bbci.co.uk/mundo/ciencia_tecnologia/rss.xml',
+    url: 'https://www.muyinteresante.com/feed/',
     section: 'Ciencia y salud',
   ),
   BriefingSource(
@@ -225,3 +228,36 @@ List<BriefingSource> enabledBriefingSources(List<BriefingSource> sources) => [
   for (final source in sources)
     if (source.enabled) source,
 ];
+
+/// The key that decides whether two entries are the same feed.
+///
+/// Host case and a trailing slash are noise — the server answers the same
+/// bytes either way — but the PATH is not: BBC Mundo and BBC Ciencia share a
+/// host and are different sources. Anything that is not a URL falls back to
+/// its own trimmed text so a malformed entry never swallows another.
+String briefingSourceKey(String url) {
+  final trimmed = url.trim();
+  final uri = Uri.tryParse(trimmed);
+  if (uri == null || !uri.hasAuthority) return trimmed.toLowerCase();
+  var path = uri.path;
+  while (path.length > 1 && path.endsWith('/')) {
+    path = path.substring(0, path.length - 1);
+  }
+  return '${uri.scheme.toLowerCase()}://${uri.host.toLowerCase()}'
+      '$path${uri.hasQuery ? '?${uri.query}' : ''}';
+}
+
+/// One feed, one entry.
+///
+/// A list can arrive with the same URL twice — pasted by hand, or the same
+/// feed filed under two sections. Fetching it twice costs double and shows
+/// the same headlines in two groups with the same name, which reads like a
+/// bug because it is one. The first entry wins so the order the user sees
+/// does not shuffle.
+List<BriefingSource> dedupeBriefingSources(List<BriefingSource> sources) {
+  final seen = <String>{};
+  return [
+    for (final source in sources)
+      if (seen.add(briefingSourceKey(source.url))) source,
+  ];
+}

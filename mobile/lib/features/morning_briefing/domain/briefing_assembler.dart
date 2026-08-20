@@ -49,7 +49,7 @@ class BriefingAssembler {
     final articles = <BriefingArticle>[];
     final skipped = <String>[];
 
-    for (final harvest in harvests) {
+    for (final harvest in mergeHarvestsByName(harvests)) {
       if (harvest.failed) {
         skipped.add(harvest.name);
         continue;
@@ -65,7 +65,8 @@ class BriefingAssembler {
         skipped.add(harvest.name);
         continue;
       }
-      for (final item in fresh.take(cap)) {
+      final seenLinks = <String>{};
+      for (final item in fresh.where((i) => seenLinks.add(i.link)).take(cap)) {
         articles.add(
           BriefingArticle(
             sourceName: harvest.name,
@@ -85,4 +86,38 @@ class BriefingAssembler {
       generatedAt: generatedAt,
     );
   }
+}
+
+/// Cosechas con el mismo nombre son la misma fuente.
+///
+/// Dos entradas distintas pueden acabar en el mismo feed — el 2026-08-20 el
+/// feed de ciencia de BBC respondía 301 al general — y entonces el boletín
+/// mostraba la fuente dos veces con las mismas noticias. Fusionarlas aquí
+/// arregla también los dispositivos que ya tienen la URL vieja guardada, que
+/// es la mayoría: quitarla de los valores por defecto no les llega.
+///
+/// Una copia fallida junto a una que sí trajo noticias NO cuenta como fallo:
+/// el usuario tiene sus noticias, y decirle "sin novedades" sería mentira.
+List<SourceHarvest> mergeHarvestsByName(List<SourceHarvest> harvests) {
+  final order = <String>[];
+  final items = <String, List<ParsedFeedItem>>{};
+  final failed = <String, bool>{};
+
+  for (final harvest in harvests) {
+    if (!items.containsKey(harvest.name)) {
+      order.add(harvest.name);
+      failed[harvest.name] = true;
+    }
+    items.putIfAbsent(harvest.name, () => []).addAll(harvest.items);
+    if (!harvest.failed) failed[harvest.name] = false;
+  }
+
+  return [
+    for (final name in order)
+      SourceHarvest(
+        name: name,
+        items: items[name]!,
+        failed: failed[name]!,
+      ),
+  ];
 }

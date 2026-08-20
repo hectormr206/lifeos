@@ -10,7 +10,6 @@
 // obedece sin excepciones: un ajuste que describe al aparato jamás llega aquí.
 library;
 
-import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../domain/synced_settings.dart';
 
