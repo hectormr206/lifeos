@@ -51,8 +51,18 @@ APK="$MOBILE_DIR/build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$APK" ]] || { echo "ERROR: no se generó $APK" >&2; exit 1; }
 
 # ── Metadata (versionCode/name from the APK itself via aapt) ─────────────────
-AAPT="$(fd -t f '^aapt$' "$HOME/Android/Sdk/build-tools" 2>/dev/null | sort -V | tail -1)"
-[[ -x "$AAPT" ]] || { echo "ERROR: no encontré aapt en Android SDK build-tools" >&2; exit 1; }
+# El SDK no está en el mismo sitio en las dos máquinas: en el VPS cuelga de
+# $HOME, en el devbox de /opt/buildenv. Buscar sólo en $HOME hacía que aquí el
+# script muriera JUSTO después de compilar —el `2>/dev/null` se tragaba el
+# fallo y `set -e` cortaba en la propia asignación—, así que el APK se
+# construía entero y nunca se publicaba, sin una línea que lo explicara.
+ANDROID_SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$HOME/Android/Sdk}}"
+AAPT="$(fd -t f '^aapt$' "$ANDROID_SDK/build-tools" 2>/dev/null | sort -V | tail -1)"
+[[ -x "$AAPT" ]] || {
+  echo "ERROR: no encontré aapt en $ANDROID_SDK/build-tools" >&2
+  echo "       Exporta ANDROID_SDK_ROOT si tu SDK vive en otro sitio." >&2
+  exit 1
+}
 BADGING="$("$AAPT" dump badging "$APK")"
 VC="$(echo "$BADGING" | rg -o "versionCode='([0-9]+)'" -r '$1' | head -1)"
 VN="$(echo "$BADGING" | rg -o "versionName='([^']+)'" -r '$1' | head -1)"
