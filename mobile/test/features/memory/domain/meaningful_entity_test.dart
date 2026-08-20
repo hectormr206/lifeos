@@ -37,6 +37,16 @@ void main() {
       // "esposa_nació" es una clave, no una cosa del mundo.
       expect(isMeaningfulEntity(name: 'esposa_nació', kind: 'event'), isFalse);
       expect(isMeaningfulEntity(name: 'fecha_boda', kind: 'thing'), isFalse);
+      // Visto en el Pixel con la primera versión del filtro: tres partes, y
+      // el patrón sólo cubría dos.
+      expect(
+        isMeaningfulEntity(name: 'esposa_nació_en', kind: 'event'),
+        isFalse,
+      );
+      expect(
+        isMeaningfulEntity(name: 'lugar_de_nacimiento_esposa', kind: 'place'),
+        isFalse,
+      );
     });
 
     test('un sustantivo suelto sin nada concreto', () {
@@ -58,6 +68,25 @@ void main() {
     test('una cadena vacía o de puntuación', () {
       expect(isMeaningfulEntity(name: '  ', kind: 'person'), isFalse);
       expect(isMeaningfulEntity(name: '—', kind: 'thing'), isFalse);
+    });
+  });
+
+  group('los hechos', () {
+    test('el nombre de una casilla no es un hecho', () {
+      expect(isMeaningfulFactLabel('esposa_nació_en'), isFalse);
+      expect(isMeaningfulFactLabel('fecha_boda'), isFalse);
+    });
+
+    test('un hecho de verdad se guarda entero', () {
+      expect(
+        isMeaningfulFactLabel('Su esposa nació en Cadereyta de Montes'),
+        isTrue,
+      );
+    });
+
+    test('un hecho corto y raro también', () {
+      // Descartar lo corto por serlo perdería justo lo que hay que guardar.
+      expect(isMeaningfulFactLabel('diabetes tipo 2'), isTrue);
     });
   });
 

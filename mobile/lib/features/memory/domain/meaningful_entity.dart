@@ -52,7 +52,11 @@ const Set<String> _bonds = {
 /// Tipos donde la minúscula es lo normal y no significa vaguedad.
 const Set<String> _lowercaseKinds = {'condition', 'medication', 'thing', 'product'};
 
-final RegExp _fieldName = RegExp(r'^[\wÀ-ɏ]+_[\wÀ-ɏ]+$');
+/// Cualquier nombre con guion bajo dentro es una clave, no una cosa del
+/// mundo. Nadie escribe "esposa_nació_en" hablando. El patrón anterior exigía
+/// exactamente dos partes y ese nodo, con tres, seguía colándose — visto en el
+/// Pixel el 2026-08-20.
+final RegExp _fieldName = RegExp(r'^[\wÀ-ɏ]+(_[\wÀ-ɏ]+)+$');
 final RegExp _hasProperNoun = RegExp(r'\b[A-ZÁÉÍÓÚÑ][\wáéíóúñ]{2,}');
 final RegExp _hasNumberOrYear = RegExp(r'\d');
 
@@ -97,4 +101,18 @@ bool isMeaningfulEntity({required String name, required String kind}) {
   // Para personas, lugares y organizaciones basta un nombre propio: "Querétaro"
   // señala un sitio concreto aunque sea una sola palabra.
   return _hasProperNoun.hasMatch(trimmed) || _hasNumberOrYear.hasMatch(trimmed);
+}
+
+/// Un HECHO tiene que poder leerse. "esposa_nació_en" no es un hecho: es el
+/// nombre de una casilla que el modelo devolvió como si fuera uno, y en el
+/// Cerebro aparece como un nodo al que nadie puede volver.
+///
+/// Se mira sólo la forma, nunca el contenido: un hecho corto y raro puede ser
+/// perfectamente válido ("diabetes tipo 2"), y descartarlo por serlo perdería
+/// justo lo que hay que guardar.
+bool isMeaningfulFactLabel(String label) {
+  final trimmed = label.trim();
+  if (trimmed.isEmpty) return false;
+  if (_fieldName.hasMatch(trimmed)) return false;
+  return true;
 }

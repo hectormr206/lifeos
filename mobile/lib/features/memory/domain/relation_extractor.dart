@@ -256,6 +256,10 @@ class RelationExtractor {
     for (final f in extraction.facts) {
       // Never re-log a pure vital the deterministic health path already owns.
       if (isLoggedVital(f.label)) continue;
+      // Ni guardar el nombre de una casilla como si fuera un hecho:
+      // "esposa_nació_en" no se puede leer y en el Cerebro queda como un nodo
+      // al que nadie puede volver.
+      if (!isMeaningfulFactLabel(f.label)) continue;
       try {
         await writer.writeFact(
           domain: f.domain,
