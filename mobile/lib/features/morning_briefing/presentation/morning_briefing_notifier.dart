@@ -5,6 +5,9 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../../core/clock/clock.dart';
+import '../../../core/graph/graph_providers.dart';
+import '../../settings/domain/settings_bridge.dart';
+import '../../settings/data/synced_settings_store.dart';
 import '../domain/briefing_source.dart';
 import '../../../core/timezone/timezone_providers.dart';
 import '../../../l10n/locale_providers.dart';
@@ -313,6 +316,25 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
       await ref.read(morningBriefingPreferencesProvider).saveSchedule(schedule);
     } catch (_) {
       // Best-effort persistence; in-memory state still reflects the choice.
+    }
+    // Y al grafo, que es lo que VIAJA: "quiero el boletín a las 7" es cierto
+    // en todos los aparatos del usuario, y repetirlo en cada uno es la clase
+    // de trabajo que hace que la gente deje de configurar nada.
+    //
+    // Sin bloquear y sólo si el grafo YA está abierto: esperar a que abra
+    // dejaría el ajuste local sin guardar cuando el almacén tarda, y en un
+    // test sin store colgaría el guardado entero. El próximo cambio, o el
+    // próximo arranque, lo vuelve a intentar.
+    final store = ref.read(localGraphStoreProvider).value;
+    if (store != null) {
+      unawaited(SyncedSettingsStore(store).put(
+        'briefing.time',
+        encodeScheduleSetting(
+          enabled: schedule.enabled,
+          hour: schedule.hour,
+          minute: schedule.minute,
+        ),
+      ));
     }
     await _armTriggers();
   }

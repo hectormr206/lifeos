@@ -66,6 +66,8 @@ import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
 import 'package:lifeos/features/memory/data/birthday_notifications.dart';
 import 'package:lifeos/features/memory/data/birthday_scheduling.dart';
+import 'package:lifeos/features/settings/data/settings_sync.dart';
+import 'package:lifeos/features/settings/data/synced_settings_store.dart';
 import 'package:lifeos/features/sync/data/sync_after_pass.dart';
 import 'package:lifeos/features/sync/data/sync_auto_runner.dart';
 import 'package:lifeos/features/sync/data/sync_pass.dart';
@@ -383,11 +385,27 @@ class _LifeOSAppState extends ConsumerState<LifeOSApp> with WidgetsBindingObserv
           // Birthdays too: a person added on the laptop has to ring here
           // without anyone opening the Relaciones screen. Same trigger, same
           // reason — the maths was right all along and never reached anyone.
+          final store = await ref.read(localGraphStoreProvider.future);
           await scheduleBirthdayNudges(
-            store: await ref.read(localGraphStoreProvider.future),
+            store: store,
             notifications: BirthdayNotifications(),
             now: DateTime.now(),
           );
+          // Y los AJUSTES que llegaron de otro aparato. Alguien que cambió la
+          // hora del boletín en la laptop no debería tener que abrir nada en
+          // el teléfono para que valga.
+          final applied = await applySyncedBriefingSchedule(
+            preferences: ref.read(morningBriefingPreferencesProvider),
+            synced: SyncedSettingsStore(store),
+          );
+          // Sólo cuando de verdad cambió: rearmar en cada pase ocioso es como
+          // una notificación deja de llegar en Android. Se invalida el
+          // notifier en vez de reprogramar aquí — la lógica de cuándo toca
+          // (WorkManager, recordatorio y temporizador en app) ya vive ahí, y
+          // duplicarla sería tener dos versiones que se desincronizan.
+          if (applied != null && mounted) {
+            ref.invalidate(morningBriefingNotifierProvider);
+          }
         });
         if (!mounted) return;
         ref.invalidate(syncStatusProvider);
