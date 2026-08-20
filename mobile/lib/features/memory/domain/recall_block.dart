@@ -13,6 +13,8 @@
 /// `build_recall_block` returns "" on any error.
 library;
 
+import 'package:timezone/timezone.dart' as tz;
+
 import 'query_date_range.dart';
 import 'subject.dart';
 
@@ -97,11 +99,12 @@ String _withTime(String label, DateTime at) {
   return '$label ($hh:$mm)';
 }
 
+/// Expects an ALREADY-ZONED value: the caller converts once, so a stray
+/// `toLocal()` here cannot quietly undo a configured zone.
 String _dateKey(DateTime d) {
-  final local = d.toLocal();
-  final y = local.year.toString().padLeft(4, '0');
-  final m = local.month.toString().padLeft(2, '0');
-  final day = local.day.toString().padLeft(2, '0');
+  final y = d.year.toString().padLeft(4, '0');
+  final m = d.month.toString().padLeft(2, '0');
+  final day = d.day.toString().padLeft(2, '0');
   return '$y-$m-$day';
 }
 
@@ -229,6 +232,7 @@ String buildRecallBlock(
   int maxTotalFacts = 12,
   String subject = 'auto',
   DateTime? now,
+  tz.Location? location,
 }) {
   try {
     return _build(
@@ -240,6 +244,7 @@ String buildRecallBlock(
       maxTotalFacts: maxTotalFacts,
       subject: subject,
       now: now ?? DateTime.now(),
+      location: location,
     );
   } catch (_) {
     return '';
@@ -255,8 +260,16 @@ String _build(
   required int maxTotalFacts,
   required String subject,
   required DateTime now,
+  tz.Location? location,
 }) {
   final want = resolveQuerySubject(query, subject);
+
+  // The graph stores instants in UTC. Everything a PERSON reads has to be in
+  // their own zone — the configured one, not just the device's, because
+  // Ajustes → Zona horaria exists so someone who travels can pin theirs, and a
+  // record that shifts when you land is not a record.
+  DateTime inZone(DateTime at) =>
+      location == null ? at.toLocal() : tz.TZDateTime.from(at, location);
 
   // WHEN the question is about, when it says. Null means it named no time and
   // nothing is filtered — inventing a window would hide real entries behind an
@@ -281,10 +294,10 @@ String _build(
 
     final occurredAt = fact.occurredAt;
     if (occurredAt != null) {
-      final key = _dateKey(occurredAt);
+      final key = _dateKey(inZone(occurredAt));
       final bucket = dayFacts.putIfAbsent(key, () => []);
       if (!bucket.any((e) => e.value == label)) {
-        bucket.add(MapEntry(occurredAt, label));
+        bucket.add(MapEntry(inZone(occurredAt), label));
       }
       continue;
     }
@@ -306,7 +319,7 @@ String _build(
   final header = en
       ? 'RELEVANT MEMORY (use only if it answers the question):'
       : 'MEMORIA RELEVANTE (usa solo si responde la pregunta):';
-  final todayKey = _dateKey(now);
+  final todayKey = _dateKey(inZone(now));
 
   final lines = <String>[header];
   var totalEmitted = 0;

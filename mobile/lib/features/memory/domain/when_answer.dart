@@ -20,6 +20,8 @@
 // beats a confident hour about something that was never written down.
 library;
 
+import 'package:timezone/timezone.dart' as tz;
+
 import 'subject.dart' show foldAccents;
 
 /// One remembered thing and when it happened.
@@ -47,6 +49,7 @@ String? answerAboutTime({
   required String question,
   required List<TimedFact> facts,
   required String languageCode,
+  tz.Location? location,
 }) {
   if (!asksAboutTime(question)) return null;
 
@@ -56,11 +59,19 @@ String? answerAboutTime({
       .toSet();
   if (asked.isEmpty) return null;
 
+  DateTime zoned(DateTime t) =>
+      location == null ? t.toLocal() : tz.TZDateTime.from(t, location);
+
   final matches = <TimedFact>[];
   for (final fact in facts) {
     // Midnight means date-only — a birthday or an anniversary. Answering
     // "a las 00:00" would be inventing a precision nobody entered.
-    if (fact.at.hour == 0 && fact.at.minute == 0) continue;
+    //
+    // Checked in the USER'S zone, not in UTC: a date-only entry is stored at
+    // local midnight, which is 06:00 UTC in Mexico. Testing the raw value
+    // would let it through as if someone had entered a time.
+    final local = zoned(fact.at);
+    if (local.hour == 0 && local.minute == 0) continue;
     final words = foldAccents(fact.label.toLowerCase())
         .split(RegExp(r'[^\p{L}\p{N}]+', unicode: true))
         .toSet();
@@ -77,8 +88,14 @@ String? answerAboutTime({
 
   matches.sort((a, b) => a.at.compareTo(b.at));
   final en = languageCode == 'en';
-  String at(DateTime t) =>
-      '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+  // The graph stores UTC. A person reads their OWN zone — the configured one,
+  // not just the device's. Printing the raw hour is what reported 15:16 for
+  // something logged at 09:16 in Mexico City.
+  String at(DateTime t) {
+    final local = location == null ? t.toLocal() : tz.TZDateTime.from(t, location);
+    return '${local.hour.toString().padLeft(2, '0')}:'
+        '${local.minute.toString().padLeft(2, '0')}';
+  }
 
   // Listed, never merged: merging is precisely how 09:16 and 15:37 became
   // "15:16".

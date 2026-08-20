@@ -25,6 +25,8 @@ library;
 
 import 'dart:async';
 
+import 'package:timezone/timezone.dart' as tz;
+
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../../domains/data/local_domain_repository.dart';
@@ -158,6 +160,7 @@ class ChatContextBuilder {
     required this.languageCode,
     required this.now,
     this.wallClockNow,
+    this.zoneLocation,
     this.router = const DomainRouter(),
     this.segmenter = const UtteranceSegmenter(),
     this.recallK = 8,
@@ -176,6 +179,14 @@ class ChatContextBuilder {
   /// we store, and it must stay device-local/UTC-consistent, while clock math
   /// needs the user's wall-clock HOUR. Null → falls back to [now].
   final DateTime Function()? wallClockNow;
+
+  /// The zone the user reads in — the configured one, not just the device's.
+  ///
+  /// The graph stores instants in UTC, so every hour shown to a person has to
+  /// be converted. Printing the raw value reported 15:16 for a weight logged
+  /// at 09:16 in Mexico City: the right instant in the wrong zone, which for
+  /// someone reading it is simply the wrong time.
+  final tz.Location? Function()? zoneLocation;
 
   final DomainRouter router;
 
@@ -257,7 +268,8 @@ class ChatContextBuilder {
         memoryBlock = composeMemoryBlock(
           relationships: bonds,
           factsBlock: [
-            buildRecallBlock(message, facts, en: lang == 'en', now: at),
+            buildRecallBlock(message, facts,
+                en: lang == 'en', now: at, location: zoneLocation?.call()),
             unknownLine,
           ].where((s) => s.trim().isNotEmpty).join('\n\n'),
           en: lang == 'en',
@@ -818,6 +830,7 @@ class ChatContextBuilder {
         question: question,
         facts: facts,
         languageCode: languageCode(),
+        location: zoneLocation?.call(),
       );
     } catch (_) {
       return null;

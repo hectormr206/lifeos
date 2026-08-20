@@ -87,5 +87,14 @@ final chatContextBuilderProvider = Provider<ChatContextBuilder>((ref) {
       }
       return location == null ? base : tz.TZDateTime.from(base, location);
     },
+    // The same read, for rendering hours the user reads. Same rationale: sync
+    // off the resolved value, device-local until it lands.
+    zoneLocation: () {
+      try {
+        return ref.read(effectiveTimezoneProvider).asData?.value.location;
+      } catch (_) {
+        return null;
+      }
+    },
   );
 });

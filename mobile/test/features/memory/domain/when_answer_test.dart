@@ -16,6 +16,8 @@
 // when it was 09:00 is the kind of thing someone acts on.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/memory/domain/when_answer.dart';
+import 'package:timezone/data/latest.dart' as tzdata;
+import 'package:timezone/timezone.dart' as tz;
 
 void main() {
   group('recognising the question', () {
@@ -118,4 +120,52 @@ void main() {
       expect(answer, contains('09:16'));
     });
   });
+
+  group('the hour is the USER\'s hour', () {
+    // Same bug as the recall block: the graph stores UTC, and printing the raw
+    // hour reported 15:16 for something logged at 09:16 in Mexico City. Right
+    // instant, wrong zone — which for a person reading it is just the wrong
+    // time.
+    setUpAll(tzdata.initializeTimeZones);
+
+    test('a UTC instant is answered in the configured zone', () {
+      final answer = answerAboutTime(
+        question: '¿a qué hora me pesé?',
+        // 09:16 in Mexico City.
+        facts: [(label: 'peso 82 kg', at: DateTime.utc(2026, 8, 18, 15, 16))],
+        languageCode: 'es',
+        location: tz.getLocation('America/Mexico_City'),
+      );
+
+      expect(answer, contains('09:16'));
+      expect(answer, isNot(contains('15:16')));
+    });
+
+    test('with no zone it falls back to the device, not to UTC', () {
+      final answer = answerAboutTime(
+        question: '¿a qué hora me pesé?',
+        facts: [(label: 'peso 82 kg', at: DateTime.utc(2026, 8, 18, 15, 16))],
+        languageCode: 'es',
+      );
+
+      expect(answer, isNotNull);
+    });
+  });
+
+  test('a date-only entry is still skipped once the zone is applied', () {
+    // Stored at LOCAL midnight, which is 06:00 UTC in Mexico. Checking the raw
+    // value would let it through as if someone had typed a time.
+    tzdata.initializeTimeZones();
+
+    expect(
+      answerAboutTime(
+        question: '¿a qué hora fue el aniversario?',
+        facts: [(label: 'aniversario', at: DateTime.utc(2026, 8, 18, 6))],
+        languageCode: 'es',
+        location: tz.getLocation('America/Mexico_City'),
+      ),
+      isNull,
+    );
+  });
 }
+
