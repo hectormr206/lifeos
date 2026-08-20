@@ -10,6 +10,7 @@ import '../../memory/domain/person_directory.dart';
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_aggregator.dart';
 import '../domain/cross_domain_patterns.dart';
+import '../domain/digest_nudges.dart';
 import '../domain/digest_insights.dart';
 
 /// FIXED, internal narration instruction that shapes the on-device model's
@@ -91,6 +92,10 @@ class DailyDigestService {
         // easiest to over-read, so they arrive after the plain facts rather
         // than leading with them.
         ...crossDomainPatterns(days, today: now),
+        // And the one offer, last: something the user themselves used to do
+        // and stopped. Never an instruction — see digest_nudges.dart for why
+        // "qué tomar" is not a sentence this app is allowed to write.
+        for (final nudge in digestNudges(days, today: now)) nudge.message,
       ];
     } catch (_) {
       return const [];

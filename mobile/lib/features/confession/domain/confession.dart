@@ -128,3 +128,25 @@ class ConfessionSession {
   @override
   String toString() => 'ConfessionSession(empty: ${!hasContent})';
 }
+
+/// What is said when the model cannot answer.
+///
+/// The hardest requirement in this feature: "que siempre, sin importar lo que
+/// le haya confesado, el texto sea satisfactorio para el usuario".
+///
+/// Someone has just said the thing they do not say out loud. If the model is
+/// missing or the phone is cold, the app still has to close the moment
+/// properly — "no pude responderte" after a confession is a door shutting in
+/// someone's face.
+///
+/// So it never reads as an error, and it never pretends to have understood
+/// something specific: an invented reflection would be worse than none,
+/// because the person can tell, and then the whole space is a fake. It names
+/// the only thing that is true no matter what was said — that saying it took
+/// something, and that it is out now.
+String desahogoFallbackReply({required String languageCode}) =>
+    languageCode == 'en'
+        ? 'You said it, and that took something. Whatever it was, it is out of '
+            'you now and it stays here. Take a breath before you go back.'
+        : 'Ya lo dijiste, y decirlo cuesta. Sea lo que sea, ya salió de ti y '
+            'aquí se queda. Respira antes de volver a lo demás.';

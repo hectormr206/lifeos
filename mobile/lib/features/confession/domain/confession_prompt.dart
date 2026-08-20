@@ -55,3 +55,35 @@ String? confessionSafetyNote(String text, {required String languageCode}) {
             'al número de emergencias de tu país o a una línea de crisis, o '
             'díselo hoy mismo a alguien en quien confíes — no mañana.';
 }
+
+/// How much of a confession reaches the model.
+///
+/// The engine holds 4096 tokens — in Spanish, roughly twelve thousand
+/// characters, and the guidance above already spends some of that. Ten
+/// thousand leaves the model room to answer.
+///
+/// Someone speaking says about seven hundred characters a minute, so this is
+/// around fifteen minutes of talking. The RECORDING is never cut: stopping
+/// someone mid-sentence is the opposite of what this space is for. Only what
+/// reaches the model is trimmed.
+const int kDesahogoMaxChars = 10000;
+
+/// True when [text] had to be trimmed to fit.
+///
+/// The caller must SAY so. A person reading a reply about the last few minutes
+/// would otherwise take it as a verdict on the whole thing.
+bool wasTrimmedForDesahogo(String text) => text.length > kDesahogoMaxChars;
+
+/// The part of a long confession the model reads.
+///
+/// The END, not the beginning: people open with context and close with the
+/// feeling. Keeping the opening would answer the setup and miss what they
+/// actually came to say. Cut at a sentence boundary where there is one, so the
+/// model never starts mid-word.
+String trimForDesahogo(String text) {
+  if (!wasTrimmedForDesahogo(text)) return text;
+  final tail = text.substring(text.length - kDesahogoMaxChars);
+  final boundary = tail.indexOf(RegExp(r'[.!?…]\s+'));
+  if (boundary < 0 || boundary > 400) return tail.trimLeft();
+  return tail.substring(boundary + 1).trimLeft();
+}

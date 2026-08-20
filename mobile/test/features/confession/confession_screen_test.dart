@@ -28,17 +28,13 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pump();
 
-    expect(find.textContaining('no se guarda'), findsWidgets);
-    expect(find.textContaining('no perdona'), findsWidgets);
+    expect(find.textContaining('Nada de esto se guarda'), findsWidgets);
   });
 
-  testWidgets('it does not pretend to be a religious confession',
-      (tester) async {
-    await tester.pumpWidget(_app());
-    await tester.pump();
-
-    expect(find.textContaining('No es una confesión religiosa'), findsOneWidget);
-  });
+  // What this screen must NOT do is now covered from the other direction, in
+  // desahogo_copy_test.dart: it does not define itself by negation at all.
+  // The ban on absolving anyone lives in the model's guidance, where it
+  // belongs — see confession_test.dart.
 
   testWidgets('there is a place to write and a way to say it', (tester) async {
     await tester.pumpWidget(_app());

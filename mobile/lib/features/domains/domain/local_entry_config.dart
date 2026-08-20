@@ -131,10 +131,34 @@ String _interactionLabel(Map<String, Object?> v) => _withNote('Interacción con 
 /// side it was — "Di: le lavé el coche" / "Valoró: que saliéramos solos".
 /// The verb matters: one is what he DID, the other what she SAID she valued,
 /// and the whole observation depends on not confusing the two.
+/// "Aniversario · Ana" — the occasion first, because that is what the user is
+/// scanning the list for.
+String _specialDateLabel(Map<String, Object?> v) =>
+    _withNote('${_s(v['what'])} · ${_s(v['person'])}', v);
+
 String _coupleActLabel(Map<String, Object?> v) {
   final side = _s(v['side']) == 'valued' ? 'Valoró' : 'Di';
   return _withNote('$side: ${_s(v['what'])}', v);
 }
+
+/// The circles a person belongs to.
+///
+/// A pick-list, not free text: typed, it becomes "trabajo", "Trabajo" and
+/// "laboral" for one idea, and then nothing groups — and grouping is the whole
+/// reason to record it ("¿quiénes son mis compañeros de trabajo?").
+const List<String> _personCircles = [
+  'family', 'partner', 'friend', 'acquaintance', 'work', 'neighbour', 'other',
+];
+
+const Map<String, String> _personCircleLabels = {
+  'family': 'Familia',
+  'partner': 'Pareja',
+  'friend': 'Amigos',
+  'acquaintance': 'Conocidos',
+  'work': 'Trabajo',
+  'neighbour': 'Vecinos',
+  'other': 'Otro',
+};
 
 const Map<String, String> _coupleActSideLabels = {
   'gave': 'Lo que yo di',
@@ -352,6 +376,16 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
         DomainFieldSpec(key: 'name', label: 'Nombre', type: DomainFieldType.text, required: true),
         DomainFieldSpec(
             key: 'relation', label: 'Relación', type: DomainFieldType.text, unitHint: 'ej. hija de Juan'),
+        // Optional on purpose: forcing a category on someone you just met
+        // turns "guardar a alguien" into a form, and the whole point is that
+        // it takes one sentence.
+        DomainFieldSpec(
+          key: 'circle',
+          label: 'Círculo',
+          type: DomainFieldType.enumType,
+          enumOptions: _personCircles,
+          enumLabels: _personCircleLabels,
+        ),
         DomainFieldSpec(
             key: 'birth_date', label: 'Fecha de nacimiento', type: DomainFieldType.date, dateOnly: true),
         DomainFieldSpec(
@@ -362,6 +396,35 @@ const Map<String, List<LocalEntryType>> localEntryTypesByDomain = {
             max: 3650,
             unitHint: 'días'),
         tsField,
+        _noteField,
+      ],
+    ),
+    // Anniversaries, the day you met, a saint's day — the dates people are
+    // mortified to forget and that had nowhere to live: the only date a person
+    // had was their birthday.
+    LocalEntryType(
+      type: 'special_date',
+      label: 'Fecha especial',
+      labelBuilder: _specialDateLabel,
+      fields: [
+        DomainFieldSpec(
+            key: 'person', label: 'Persona', type: DomainFieldType.text, required: true),
+        DomainFieldSpec(
+            key: 'what',
+            label: '¿Qué se celebra?',
+            type: DomainFieldType.text,
+            required: true,
+            unitHint: 'ej. aniversario, el día que nos conocimos'),
+        // Keyed `ts` like every other entry — that is the field the registry,
+        // the day grouping and the digest all read. A day, not a timestamp:
+        // an anniversary has no 14:32 about it, and asking for one is how a
+        // simple entry becomes a chore.
+        DomainFieldSpec(
+            key: 'ts',
+            label: 'Fecha',
+            type: DomainFieldType.date,
+            required: true,
+            dateOnly: true),
         _noteField,
       ],
     ),

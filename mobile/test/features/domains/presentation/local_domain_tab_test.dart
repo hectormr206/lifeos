@@ -353,17 +353,25 @@ void main() {
       expect(find.textContaining('cumple'), findsOneWidget);
     });
 
-    testWidgets('nothing to say → no card at all, not an empty one', (tester) async {
+    testWidgets('nothing to say → no REMINDERS, only the invitation',
+        (tester) async {
       await repository.create('relationships', type('relationships', 'person'),
           {'name': 'Juan', 'ts': DateTime.now()});
 
       await tester.pumpWidget(host('relationships'));
       await tester.pumpAndSettle();
 
-      // Juan is on the list, but with no birthday and no cadence there is
-      // nothing to remind about — and silence must look like silence.
-      expect(find.textContaining('cumple'), findsNothing);
+      // This test used to assert an empty screen: silence had to look like
+      // silence. It still does for REMINDERS — Juan has no birthday and no
+      // cadence, so there is nothing to nudge about and nothing is claimed.
+      //
+      // What changed is that an empty Relaciones now explains what registering
+      // gets you. The old behaviour was silence so complete that the feature
+      // was undiscoverable: "no sé cómo usarlo o dónde se ve, estoy en blanco
+      // en esto". An invitation is not a false reminder.
+      expect(find.textContaining('Escríbele a Juan'), findsNothing);
       expect(find.textContaining('Hace tiempo'), findsNothing);
+      expect(find.textContaining('Personas y pareja'), findsOneWidget);
     });
 
     testWidgets('the reminders survive changing the period filter', (tester) async {
@@ -431,4 +439,39 @@ void main() {
 
   });
 
+  group('the relationships tab explains itself when it is empty', () {
+    // Reported: "no sé cómo usarlo o dónde se ve, o si me van a llegar
+    // notificaciones o qué show, estoy en blanco en esto".
+    //
+    // The couple/love-languages panel only appeared once there was something
+    // to show, so with an empty graph the whole card collapsed and there was
+    // no trace anywhere that the feature existed. A feature you cannot find is
+    // a feature you do not have.
+
+    testWidgets('an empty Relaciones invites you to start', (tester) async {
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Personas y pareja'), findsOneWidget);
+    });
+
+    testWidgets('it says what registering gets you, not what it is',
+        (tester) async {
+      await tester.pumpWidget(host('relationships'));
+      await tester.pumpAndSettle();
+
+      // Concrete outcomes: birthdays that reach you, and what your partner
+      // actually values. Not a description of a feature.
+      expect(find.textContaining('cumpleaños'), findsWidgets);
+    });
+
+    testWidgets('other domains get no such card', (tester) async {
+      // It belongs to Relaciones. Salud has its own empty state.
+      await tester.pumpWidget(host('health'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('Personas y pareja'), findsNothing);
+    });
+  });
 }
+

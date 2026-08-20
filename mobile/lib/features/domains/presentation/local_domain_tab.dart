@@ -157,7 +157,14 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
           if (widget.descriptor.key == 'finance' && state.summary != null)
             _FinanceSummaryTiles(summary: state.summary!),
           if (state.reminders != null && !state.reminders!.isEmpty)
-            _RelationshipReminders(reminders: state.reminders!),
+            _RelationshipReminders(reminders: state.reminders!)
+          // Nothing to remind about YET, but this is the domain where the
+          // whole point is invisible until you start: the card used to
+          // collapse and take with it the only trace that any of it existed
+          // ("estoy en blanco en esto"). A feature you cannot find is a
+          // feature you do not have.
+          else if (widget.descriptor.key == 'relationships')
+            const _RelationshipsInvitation(),
           Padding(
             padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
             child: TextField(
@@ -442,6 +449,8 @@ class _RelationshipReminders extends StatelessWidget {
     ];
 
     if (reminders.due.isEmpty && unclaimed.isEmpty && reminders.loveLanguages == null) {
+      // The caller decides what to show instead — see the `else if` in
+      // build(). Two places deciding the same thing is how they drift apart.
       return const SizedBox.shrink();
     }
 
@@ -522,6 +531,56 @@ class _RelationshipReminders extends StatelessWidget {
                 ),
               ),
             ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+
+/// Shown in Relaciones before anything has been registered.
+class _RelationshipsInvitation extends StatelessWidget {
+  const _RelationshipsInvitation();
+
+  @override
+  Widget build(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.favorite_border,
+                    size: 18, color: LifeOSColors.teal),
+                const SizedBox(width: 10),
+                Text('Personas y pareja', style: text.titleSmall),
+              ],
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Anota a tu gente con su fecha de nacimiento y te avisaré de sus '
+              'cumpleaños unos días antes, en todos tus dispositivos. Si '
+              'además apuntas cada cuánto quieres escribirle a alguien, te lo '
+              'recuerdo.',
+              style: text.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Y con "Pareja" puedes ir anotando lo que hiciste por ella y lo '
+              'que ella te dijo que le gustó. Con el tiempo se nota qué es lo '
+              'que de verdad valora — que casi nunca es lo que uno supone.',
+              style: text.bodySmall,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Empieza con el botón de abajo, o cuéntaselo a Axi en el chat.',
+              style: text.bodySmall?.copyWith(color: Theme.of(context).hintColor),
+            ),
           ],
         ),
       ),
