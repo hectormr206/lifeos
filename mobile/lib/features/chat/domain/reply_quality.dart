@@ -49,12 +49,13 @@ bool isEchoReply({required String userText, required String reply}) {
   // reconocimientos genéricos.
   if (asked.length < 4 || answered.isEmpty) return false;
 
-  // Todo lo que dijo el usuario reaparece, y la respuesta no añade nada
-  // sustancial: eso es el eco. Se permite alguna palabra nueva ("listo",
-  // "anotado") porque el modelo suele adornar el eco con una.
+  // Prácticamente todo lo que dijo el usuario reaparece: eso es el eco, y da
+  // igual lo que venga pegado detrás. Medido en el Pixel: "…del 2008. ¿Qué más
+  // quieres saber?" colaba tres palabras nuevas y se escapaba de un umbral que
+  // miraba cuánto añadía. Lo que importa no es lo que añade, sino que le está
+  // devolviendo su propia frase.
   final reused = asked.where(answered.contains).length;
-  final novel = answered.where((w) => !asked.contains(w)).length;
-  return reused >= asked.length * 0.8 && novel <= 2;
+  return reused >= asked.length * 0.9;
 }
 
 /// Fórmulas de recepcionista: responden sin haber escuchado.

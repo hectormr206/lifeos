@@ -41,6 +41,21 @@ void main() {
       );
     });
 
+    test('repetirlo todo y añadir una coletilla sigue siendo eco', () {
+      // Medido en el Pixel el 2026-08-20 con la primera versión de este
+      // filtro: "Nos hicimos novios el 12 de mayo del 2008. ¿Qué más quieres
+      // saber?" — la frase entera devuelta, más cuatro palabras que no dicen
+      // nada. Colar tres palabras nuevas no convierte un eco en una respuesta.
+      expect(
+        isEchoReply(
+          userText: 'Nos hicimos novios el 12 de mayo del 2008',
+          reply: 'Nos hicimos novios el 12 de mayo del 2008. ¿Qué más quieres '
+              'saber?',
+        ),
+        isTrue,
+      );
+    });
+
     test('una respuesta que AÑADE algo no es eco', () {
       expect(
         isEchoReply(
