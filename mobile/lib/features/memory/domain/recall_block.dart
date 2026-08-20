@@ -13,6 +13,7 @@
 /// `build_recall_block` returns "" on any error.
 library;
 
+import 'query_date_range.dart';
 import 'subject.dart';
 
 const List<String> _monthsEs = <String>[
@@ -82,6 +83,18 @@ bool _subjectAllowed(RecallFact fact, String want) {
   // relationship fact, stored without a data.subject).
   if (fs != null) return normalizeSubject(fs) == normalizeSubject(want);
   return !_subjectDomains.contains(fact.domain);
+}
+
+/// "peso 82 kg (09:16)", or the label alone when no real time was recorded.
+///
+/// Midnight means DATE-ONLY here: a birthday or an anniversary is stored at
+/// 00:00, and printing that would invent a precision nobody entered — which
+/// the model would then repeat back as if it meant something.
+String _withTime(String label, DateTime at) {
+  if (at.hour == 0 && at.minute == 0) return label;
+  final hh = at.hour.toString().padLeft(2, '0');
+  final mm = at.minute.toString().padLeft(2, '0');
+  return '$label ($hh:$mm)';
 }
 
 String _dateKey(DateTime d) {
@@ -245,12 +258,24 @@ String _build(
 }) {
   final want = resolveQuerySubject(query, subject);
 
+  // WHEN the question is about, when it says. Null means it named no time and
+  // nothing is filtered — inventing a window would hide real entries behind an
+  // answer that still looks complete.
+  final window = parseQueryDateRange(query, now: now);
+
   // date -> list of (occurredAt, label), and a separate undated list.
   final dayFacts = <String, List<MapEntry<DateTime, String>>>{};
   final nodateFacts = <MapEntry<DateTime, String>>[];
 
   for (final fact in facts) {
     if (!_subjectAllowed(fact, want)) continue;
+    if (window != null) {
+      // Asked about a specific day, an undated fact cannot be shown to be
+      // from it — and answering "el jueves" with Wednesday's data is exactly
+      // how the model ends up presenting it as Thursday's.
+      final at = fact.occurredAt;
+      if (at == null || !window.contains(at)) continue;
+    }
     final label = fact.label.trim();
     if (label.isEmpty) continue;
 
@@ -292,7 +317,12 @@ String _build(
       ..sort((a, b) => b.key.compareTo(a.key)); // within-day recency desc
     final remaining = maxTotalFacts - totalEmitted;
     final cap = maxLabelsPerDay < remaining ? maxLabelsPerDay : remaining;
-    final dayLabels = raw.take(cap).map((e) => e.value).toList();
+    // The TIME goes with the label when there is one. The block used to group
+    // by day and throw the hour away, so the app could show "peso 82 kg ·
+    // 09:16" on screen while Axi, asked what time, had nothing. And two
+    // readings in one day are two different readings only if you can see when.
+    final dayLabels =
+        raw.take(cap).map((e) => _withTime(e.value, e.key)).toList();
 
     final year = int.parse(dateStr.substring(0, 4));
     final monthIdx = int.parse(dateStr.substring(5, 7));
