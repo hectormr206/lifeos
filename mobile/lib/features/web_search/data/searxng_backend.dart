@@ -30,6 +30,14 @@ class SearxngBackend implements WebSearchBackend {
   final SourceFetcher _fetcher;
   final String _baseUrl;
 
+  /// Where this backend points. Visible so a test can assert which instance
+  /// was chosen without reaching into the fetcher.
+  String get baseUrl => _baseUrl;
+
+  /// The key this backend will send, if any. Visible for the same reason: the
+  /// property that matters is that a stranger's instance NEVER receives ours.
+  String get accessKey => _accessKey;
+
   /// The key for a PRIVATE instance. Empty for a public one the user pointed
   /// at themselves, which must not receive a header it never asked for.
   ///

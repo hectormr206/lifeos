@@ -5,6 +5,7 @@ import '../../morning_briefing/data/dio_source_fetcher.dart';
 import '../../morning_briefing/domain/source_fetcher.dart';
 import '../data/ddg_search_service.dart';
 import '../data/searxng_backend.dart';
+import '../domain/bundled_search_instance.dart';
 import '../data/web_search_pipeline.dart';
 import '../domain/web_search_backend.dart';
 import '../domain/web_search_settings.dart';
@@ -18,7 +19,10 @@ final webSearchFetcherProvider = Provider<SourceFetcher>((ref) => DioSourceFetch
 /// Local-only persistence of the chosen search provider + SearXNG URL.
 /// Overridden with a fake in tests.
 final webSearchPreferencesProvider =
-    Provider<WebSearchPreferences>((ref) => SharedPrefsWebSearchPreferences());
+    Provider<WebSearchPreferences>((ref) => SharedPrefsWebSearchPreferences(
+          hasBundledInstance:
+              ref.watch(bundledSearchInstanceProvider).isConfigured,
+        ));
 
 /// The user's persisted web-search configuration ([WebSearchProvider] + the
 /// SearXNG base URL). Hydrates asynchronously from [webSearchPreferencesProvider]
@@ -83,7 +87,20 @@ final webSearchBackendProvider = Provider<WebSearchBackend>((ref) {
     case WebSearchProvider.duckduckgo:
       return DuckDuckGoBackend(fetcher: fetcher);
     case WebSearchProvider.searxng:
-      return SearxngBackend(fetcher: fetcher, baseUrl: settings.searxngBaseUrl);
+      // La URL del usuario gana siempre: quien montó su propio SearXNG mandó a
+      // la app a otro sitio a propósito. Sólo cuando no puso ninguna caemos en
+      // la instancia que viene compilada — y su llave viaja ÚNICAMENTE hacia
+      // ella, nunca hacia el servidor de un tercero.
+      final bundled = ref.watch(bundledSearchInstanceProvider);
+      final own = settings.searxngBaseUrl.trim();
+      if (own.isEmpty && bundled.isConfigured) {
+        return SearxngBackend(
+          fetcher: fetcher,
+          baseUrl: bundled.url,
+          accessKey: bundled.key,
+        );
+      }
+      return SearxngBackend(fetcher: fetcher, baseUrl: own);
     case WebSearchProvider.none:
       return const _DisabledSearchBackend();
   }
@@ -109,3 +126,11 @@ final webSearchPipelineProvider = Provider<WebSearchPipeline>((ref) {
     fetcher: fetcher,
   );
 });
+
+/// La instancia de SearXNG que la compilación dejó dentro de la app.
+///
+/// Un provider y no una constante suelta para que una prueba pueda decir "esta
+/// app se compiló con buscador" sin recompilar nada.
+final bundledSearchInstanceProvider = Provider<BundledSearchInstance>(
+  (ref) => BundledSearchInstance.fromBuild,
+);

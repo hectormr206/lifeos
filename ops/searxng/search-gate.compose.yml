@@ -1,0 +1,51 @@
+# El compose REAL con el que se desplegó lifeos-search-gate en Coolify.
+# La llave se reemplaza al desplegar; un checkout no lleva la de nadie dentro.
+# La red externa es la del SearXNG que ya existía — ver README.
+services:
+  search-gate:
+    image: 'nginx:alpine'
+    restart: unless-stopped
+    mem_limit: 64m
+    cpus: 0.25
+    configs:
+      - source: gate_conf
+        target: /etc/nginx/conf.d/default.conf
+    networks:
+      - coolify
+      - searxng_net
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=coolify
+      - traefik.http.routers.lifeos-search.entrypoints=https
+      - traefik.http.routers.lifeos-search.rule=Host(`search.lifeos.hectormr.com`)
+      - traefik.http.routers.lifeos-search.tls=true
+      - traefik.http.routers.lifeos-search.tls.certresolver=cloudflare
+      - traefik.http.routers.lifeos-search.middlewares=lifeos-search-rl
+      - traefik.http.middlewares.lifeos-search-rl.ratelimit.average=10
+      - traefik.http.middlewares.lifeos-search-rl.ratelimit.burst=20
+      - traefik.http.services.lifeos-search.loadbalancer.server.port=80
+configs:
+  gate_conf:
+    content: |
+      server {
+          listen 80;
+          server_name _;
+          server_tokens off;
+          add_header Cache-Control "no-store" always;
+          location = /search {
+              if ($$http_x_lifeos_search_key != "REEMPLAZAR-CON-LA-CLAVE") { return 403; }
+              if ($$arg_format != "json") { return 403; }
+              proxy_pass http://searxng:8080/search;
+              proxy_set_header Host $$host;
+              proxy_set_header X-LifeOS-Search-Key "";
+              proxy_read_timeout 20s;
+          }
+          location = /health { default_type text/plain; return 200 "ok\n"; }
+          location / { return 404; }
+      }
+networks:
+  coolify:
+    external: true
+  searxng_net:
+    external: true
+    name: kc0oc4oc4gc8k44kswsg0w0s

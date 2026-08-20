@@ -563,10 +563,10 @@ class _RelationshipsInvitation extends StatelessWidget {
             ),
             const SizedBox(height: 8),
             Text(
-              'Anota a tu gente con su fecha de nacimiento y te avisaré de sus '
-              'cumpleaños unos días antes, en todos tus dispositivos. Si '
-              'además apuntas cada cuánto quieres escribirle a alguien, te lo '
-              'recuerdo.',
+              'Aquí viven las personas que te importan. Guarda su fecha de '
+              'nacimiento y te aviso unos días antes del cumpleaños, en todos '
+              'tus dispositivos. Y si me dices cada cuánto te gustaría '
+              'buscarlas, te lo recuerdo — sin que tengas que acordarte tú.',
               style: text.bodySmall,
             ),
             const SizedBox(height: 8),

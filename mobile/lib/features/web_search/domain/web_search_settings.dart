@@ -63,7 +63,19 @@ abstract class WebSearchPreferences {
 
 /// [WebSearchPreferences] backed by `shared_preferences`.
 class SharedPrefsWebSearchPreferences implements WebSearchPreferences {
-  SharedPrefsWebSearchPreferences({SharedPreferences? prefs}) : _prefs = prefs; // ignore: prefer_initializing_formals
+  SharedPrefsWebSearchPreferences({
+    SharedPreferences? prefs,
+    this.hasBundledInstance = false,
+  }) : _prefs = prefs; // ignore: prefer_initializing_formals
+
+  /// Si esta compilación trae un buscador propio dentro.
+  ///
+  /// Cambia UNA sola cosa: a qué apunta quien nunca eligió. El valor viejo era
+  /// DuckDuckGo, que es justo el que responde CAPTCHA desde un servidor y, con
+  /// el tiempo, a una casa que pregunta seguido. A quien sí eligió no se le
+  /// toca nada: cambiarle el buscador es decidir por él a dónde van sus
+  /// búsquedas.
+  final bool hasBundledInstance;
 
   static const String providerKey = 'web_search_provider';
   static const String searxngUrlKey = 'web_search_searxng_url';
@@ -76,7 +88,7 @@ class SharedPrefsWebSearchPreferences implements WebSearchPreferences {
   Future<WebSearchSettings> load() async {
     final prefs = await _instance;
     return WebSearchSettings(
-      provider: _decode(prefs.getString(providerKey)),
+      provider: _decode(prefs.getString(providerKey), hasBundledInstance),
       searxngBaseUrl: prefs.getString(searxngUrlKey) ?? '',
     );
   }
@@ -88,11 +100,15 @@ class SharedPrefsWebSearchPreferences implements WebSearchPreferences {
     await prefs.setString(searxngUrlKey, settings.searxngBaseUrl);
   }
 
-  static WebSearchProvider _decode(String? raw) {
+  static WebSearchProvider _decode(String? raw, [bool hasBundled = false]) {
     for (final value in WebSearchProvider.values) {
       if (value.name == raw) return value;
     }
-    // Unknown / never-set → the zero-config default.
-    return WebSearchProvider.duckduckgo;
+    // Nunca elegido, o un valor de una versión que ya no existe. Si la app
+    // trae buscador propio, ese es el punto de partida sensato; si no, el de
+    // siempre.
+    return hasBundled
+        ? WebSearchProvider.searxng
+        : WebSearchProvider.duckduckgo;
   }
 }

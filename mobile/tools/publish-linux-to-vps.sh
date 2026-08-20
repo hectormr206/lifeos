@@ -96,7 +96,9 @@ flutter build linux --release \
   --dart-define=TTS_MODEL_BASE_URL="${TTS_MODEL_BASE_URL:-$UPDATE_BASE_URL/tts}" \
   --dart-define=EMBED_MODEL_BASE_URL="${EMBED_MODEL_BASE_URL:-$UPDATE_BASE_URL/embed}" \
   --dart-define=BRAIN_MODEL_BASE_URL="${BRAIN_MODEL_BASE_URL:-$UPDATE_BASE_URL/model}" \
-  --dart-define=SYNC_RELAY_URL="${SYNC_RELAY_URL:-}"
+  --dart-define=SYNC_RELAY_URL="${SYNC_RELAY_URL:-}" \
+  --dart-define=LIFEOS_SEARCH_BASE_URL="${LIFEOS_SEARCH_BASE_URL:-}" \
+  --dart-define=LIFEOS_SEARCH_KEY="${LIFEOS_SEARCH_KEY:-}"
 
 BUNDLE="$MOBILE_DIR/build/linux/x64/release/bundle"
 [[ "$ARCH" == "arm64" ]] && BUNDLE="$MOBILE_DIR/build/linux/arm64/release/bundle"

@@ -75,3 +75,49 @@ un cambio tenga historia y se pueda leer sin entrar al VPS.
 No guarda consultas. SearXNG no lleva registro por defecto y aquí se deja así:
 lo que alguien busca es tan suyo como lo que le cuenta a Axi, y este servidor
 no se entera de ninguna de las dos cosas.
+
+## Cómo quedó desplegado de verdad (2026-08-20)
+
+El VPS **ya tenía** un SearXNG corriendo desde hacía tres semanas, en el
+proyecto `personal` de Coolify, sin etiquetas de Traefik — es decir, ya cumplía
+la parte importante del guardarraíl: no existía ruta hacia él desde internet.
+Levantar un segundo habría duplicado 512 MB de RAM para nada, así que se
+reutilizó ese y sólo se añadió lo que faltaba:
+
+1. **JSON habilitado.** SearXNG lo trae apagado de fábrica: `format=json`
+   respondía `403 Forbidden`, y sin eso la búsqueda de Axi simplemente no
+   existe. Se añadió `search.formats: [html, json]` a su `settings.yml`
+   (respaldo en `settings.yml.bak-20260820`) y se reinició.
+
+2. **La puerta, como servicio nuevo de Coolify** (`lifeos-search-gate`, en el
+   proyecto LifeOS): un nginx que exige `X-LifeOS-Search-Key`, sólo deja pasar
+   `/search` con `format=json`, y está unido a la vez a la red `coolify` (para
+   Traefik) y a la red privada del SearXNG. La configuración va inline en el
+   compose (`configs:`), así que no hay ningún archivo suelto en el host.
+
+3. **DNS y TLS:** `search.lifeos.hectormr.com` → 74.208.78.93, sin proxy de
+   Cloudflare, igual que el OTA, con el certificado que emite Traefik.
+
+Comprobado desde fuera del VPS, no desde dentro:
+
+```
+sin llave              → 403
+con llave              → 200 y resultados reales
+/  /preferences /stats → 404
+/search sin format=json→ 403
+/health                → 200 (a propósito: saber que está en pie sin abrir nada)
+```
+
+La respuesta trae `unresponsive_engines: [duckduckgo: CAPTCHA, startpage:
+CAPTCHA]` y aun así devuelve resultados: eso es exactamente para lo que sirve
+un metabuscador, y es la razón de todo esto.
+
+## La llave
+
+Vive en `~/.config/lifeos/search-key.txt` (0600) y en `tools/ota-publish.env`,
+que no se versiona. Va compilada en la app con
+`--dart-define=LIFEOS_SEARCH_KEY`, nunca en las preferencias: así no hay
+ninguna pantalla desde la que pueda salir, y viaja como cabecera, no en la URL
+—donde acabaría en el registro del servidor y en cualquier historial.
+
+Para rotarla: cambiar el archivo, redesplegar `lifeos-search-gate` y publicar.
