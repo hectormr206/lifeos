@@ -27,6 +27,7 @@ import '../data/chat_repository.dart';
 import '../domain/chat_context_builder.dart';
 import '../domain/conversation_subject.dart';
 import '../domain/person_answer.dart';
+import '../../memory/domain/when_answer.dart';
 import '../domain/person_facts.dart';
 import '../domain/chat_message.dart';
 import 'chat_context_providers.dart';
@@ -432,6 +433,14 @@ class ChatNotifier extends Notifier<ChatUiState> {
     final bond = kinshipStatement(text);
     if (bond != null) return _rememberBondOrModel(bond, text, userMessage);
     if (_looksCapturable(text)) return _captureThenAnswer(text, userMessage);
+    // "¿A qué hora…?" is answered from the RECORD, never by the model. Asked
+    // on the Pixel, it answered 15:16 for something logged at 09:16 — the
+    // digits of two entries blended. The exact same class of failure that
+    // moved kinship into Dart.
+    if (asksAboutTime(text)) {
+      return _answerWhenOrModel(text, userMessage);
+    }
+
     // A KINSHIP question is answered from the graph, never by the model.
     //
     // Measured on the test Pixel: with "mi hermana se llama Laura" stored and
@@ -445,6 +454,27 @@ class ChatNotifier extends Notifier<ChatUiState> {
       return _answerAboutPersonOrModel(text, userMessage);
     }
     return _sendTextToModel(text, userMessage);
+  }
+
+  /// Answer a time question from the record; fall back to the model when the
+  /// record cannot answer it. Never guesses an hour.
+  Future<void> _answerWhenOrModel(String text, ChatMessage userMessage) async {
+    try {
+      final answer =
+          await ref.read(chatContextBuilderProvider).answerWhenAsked(text);
+      if (answer == null) return _sendTextToModel(text, userMessage);
+      if (_disposed) return;
+      final reply = ChatMessage(
+        id: 'when-${DateTime.now().microsecondsSinceEpoch}',
+        role: ChatRole.axi,
+        text: answer,
+        timestamp: DateTime.now(),
+      );
+      state = state.copyWith(messages: [...state.messages, reply]);
+      _persist(reply);
+    } catch (_) {
+      return _sendTextToModel(text, userMessage);
+    }
   }
 
   /// Store what was said about a person; fall back to the model if nothing

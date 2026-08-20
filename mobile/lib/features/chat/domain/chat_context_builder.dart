@@ -32,6 +32,8 @@ import '../../domains/domain/local_entry_config.dart';
 import '../../embedding/domain/rag_service.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import 'person_facts.dart';
+import '../../memory/domain/query_date_range.dart';
+import '../../memory/domain/when_answer.dart';
 import '../../memory/data/memory_writer.dart';
 import '../../memory/domain/domain_router.dart';
 import '../../memory/domain/health_parser.dart';
@@ -784,6 +786,39 @@ class ChatContextBuilder {
         );
       }
       return 'Anotado: ${lines.join(' ')}';
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Answer "¿a qué hora…?" straight from the record, or null.
+  ///
+  /// Measured on the test Pixel with 881: asked what time he weighed himself,
+  /// the model answered 15:16 for a fact recorded at 09:16 — a blend of two
+  /// entries' digits. Handing a small model a specific value and hoping it
+  /// copies it exactly is a bet this project has lost three times now.
+  ///
+  /// A wrong hour is not a rounding error: "te tomaste la pastilla a las
+  /// 15:00" when it was 09:00 is something a person acts on.
+  Future<String?> answerWhenAsked(String question) async {
+    if (!asksAboutTime(question)) return null;
+    try {
+      final deps = await loadDeps();
+      if (deps == null) return null;
+      final window = parseQueryDateRange(question, now: _wallNow());
+      final nodes = await deps.store.listNodesByKind('fact', limit: 60);
+      final facts = <TimedFact>[
+        for (final node in nodes)
+          if (node.occurredAt != null &&
+              node.label.trim().isNotEmpty &&
+              (window == null || window.contains(node.occurredAt!)))
+            (label: node.label.trim(), at: node.occurredAt!),
+      ];
+      return answerAboutTime(
+        question: question,
+        facts: facts,
+        languageCode: languageCode(),
+      );
     } catch (_) {
       return null;
     }
