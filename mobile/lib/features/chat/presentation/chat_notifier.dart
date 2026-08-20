@@ -412,6 +412,15 @@ class ChatNotifier extends Notifier<ChatUiState> {
     );
     final text = attributeToSubject(rawText, _subject);
 
+    // "¿A qué hora…?" goes FIRST. Measured on the Pixel: placed after the
+    // capture triage, "a qué hora me pesé ayer" was read as a weight entry
+    // ("pesé") and handed to the model, which answered 15:16 for something
+    // logged at 09:16. A QUESTION is never a capture, and the record is the
+    // only thing allowed to state an hour.
+    if (asksAboutTime(rawText)) {
+      return _answerWhenOrModel(rawText, userMessage);
+    }
+
     // What was just said ABOUT a person, when we know who that is. This is
     // the dinner-two-months-from-now feature: "su hijo Mateo tiene 8" is what
     // makes someone feel remembered, and the generic capture stored it as an
@@ -433,14 +442,6 @@ class ChatNotifier extends Notifier<ChatUiState> {
     final bond = kinshipStatement(text);
     if (bond != null) return _rememberBondOrModel(bond, text, userMessage);
     if (_looksCapturable(text)) return _captureThenAnswer(text, userMessage);
-    // "¿A qué hora…?" is answered from the RECORD, never by the model. Asked
-    // on the Pixel, it answered 15:16 for something logged at 09:16 — the
-    // digits of two entries blended. The exact same class of failure that
-    // moved kinship into Dart.
-    if (asksAboutTime(text)) {
-      return _answerWhenOrModel(text, userMessage);
-    }
-
     // A KINSHIP question is answered from the graph, never by the model.
     //
     // Measured on the test Pixel: with "mi hermana se llama Laura" stored and

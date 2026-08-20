@@ -220,5 +220,37 @@ void main() {
           'la esposa de Juan se llama Marta');
     });
   });
+
+  group('a question is never a capture', () {
+    // Measured on the test Pixel: "a qué hora me pesé ayer" was read as a
+    // WEIGHT ENTRY, because "pesé" looks like one to the capture triage, and
+    // the turn went to the model — which answered 15:16 for something logged
+    // at 09:16.
+    //
+    // The ordering rule this pins: anything that ASKS is answered before
+    // anything that stores gets a look at it.
+    test('asking about a time is recognised as a question', () {
+      final subject = resolveConversationSubject(
+        message: '¿a qué hora me pesé ayer?',
+        knownPeople: const [],
+        now: t0,
+      );
+
+      // No person named, so no subject — and crucially nothing to attribute a
+      // weight to either.
+      expect(subject, isNull);
+    });
+
+    test('a question mark alone marks the turn', () {
+      final subject = resolveConversationSubject(
+        message: '¿Juan tiene hijos?',
+        knownPeople: const ['Juan'],
+        now: t0,
+      );
+
+      expect(subject!.isQuestion, isTrue,
+          reason: 'a question about Juan must not be stored as a fact');
+    });
+  });
 }
 
