@@ -3,6 +3,10 @@
 Cinco huecos, encontrados leyendo el código y probando la app en el Pixel — no
 imaginados. Tres ya están hechos; los otros dos siguen abiertos.
 
+Aparte de esta lista, el boletín de la laptop ya se genera con la aplicación
+cerrada (un temporizador de systemd lanza el mismo generador headless que usa
+el teléfono), y una fuente repetida ya no sale dos veces.
+
 ## 1. Llévate tus datos — HECHO (886)
 
 Había copias cifradas y restauración, y las dos sólo funcionan de vuelta HACIA
