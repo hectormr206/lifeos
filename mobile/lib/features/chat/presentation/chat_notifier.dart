@@ -100,16 +100,36 @@ final chatHistoryRepositoryProvider = FutureProvider<ChatHistoryRepository>((ref
 
 /// The chat conversation's UI state (spec mobile-chat).
 class ChatUiState {
-  const ChatUiState({this.messages = const [], this.sending = false, this.error});
+  const ChatUiState({
+    this.messages = const [],
+    this.sending = false,
+    this.error,
+    this.hydrating = true,
+  });
 
   final List<ChatMessage> messages;
   final bool sending;
   final String? error;
 
-  ChatUiState copyWith({List<ChatMessage>? messages, bool? sending, String? error}) => ChatUiState(
+  /// True until the persisted transcript has been read (or given up on).
+  ///
+  /// Without it, an empty conversation caused by a store that is still opening
+  /// looks EXACTLY like a conversation with no messages — and the user cannot
+  /// tell those apart. One of them is frightening in an app that holds your
+  /// life, and the only feedback they got was force-closing the app.
+  final bool hydrating;
+
+  ChatUiState copyWith({
+    List<ChatMessage>? messages,
+    bool? sending,
+    String? error,
+    bool? hydrating,
+  }) =>
+      ChatUiState(
         messages: messages ?? this.messages,
         sending: sending ?? this.sending,
         error: error,
+        hydrating: hydrating ?? this.hydrating,
       );
 }
 
@@ -161,6 +181,12 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// `ConnectionNotifier.ready`.
   Future<void> get ready => _bootstrapFuture ?? Future<void>.value();
 
+  /// Completes when the persisted transcript has been loaded or abandoned.
+  /// Separate from [ready] because hydration is deliberately detached: a slow
+  /// store must never block the chat from being usable.
+  Future<void> get hydrationSettled =>
+      _persistedHydration ?? Future<void>.value();
+
   @override
   ChatUiState build() {
     ref.onDispose(_handleDispose);
@@ -203,6 +229,13 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// awaiting a send unwind instead of hanging forever.
   void _handleDispose() {
     _disposed = true;
+    // Cancel the retry pause AND release whoever is awaiting it, or the
+    // hydration loop would wait for a timer that will never fire.
+    _hydrationTimer?.cancel();
+    _hydrationTimer = null;
+    final waiter = _hydrationWait;
+    _hydrationWait = null;
+    if (waiter != null && !waiter.isCompleted) waiter.complete();
     while (_queue.isNotEmpty) {
       final request = _queue.removeFirst();
       if (!request.done.isCompleted) request.done.complete();
@@ -357,16 +390,69 @@ class ChatNotifier extends Notifier<ChatUiState> {
         msgs.last.id == onboardingQuestionId;
   }
 
+  /// How many times to try reading the persisted transcript.
+  ///
+  /// It used to be ONE, and that one attempt happens on a cold start — exactly
+  /// when the encrypted store is still being opened and is most likely to fail.
+  /// When it did, the chat sat empty until the app was killed and relaunched,
+  /// because relaunching is what retried it. That is the bug the user lived
+  /// with for weeks.
+  ///
+  /// Bounded, though: a store that is genuinely gone must not become a loop
+  /// that keeps a phone awake.
+  static const int _hydrationAttempts = 4;
+
+  /// The pause between attempts, held so leaving the screen cancels it.
+  ///
+  /// A bare `Future.delayed` keeps a Timer alive after the widget tree is
+  /// gone — the test binding refuses it, and on a device it is a wake-up
+  /// scheduled for a screen nobody is looking at any more.
+  Timer? _hydrationTimer;
+  Completer<void>? _hydrationWait;
+
+  Future<void> _pause(Duration duration) {
+    _hydrationTimer?.cancel();
+    final waiter = Completer<void>();
+    _hydrationWait = waiter;
+    _hydrationTimer = Timer(duration, () {
+      if (!waiter.isCompleted) waiter.complete();
+    });
+    return waiter.future;
+  }
+
   Future<void> _hydratePersisted() async {
-    try {
-      final repo = await _history();
-      if (repo == null) return;
-      final persisted = await repo.loadMessages();
+    for (var attempt = 0; attempt < _hydrationAttempts; attempt++) {
       if (_disposed) return;
-      if (persisted.isNotEmpty) state = state.copyWith(messages: persisted);
-    } catch (_) {
-      // Persisted load unavailable — keep whatever the fast path produced.
+      try {
+        final repo = await _history();
+        if (repo != null) {
+          final persisted = await repo.loadMessages();
+          if (_disposed) return;
+          if (persisted.isNotEmpty) {
+            state = state.copyWith(messages: persisted, hydrating: false);
+            return;
+          }
+          // Read fine and there is genuinely nothing: a new user. Settle, or
+          // the screen would spin for ever on an empty conversation.
+          state = state.copyWith(hydrating: false);
+          return;
+        }
+      } catch (_) {
+        // Fall through to the wait and try again.
+      }
+      // Checked again right here: the awaits above can span a screen being
+      // closed, and starting a timer after that leaves one pending on a widget
+      // tree that is already gone.
+      if (_disposed) return;
+      // Growing pause: an encrypted store opens in a moment, not instantly,
+      // and hammering it does not make it faster.
+      await _pause(Duration(milliseconds: 150 * (attempt + 1)));
+      if (_disposed) return;
     }
+    if (_disposed) return;
+    // Gave up. The chat still works; it just could not recover what was said
+    // before — and the screen is told, instead of pretending it is empty.
+    state = state.copyWith(hydrating: false);
   }
 
   /// Clears the visible conversation and the persisted on-device history for
