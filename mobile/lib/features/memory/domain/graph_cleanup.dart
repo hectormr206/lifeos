@@ -33,14 +33,41 @@ const Set<String> _untouchable = {
   'person_link',
 };
 
+/// A partir de cuántas relaciones un nodo deja de ser una palabra suelta.
+///
+/// La segunda red, por si el hub del usuario llegara sin su marca. Una sola
+/// arista no basta: el extractor conecta con algo cada cosa que inventa. Con
+/// cuatro ya es un centro, y dejar vivo algún nodo feo es el lado bueno en el
+/// que equivocarse.
+const int kBusyNodeEdges = 4;
+
 /// Lo que se puede olvidar de [nodes], en el mismo orden.
-List<GraphNodeRecord> forgettableNodes(Iterable<GraphNodeRecord> nodes) => [
-      for (final node in nodes)
-        if (_isForgettable(node)) node,
-    ];
+///
+/// [edges] es opcional: sin ellas la limpieza sigue funcionando, sólo pierde
+/// la red de seguridad de los nodos muy conectados.
+List<GraphNodeRecord> forgettableNodes(
+  Iterable<GraphNodeRecord> nodes, {
+  Iterable<GraphEdgeRecord> edges = const [],
+}) {
+  final degree = <String, int>{};
+  for (final edge in edges) {
+    degree[edge.srcUuid] = (degree[edge.srcUuid] ?? 0) + 1;
+    degree[edge.dstUuid] = (degree[edge.dstUuid] ?? 0) + 1;
+  }
+  return [
+    for (final node in nodes)
+      if ((degree[node.uuid] ?? 0) < kBusyNodeEdges && _isForgettable(node))
+        node,
+  ];
+}
 
 bool _isForgettable(GraphNodeRecord node) {
   if (_untouchable.contains(node.kind)) return false;
+  // TU nodo. El hub del usuario se llama "Yo" o "Usuario" y desde fuera parece
+  // exactamente una de esas palabras vacías que esta limpieza busca — estuvo a
+  // un toque de borrarse mientras se probaba esto en el teléfono. De él cuelga
+  // el grafo entero, y se reconoce por su marca, nunca por el nombre.
+  if (node.data['role'] == 'user') return false;
   // Escrito a mano por una persona: no lo inventó el modelo, y no nos toca
   // decidir que no significa nada.
   final source = node.data['source']?.toString();

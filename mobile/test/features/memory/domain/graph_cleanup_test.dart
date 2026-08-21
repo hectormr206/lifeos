@@ -57,6 +57,62 @@ void main() {
   });
 
   group('qué NO se toca nunca', () {
+    test('TU nodo, el centro de todo', () {
+      // Encontrado probando en el Pixel, con el diálogo ya abierto y a un
+      // toque de borrarlo: el hub del usuario se llama "Yo" y desde fuera
+      // parece justo una de esas palabras vacías. Se reconoce por su marca
+      // role=user, nunca por el nombre — de ahí cuelga el grafo entero.
+      expect(
+        forgettableNodes([
+          node('Yo', kind: 'person', data: {'role': 'user'}),
+          node('Usuario', kind: 'person', data: {'role': 'user'}),
+        ]),
+        isEmpty,
+      );
+    });
+
+    test('un nodo del que cuelga media memoria, aunque se llame raro', () {
+      // La segunda red, por si el hub llegara sin su marca: lo que tiene
+      // muchas relaciones es un centro, no una palabra suelta. Se paga con
+      // dejar vivo algún nodo feo, que es el lado bueno en el que fallar.
+      final edges = [
+        for (var i = 0; i < 4; i++)
+          GraphEdgeRecord(
+            uuid: 'e$i',
+            srcUuid: 'u-Usuario',
+            dstUuid: 'otro-$i',
+            relation: 'about',
+            createdAt: DateTime(2026, 8, 20),
+            updatedAt: DateTime(2026, 8, 20),
+          ),
+      ];
+
+      expect(
+        forgettableNodes([node('Usuario', kind: 'person')], edges: edges),
+        isEmpty,
+      );
+    });
+
+    test('un nodo suelto sí se puede olvidar aunque tenga UNA relación', () {
+      // Si bastara una arista, no se limpiaría nada: el extractor conecta cada
+      // cosa que inventa con algo.
+      final edges = [
+        GraphEdgeRecord(
+          uuid: 'e1',
+          srcUuid: 'u-esposa_nació_en',
+          dstUuid: 'otro',
+          relation: 'about',
+          createdAt: DateTime(2026, 8, 20),
+          updatedAt: DateTime(2026, 8, 20),
+        ),
+      ];
+
+      expect(
+        forgettableNodes([node('esposa_nació_en')], edges: edges),
+        hasLength(1),
+      );
+    });
+
     test('una persona con nombre', () {
       expect(forgettableNodes([node('Celia García Mateo', kind: 'person')]),
           isEmpty);

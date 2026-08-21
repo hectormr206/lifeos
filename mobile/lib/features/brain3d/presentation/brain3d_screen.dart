@@ -60,8 +60,11 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
   /// Nunca borra sin enseñar el número y algunos ejemplos: "voy a olvidar 6
   /// cosas, estas" es una decisión que puede tomar el usuario; "limpiando…"
   /// no lo es.
-  Future<void> _cleanUp(List<GraphNodeRecord> nodes) async {
-    final forgettable = forgettableNodes(nodes);
+  Future<void> _cleanUp(
+    List<GraphNodeRecord> nodes,
+    List<GraphEdgeRecord> edges,
+  ) async {
+    final forgettable = forgettableNodes(nodes, edges: edges);
     if (!mounted) return;
 
     if (forgettable.isEmpty) {
@@ -152,7 +155,7 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
             setState(() => _selectedId = null);
             ref.invalidate(brain3dPayloadProvider);
           },
-          onCleanUp: () => _cleanUp(value.nodes),
+          onCleanUp: () => _cleanUp(value.nodes, value.edges),
           onMerge: (loser, winner) async {
             final store = await ref.read(localGraphStoreProvider.future);
             await store.mergeNodes(loserUuid: loser, winnerUuid: winner);
