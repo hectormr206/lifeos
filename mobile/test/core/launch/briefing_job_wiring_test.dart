@@ -81,6 +81,22 @@ void main() {
     );
   });
 
+  test('el temporizador arranca en las sesiones ya abiertas', () {
+    // Visto en la laptop del usuario: "enabled" pero "inactive (dead)" y
+    // "Trigger: n/a". La unidad estaba colocada y no iba a dispararse nunca,
+    // porque sólo se arrancaba cuando alguien tecleaba sudo a mano — y el
+    // actualizador automático no teclea nada. En una laptop que no se apaga,
+    // "arrancará en el próximo login" significa "quizá la semana que viene".
+    final installer = File('tools/install-linux.sh').readAsStringSync();
+    expect(installer, contains('/run/user/*/bus'));
+    expect(installer, contains('systemctl --user enable --now lifeos-briefing.timer'));
+    expect(
+      installer,
+      isNot(contains(r'if [ -n "${SUDO_USER:-}" ]')),
+      reason: 'depender de SUDO_USER es justo lo que dejó el timer muerto',
+    );
+  });
+
   test('desinstalar se lleva las unidades del usuario', () {
     final installer = File('tools/install-linux.sh').readAsStringSync();
     expect(installer, contains(r'$USER_UNIT_DIR/lifeos-briefing.service'));

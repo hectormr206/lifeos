@@ -832,24 +832,34 @@ install_briefing_units() {
   systemctl --global enable lifeos-briefing.timer >/dev/null 2>&1 || \
     warn "Could not enable lifeos-briefing.timer — the briefing will only be generated while the app is open."
 
-  # Start it in the session running right now, if there is one. SUDO_USER is
-  # the human who typed sudo; without it (an unattended --update from the
-  # system timer) there is nothing to start and the --global enable above still
-  # covers the next login.
-  if [ -n "${SUDO_USER:-}" ]; then
-    uid="$(id -u "$SUDO_USER" 2>/dev/null || true)"
-    if [ -n "$uid" ] && [ -S "/run/user/$uid/bus" ]; then
-      sudo -u "$SUDO_USER" \
-        XDG_RUNTIME_DIR="/run/user/$uid" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-        systemctl --user daemon-reload >/dev/null 2>&1 || true
-      sudo -u "$SUDO_USER" \
-        XDG_RUNTIME_DIR="/run/user/$uid" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$uid/bus" \
-        systemctl --user enable --now lifeos-briefing.timer >/dev/null 2>&1 || \
-        warn "Could not start lifeos-briefing.timer in this session — it will start at the next login"
-    fi
-  fi
+  # Arrancarlo en las sesiones que ya están abiertas AHORA.
+  #
+  # Antes esto dependía de SUDO_USER —quien tecleó sudo—, y el actualizador
+  # automático no lo tiene: la unidad quedaba "enabled" pero "inactive (dead)",
+  # con Trigger: n/a, esperando a un próximo login que en una laptop que nadie
+  # apaga puede tardar días. Visto exactamente así en la laptop del usuario.
+  #
+  # Se recorren los buses de usuario vivos, que es la pregunta real: ¿hay una
+  # sesión a la que este temporizador le sirva?
+  for bus in /run/user/*/bus; do
+    [ -S "$bus" ] || continue
+    uid="${bus#/run/user/}"
+    uid="${uid%/bus}"
+    # Sólo cuentas de persona: root y las de servicio no tienen escritorio ni
+    # datos de LifeOS que respaldar.
+    [ "$uid" -ge 1000 ] 2>/dev/null || continue
+    who="$(id -nu "$uid" 2>/dev/null || true)"
+    [ -n "$who" ] || continue
+    sudo -u "$who" \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+      systemctl --user daemon-reload >/dev/null 2>&1 || true
+    sudo -u "$who" \
+      XDG_RUNTIME_DIR="/run/user/$uid" \
+      DBUS_SESSION_BUS_ADDRESS="unix:path=$bus" \
+      systemctl --user enable --now lifeos-briefing.timer >/dev/null 2>&1 || \
+      warn "No pude arrancar lifeos-briefing.timer para $who — arrancará en su próximo inicio de sesión."
+  done
 }
 
 prune_old_releases() {

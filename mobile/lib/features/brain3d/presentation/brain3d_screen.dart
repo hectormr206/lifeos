@@ -5,6 +5,7 @@ import '../../../core/graph/graph_providers.dart';
 import '../../../core/graph/domain_labels.dart';
 import '../../../core/graph/graph_records.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../memory/domain/graph_cleanup.dart';
 import '../domain/brain3d_payload.dart';
 import '../domain/brain3d_filters.dart';
 import '../domain/brain3d_news.dart';
@@ -54,6 +55,58 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
     super.dispose();
   }
 
+  /// Busca lo que se puede olvidar, lo cuenta, y sólo entonces pregunta.
+  ///
+  /// Nunca borra sin enseñar el número y algunos ejemplos: "voy a olvidar 6
+  /// cosas, estas" es una decisión que puede tomar el usuario; "limpiando…"
+  /// no lo es.
+  Future<void> _cleanUp(List<GraphNodeRecord> nodes) async {
+    final forgettable = forgettableNodes(nodes);
+    if (!mounted) return;
+
+    if (forgettable.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No encontré nada que sobre.')),
+      );
+      return;
+    }
+
+    final sample = forgettable.take(6).map((n) => n.label).join(', ');
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('¿Olvidar ${forgettable.length} '
+            '${forgettable.length == 1 ? "nodo" : "nodos"}?'),
+        content: Text(
+          'Son palabras que no llevan a ninguna parte, como: $sample'
+          '${forgettable.length > 6 ? "…" : ""}\n\n'
+          'Tus hechos, personas, conversaciones y recordatorios no se tocan.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancelar'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            child: const Text('Olvidarlos'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    final store = await ref.read(localGraphStoreProvider.future);
+    for (final node in forgettable) {
+      await store.softDeleteNode(node.uuid);
+    }
+    ref.invalidate(brain3dPayloadProvider);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Olvidados ${forgettable.length}.')),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
@@ -99,6 +152,7 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
             setState(() => _selectedId = null);
             ref.invalidate(brain3dPayloadProvider);
           },
+          onCleanUp: () => _cleanUp(value.nodes),
           onMerge: (loser, winner) async {
             final store = await ref.read(localGraphStoreProvider.future);
             await store.mergeNodes(loserUuid: loser, winnerUuid: winner);
@@ -125,6 +179,7 @@ class _Brain extends StatelessWidget {
     required this.onSelect,
     required this.onForget,
     required this.onMerge,
+    required this.onCleanUp,
   });
 
   final Brain3dPayload payload;
@@ -134,6 +189,7 @@ class _Brain extends StatelessWidget {
   final void Function(Brain3dFilter) onFilter;
   final void Function(String?) onSelect;
   final Future<void> Function(String uuid) onForget;
+  final VoidCallback onCleanUp;
   final Future<void> Function(String loser, String winner) onMerge;
 
   @override
@@ -222,6 +278,7 @@ class _Brain extends StatelessWidget {
           total: payload.nodes.length,
           relations: edges.length,
           onFilter: onFilter,
+          onCleanUp: onCleanUp,
         ),
         Expanded(
           child: placement == Brain3dPanelPlacement.side
@@ -265,6 +322,7 @@ class _Controls extends StatelessWidget {
     required this.total,
     required this.relations,
     required this.onFilter,
+    required this.onCleanUp,
   });
 
   final TextEditingController controller;
@@ -273,6 +331,11 @@ class _Controls extends StatelessWidget {
   final int total;
   final int relations;
   final void Function(Brain3dFilter) onFilter;
+
+  /// Olvidar las palabras que no llevan a ninguna parte. Vive aquí, junto al
+  /// número de nodos, porque es la misma pregunta: cuántos hay, y cuántos de
+  /// esos sobran.
+  final VoidCallback onCleanUp;
 
   @override
   Widget build(BuildContext context) {
@@ -343,13 +406,39 @@ class _Controls extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 6),
-          Text(
-            // Shown AND total when a filter hides some: "12 de 88" is the only
-            // way to tell a filtered graph from a lost one.
-            shown == total
-                ? '$total nodos · $relations relaciones'
-                : '$shown de $total nodos · $relations relaciones',
-            style: const TextStyle(color: Colors.white54, fontSize: 12),
+          Row(
+            children: [
+              // Flexible, no Text a secas: "12 de 88 nodos · 120 relaciones"
+              // en una pantalla estrecha desbordaba la fila 77 píxeles y
+              // pintaba la franja amarilla encima del Cerebro.
+              Flexible(
+                child: Text(
+                  // Shown AND total when a filter hides some: "12 de 88" is
+                  // the only way to tell a filtered graph from a lost one.
+                  shown == total
+                      ? '$total nodos · $relations relaciones'
+                      : '$shown de $total nodos · $relations relaciones',
+                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              const SizedBox(width: 8),
+              // Limpieza de lo que se guardó mal antes de que existiera el
+              // filtro: "la otra persona", "Axi", "esposa_nació_en". Va aquí y
+              // no en la barra de arriba porque allí empujaba el contador
+              // contra el borde y lo dejaba cortado — se vio en el golden.
+              TextButton.icon(
+                onPressed: onCleanUp,
+                icon: const Icon(Icons.cleaning_services_outlined, size: 15),
+                label: const Text('Limpiar', style: TextStyle(fontSize: 12)),
+                style: TextButton.styleFrom(
+                  foregroundColor: Colors.white54,
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: const Size(0, 32),
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                ),
+              ),
+            ],
           ),
         ],
       ),

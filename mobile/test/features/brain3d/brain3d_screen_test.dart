@@ -96,6 +96,7 @@ Widget _app(LocalGraphStore store) => ProviderScope(
     );
 
 void main() {
+  _cleanupTests();
   testWidgets('renders the graph itself, on every platform', (tester) async {
     final t = DateTime.utc(2026, 1, 1);
     final store = _FakeLocalGraphStore(
@@ -338,5 +339,97 @@ void main() {
     expect(find.text('ana'), findsOneWidget);
     expect(find.text('peso 82 kg'), findsNothing,
         reason: 'a weight is not a duplicate of a person');
+  });
+}
+
+// ── Limpieza de nodos sin significado ────────────────────────────────────────
+//
+// El filtro nuevo impide que entren más, pero el Cerebro del usuario ya tiene
+// meses de "la otra persona", "Axi" y "esposa_nació_en" dentro. Esto prueba lo
+// único que importa de un botón que BORRA: que enseña qué va a borrar, que
+// espera un sí, y que un no no toca nada.
+GraphNodeRecord _labelled(String uuid, String kind, String label) {
+  final t = DateTime.utc(2026, 6, 1);
+  return GraphNodeRecord(
+    uuid: uuid,
+    kind: kind,
+    label: label,
+    data: const {'source': 'relation_extractor'},
+    createdAt: t,
+    updatedAt: t,
+  );
+}
+
+void _cleanupTests() {
+  group('limpiar el Cerebro', () {
+    testWidgets('pregunta antes de borrar, y dice cuántos', (tester) async {
+      final store = _FakeLocalGraphStore(nodes: [
+        _labelled('n1', 'person', 'la otra persona'),
+        _labelled('n2', 'fact', 'esposa_nació_en'),
+        _labelled('n3', 'person', 'Celia García Mateo'),
+      ]);
+      await tester.pumpWidget(_app(store));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Limpiar'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('¿Olvidar 2'), findsOneWidget);
+      expect(
+        store.forgotten,
+        isEmpty,
+        reason: 'preguntar no puede haber borrado ya',
+      );
+    });
+
+    testWidgets('cancelar no toca nada', (tester) async {
+      final store = _FakeLocalGraphStore(nodes: [
+        _labelled('n1', 'person', 'la otra persona'),
+      ]);
+      await tester.pumpWidget(_app(store));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Limpiar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(TextButton, 'Cancelar'));
+      await tester.pumpAndSettle();
+
+      expect(store.forgotten, isEmpty);
+    });
+
+    testWidgets('al confirmar olvida sólo lo que sobra', (tester) async {
+      final store = _FakeLocalGraphStore(nodes: [
+        _labelled('n1', 'person', 'la otra persona'),
+        _labelled('n2', 'fact', 'esposa_nació_en'),
+        _labelled('n3', 'person', 'Celia García Mateo'),
+        _labelled('n4', 'fact', 'Nos casamos el 6 de septiembre de 2018'),
+      ]);
+      await tester.pumpWidget(_app(store));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Limpiar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.widgetWithText(FilledButton, 'Olvidarlos'));
+      await tester.pumpAndSettle();
+
+      // El orden lo decide cómo el Cerebro agrupa por tipo; lo que importa es
+      // QUÉ se borró y qué no.
+      expect(store.forgotten.toSet(), {'n1', 'n2'});
+    });
+
+    testWidgets('sin nada que limpiar, lo dice y no abre nada',
+        (tester) async {
+      final store = _FakeLocalGraphStore(nodes: [
+        _labelled('n3', 'person', 'Celia García Mateo'),
+      ]);
+      await tester.pumpWidget(_app(store));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.widgetWithText(TextButton, 'Limpiar'));
+      await tester.pumpAndSettle();
+
+      expect(find.text('No encontré nada que sobre.'), findsOneWidget);
+      expect(find.textContaining('¿Olvidar'), findsNothing);
+    });
   });
 }
