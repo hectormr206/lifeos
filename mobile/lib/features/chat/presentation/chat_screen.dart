@@ -586,7 +586,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
         // force-close the app and open it again. Seeing your own
         // conversation apparently gone is frightening in an app that holds
         // your life.
-        if (chat.hydrating && chat.messages.isEmpty)
+        // No se pudo LEER lo guardado, que no es lo mismo que no haber nada.
+        // Antes esto se rendía en silencio y la pantalla quedaba vacía: el
+        // usuario veía su conversación desaparecida sin una palabra y sin más
+        // recurso que cerrar la aplicación entera.
+        if (chat.historyUnavailable && chat.messages.isEmpty)
+          Expanded(
+            child: Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Text(
+                      'No pude abrir tu conversación guardada. Sigue ahí: '
+                      'esto es un problema al leerla, no algo que se haya '
+                      'borrado.',
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    FilledButton(
+                      onPressed: () => ref
+                          .read(chatNotifierProvider.notifier)
+                          .retryHistory(),
+                      child: const Text('Reintentar'),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          )
+        else if (chat.hydrating && chat.messages.isEmpty)
           // Text, not a spinner: an indefinite animation means the screen
           // never settles, which breaks every `pumpAndSettle` in the suite —
           // and it is a spinning wheel on something usually ready in well

@@ -64,16 +64,42 @@ class ChatHistoryRepository {
 
   /// Finds the default conversation node, creating it once if absent. The uuid
   /// is cached for the lifetime of this repository.
+  /// Todas las conversaciones que llevan este slug, la más antigua primero.
+  ///
+  /// En plural porque el bug de abajo llegó a crear varias en el mismo
+  /// teléfono, y los mensajes de cada una son igual de reales.
+  Future<List<GraphNodeRecord>> _conversations() async {
+    final existing = await _store.listNodesByKind(_kConversationKind);
+    final mine = [
+      for (final node in existing)
+        if (node.domain == _kDomain && node.data['slug'] == conversationSlug)
+          node,
+    ];
+    // Por localId, que es el orden en que se crearon: así todos los arranques
+    // eligen LA MISMA sin depender de cómo venga ordenada la lista.
+    mine.sort((a, b) => (a.localId ?? 0).compareTo(b.localId ?? 0));
+    return mine;
+  }
+
+  /// La conversación donde se ESCRIBE: siempre la primera que existió.
+  ///
+  /// EL CHAT EN BLANCO. Antes esto listaba, y si no encontraba nada CREABA una
+  /// conversación nueva. Cualquier lectura que llegara vacía un instante —la
+  /// base cifrada abriendo, un fallo tragado— fabricaba una segunda con el
+  /// mismo slug, y todo lo dicho se quedaba colgando de la primera: el usuario
+  /// abría el chat y no había nada. Cerrar del todo y volver a entrar lo
+  /// arreglaba a veces, porque a veces la lista devolvía la buena primero.
+  ///
+  /// Ahora sólo se crea cuando la lectura fue BIEN y de verdad no había
+  /// ninguna. Si la lectura falla, el error sube: reintentar es recuperable,
+  /// inventar una conversación esconde el historial para siempre.
   Future<String> _ensureConversation() async {
     final cached = _conversationUuid;
     if (cached != null) return cached;
 
-    final existing = await _store.listNodesByKind(_kConversationKind);
-    for (final node in existing) {
-      if (node.domain == _kDomain && node.data['slug'] == conversationSlug) {
-        return _conversationUuid = node.uuid;
-      }
-    }
+    final mine = await _conversations();
+    if (mine.isNotEmpty) return _conversationUuid = mine.first.uuid;
+
     final created = await _store.createNode(
       kind: _kConversationKind,
       label: 'Chat con Axi',
@@ -104,16 +130,29 @@ class ChatHistoryRepository {
   /// Loads every persisted message of the default conversation, in append
   /// order (oldest first). Returns `[]` when nothing was ever persisted.
   Future<List<ChatMessage>> loadMessages() async {
-    final conversationUuid = await _ensureConversation();
-    final edges = await _store.edgesForNode(
-      conversationUuid,
-      direction: EdgeDirection.outgoing,
-      relation: _kHasMessage,
-    );
+    // Se leen TODAS las conversaciones con este slug, no sólo aquella en la
+    // que se escribe. Los teléfonos que sufrieron el fallo llevan una
+    // duplicada dentro con parte de lo dicho; leer una sola dejaría esa mitad
+    // perdida para siempre. Cuando no hay duplicados —lo normal— esto es
+    // exactamente lo de antes.
+    final conversations = await _conversations();
+    if (conversations.isEmpty) {
+      // Ninguna todavía: crearla aquí mantiene el contrato de siempre (un chat
+      // nuevo arranca con su conversación lista para el primer mensaje).
+      await _ensureConversation();
+      return const [];
+    }
     final nodes = <GraphNodeRecord>[];
-    for (final edge in edges) {
-      final node = await _store.getNodeByUuid(edge.dstUuid);
-      if (node != null) nodes.add(node);
+    for (final conversation in conversations) {
+      final edges = await _store.edgesForNode(
+        conversation.uuid,
+        direction: EdgeDirection.outgoing,
+        relation: _kHasMessage,
+      );
+      for (final edge in edges) {
+        final node = await _store.getNodeByUuid(edge.dstUuid);
+        if (node != null) nodes.add(node);
+      }
     }
     // Insertion order (== chat order) is the autoincrement rowid; edges come
     // back newest-first, so re-sort by localId ascending.

@@ -107,6 +107,7 @@ class ChatUiState {
     this.sending = false,
     this.error,
     this.hydrating = true,
+    this.historyUnavailable = false,
   });
 
   final List<ChatMessage> messages;
@@ -121,17 +122,27 @@ class ChatUiState {
   /// life, and the only feedback they got was force-closing the app.
   final bool hydrating;
 
+  /// No se pudo LEER lo guardado, que no es lo mismo que no haber nada.
+  ///
+  /// Antes el chat se rendía en silencio y quedaba vacío: idéntico a un chat
+  /// nuevo. El usuario lo describió exacto —"el letrero desaparece rápido y no
+  /// pasa nada"— y no tenía forma de saber que había fallado, ni de
+  /// reintentarlo salvo cerrando la aplicación entera.
+  final bool historyUnavailable;
+
   ChatUiState copyWith({
     List<ChatMessage>? messages,
     bool? sending,
     String? error,
     bool? hydrating,
+    bool? historyUnavailable,
   }) =>
       ChatUiState(
         messages: messages ?? this.messages,
         sending: sending ?? this.sending,
         error: error,
         hydrating: hydrating ?? this.hydrating,
+        historyUnavailable: historyUnavailable ?? this.historyUnavailable,
       );
 }
 
@@ -423,6 +434,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
   }
 
   Future<void> _hydratePersisted() async {
+    var failed = false;
     for (var attempt = 0; attempt < _hydrationAttempts; attempt++) {
       if (_disposed) return;
       try {
@@ -431,16 +443,25 @@ class ChatNotifier extends Notifier<ChatUiState> {
           final persisted = await repo.loadMessages();
           if (_disposed) return;
           if (persisted.isNotEmpty) {
-            state = state.copyWith(messages: persisted, hydrating: false);
+            state = state.copyWith(
+              messages: persisted,
+              hydrating: false,
+              historyUnavailable: false,
+            );
             return;
           }
           // Read fine and there is genuinely nothing: a new user. Settle, or
           // the screen would spin for ever on an empty conversation.
-          state = state.copyWith(hydrating: false);
+          state = state.copyWith(
+            hydrating: false,
+            historyUnavailable: false,
+          );
           return;
         }
       } catch (_) {
-        // Fall through to the wait and try again.
+        // Falló DE VERDAD. Se recuerda para no acabar fingiendo un chat vacío
+        // si se agotan los intentos.
+        failed = true;
       }
       // Checked again right here: the awaits above can span a screen being
       // closed, and starting a timer after that leaves one pending on a widget
@@ -454,7 +475,17 @@ class ChatNotifier extends Notifier<ChatUiState> {
     if (_disposed) return;
     // Gave up. The chat still works; it just could not recover what was said
     // before — and the screen is told, instead of pretending it is empty.
-    state = state.copyWith(hydrating: false);
+    state = state.copyWith(hydrating: false, historyUnavailable: failed);
+  }
+
+  /// Volver a intentar recuperar la conversación, a petición de quien la echa
+  /// en falta. Sin esto, el único recurso era cerrar la aplicación entera —
+  /// que es exactamente lo que el usuario llevaba semanas haciendo.
+  Future<void> retryHistory() async {
+    if (_disposed) return;
+    state = state.copyWith(hydrating: true, historyUnavailable: false);
+    _persistedHydration = _hydratePersisted();
+    await _persistedHydration;
   }
 
   /// Clears the visible conversation and the persisted on-device history for
