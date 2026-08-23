@@ -1148,4 +1148,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String trayUnavailableMessage(String details) {
     return 'LifeOS could not put its icon in the system tray. The app keeps working and the window closes as usual. Details: $details';
   }
+
+  @override
+  String get chatDayToday => 'Today';
+
+  @override
+  String get chatDayYesterday => 'Yesterday';
 }

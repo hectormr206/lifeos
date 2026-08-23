@@ -521,5 +521,7 @@
     "placeholders": {
       "details": { "type": "String" }
     }
-  }
+  },
+  "chatDayToday": "Today",
+  "chatDayYesterday": "Yesterday"
 }

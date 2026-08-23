@@ -447,5 +447,7 @@
     "placeholders": {
       "details": { "type": "String" }
     }
-  }
+  },
+  "chatDayToday": "Hoy",
+  "chatDayYesterday": "Ayer"
 }

@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:intl/intl.dart';
 
 import '../../../core/widgets/pending_sync_banner.dart';
 import '../../../l10n/app_localizations.dart';
@@ -18,6 +19,7 @@ import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../../web_search/domain/web_search_settings.dart';
 import '../../web_search/presentation/web_search_providers.dart';
+import '../domain/chat_day.dart';
 import '../domain/chat_message.dart';
 import '../domain/image_picker_gateway.dart';
 import 'chat_notifier.dart';
@@ -634,19 +636,12 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           )
         else
           Expanded(
-            child: ListView.builder(
+            child: _MessageList(
+              messages: chat.messages,
               controller: _scrollController,
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 12),
-              itemCount: chat.messages.length,
-              itemBuilder: (context, index) {
-                final message = chat.messages[index];
-                return _MessageBubble(
-                  message: message,
-                  // Long-press → "Eliminar mensaje" (cascade: bubble +
-                  // persisted node + vectors + derived facts + voice clip).
-                  onLongPress: () => _showMessageActions(message),
-                );
-              },
+              // Long-press → "Eliminar mensaje" (cascade: bubble +
+              // persisted node + vectors + derived facts + voice clip).
+              onLongPress: _showMessageActions,
             ),
           ),
         if (chat.sending) const _TypingIndicator(),
@@ -878,6 +873,12 @@ String _formatDuration(Duration d) {
   final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
   return '$m:$s';
 }
+
+/// The full date and time of a message, for screen readers and for tests that
+/// need the exact instant a bubble carries.
+@visibleForTesting
+String spokenTimestamp(BuildContext context, DateTime t) =>
+    '${MaterialLocalizations.of(context).formatFullDate(t)}, ${_formatTime(t)}';
 
 String _formatTime(DateTime t) =>
     '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
@@ -1160,6 +1161,135 @@ class _TypingIndicator extends StatelessWidget {
 /// The chat AppBar's overflow-menu actions.
 enum _ChatMenuAction { deleteConversation }
 
+/// The conversation itself: the message bubbles, split into calendar days by a
+/// pinned day separator (WhatsApp-style).
+///
+/// The bubbles carry the HOUR, which on its own is ambiguous the moment the
+/// conversation is older than a day — "9:05" reads the same whether it is from
+/// this morning or from last December. The separator answers WHICH DAY, and it
+/// stays pinned to the top of the viewport while that day scrolls past, so the
+/// date is always on screen while the user moves through the history.
+class _MessageList extends StatelessWidget {
+  const _MessageList({
+    required this.messages,
+    required this.controller,
+    required this.onLongPress,
+  });
+
+  final List<ChatMessage> messages;
+  final ScrollController controller;
+  final void Function(ChatMessage message) onLongPress;
+
+  @override
+  Widget build(BuildContext context) {
+    final groups = groupMessagesByDay(messages, now: DateTime.now());
+
+    return CustomScrollView(
+      controller: controller,
+      slivers: [
+        const SliverPadding(padding: EdgeInsets.only(top: 12)),
+        for (final group in groups)
+          SliverMainAxisGroup(
+            slivers: [
+              SliverPersistentHeader(
+                pinned: true,
+                delegate: _DayHeaderDelegate(label: dayLabel(context, group)),
+              ),
+              SliverPadding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                sliver: SliverList.builder(
+                  itemCount: group.messages.length,
+                  itemBuilder: (context, index) {
+                    final message = group.messages[index];
+                    return _MessageBubble(
+                      message: message,
+                      onLongPress: () => onLongPress(message),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
+        const SliverPadding(padding: EdgeInsets.only(bottom: 12)),
+      ],
+    );
+  }
+}
+
+/// Renders a [ChatDayGroup] as the words the user reads.
+///
+/// The two nearest days get a word ("Hoy" / "Ayer"), the rest of the week gets
+/// its weekday name, and anything older gets the full date — never a bare
+/// number the reader has to decode.
+@visibleForTesting
+String dayLabel(BuildContext context, ChatDayGroup group) {
+  final l10n = AppLocalizations.of(context);
+  final material = MaterialLocalizations.of(context);
+  switch (group.kind) {
+    case ChatDayKind.today:
+      return l10n.chatDayToday;
+    case ChatDayKind.yesterday:
+      return l10n.chatDayYesterday;
+    case ChatDayKind.weekday:
+      final locale = Localizations.localeOf(context).toLanguageTag();
+      // Without the locale's date symbols there is no weekday name to print.
+      // Fall back to a date that is still exact rather than to English.
+      if (!DateFormat.localeExists(locale)) {
+        return material.formatMediumDate(group.day);
+      }
+      final name = DateFormat.EEEE(locale).format(group.day);
+      return name.isEmpty ? name : name[0].toUpperCase() + name.substring(1);
+    case ChatDayKind.fullDate:
+      return material.formatFullDate(group.day);
+  }
+}
+
+/// The pinned day separator. Its background is transparent so the bubbles
+/// scroll BEHIND the chip, exactly as they do in WhatsApp; only the chip
+/// itself is opaque.
+class _DayHeaderDelegate extends SliverPersistentHeaderDelegate {
+  const _DayHeaderDelegate({required this.label});
+
+  final String label;
+
+  static const double _height = 40;
+
+  @override
+  double get minExtent => _height;
+
+  @override
+  double get maxExtent => _height;
+
+  @override
+  Widget build(BuildContext context, double shrinkOffset, bool overlaps) {
+    final scheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      height: _height,
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Text(
+            label,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w500,
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  bool shouldRebuild(_DayHeaderDelegate oldDelegate) =>
+      oldDelegate.label != label;
+}
+
 /// A WhatsApp/Telegram-style message bubble with a tail, timestamp and
 /// per-role colours (light + dark). Renders text, image, or voice content.
 /// [onLongPress] surfaces the per-message actions (delete). NOTE: on the
@@ -1212,11 +1342,18 @@ class _MessageBubble extends StatelessWidget {
               Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
-                    _formatTime(message.timestamp),
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: onBubble.withValues(alpha: 0.7),
+                  // The bubble SHOWS the hour (the day is announced by the
+                  // separator above it), but it ANNOUNCES the whole date and
+                  // time: read aloud, "9:05" with no day is meaningless.
+                  Semantics(
+                    label: spokenTimestamp(context, message.timestamp),
+                    excludeSemantics: true,
+                    child: Text(
+                      _formatTime(message.timestamp),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: onBubble.withValues(alpha: 0.7),
+                      ),
                     ),
                   ),
                   if (isUser && message.status != null) ...[

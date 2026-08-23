@@ -564,7 +564,14 @@ void main() {
 
     // The main message list's scroll position.
     final position = tester
-        .state<ScrollableState>(find.descendant(of: find.byType(ListView), matching: find.byType(Scrollable)).first)
+        .state<ScrollableState>(
+          find
+              .descendant(
+                of: find.byType(CustomScrollView),
+                matching: find.byType(Scrollable),
+              )
+              .first,
+        )
         .position;
 
     // Simulate the user having scrolled up to read older history (away from the

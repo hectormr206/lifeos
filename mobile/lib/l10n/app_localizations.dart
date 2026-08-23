@@ -2125,6 +2125,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'LifeOS could not put its icon in the system tray. The app keeps working and the window closes as usual. Details: {details}'**
   String trayUnavailableMessage(String details);
+
+  /// No description provided for @chatDayToday.
+  ///
+  /// In en, this message translates to:
+  /// **'Today'**
+  String get chatDayToday;
+
+  /// No description provided for @chatDayYesterday.
+  ///
+  /// In en, this message translates to:
+  /// **'Yesterday'**
+  String get chatDayYesterday;
 }
 
 class _AppLocalizationsDelegate

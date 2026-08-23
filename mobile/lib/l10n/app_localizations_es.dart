@@ -1154,4 +1154,10 @@ class AppLocalizationsEs extends AppLocalizations {
   String trayUnavailableMessage(String details) {
     return 'No se pudo poner el icono de LifeOS en la barra del sistema. La app sigue funcionando y la ventana se cierra como siempre. Detalle: $details';
   }
+
+  @override
+  String get chatDayToday => 'Hoy';
+
+  @override
+  String get chatDayYesterday => 'Ayer';
 }
