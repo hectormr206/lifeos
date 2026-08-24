@@ -1,4 +1,5 @@
 import '../data/source_content_extractor.dart';
+import 'briefing_source.dart';
 import 'morning_briefing.dart';
 
 /// One source's harvest after fetch + parse: its display [name], the parsed
@@ -7,11 +8,16 @@ import 'morning_briefing.dart';
 class SourceHarvest {
   const SourceHarvest({
     required this.name,
+    this.section = kDefaultBriefingSection,
     this.items = const [],
     this.failed = false,
   });
 
   final String name;
+
+  /// The theme this source was filed under. Carried from [BriefingSource] so
+  /// the assembler can group and cap by SECTION instead of by feed.
+  final String section;
   final List<ParsedFeedItem> items;
   final bool failed;
 }
@@ -19,15 +25,33 @@ class SourceHarvest {
 /// Pure briefing assembly — the fast, model-free core of the redesign.
 ///
 /// Mirrors the laptop's freshness rule (`briefing._is_fresh`): keep only items
-/// published TODAY or YESTERDAY in the device timezone. Then, per source:
-/// sort newest-first and cap at [cap]. Sources with zero fresh items (or that
-/// failed to fetch) are collected into [OnDeviceBriefing.skippedSources] for
-/// the "sin novedades hoy" note. NO model summarization happens here.
+/// published TODAY or YESTERDAY in the device timezone. Then it builds the
+/// briefing BY SECTION: each source contributes at most [perSourceCap] of its
+/// newest items, the sources of a theme are interleaved, and the theme stops
+/// at [sectionCap]. Sources with zero fresh items (or that failed to fetch)
+/// are collected into [OnDeviceBriefing.skippedSources] for the "sin novedades
+/// hoy" note. NO model summarization happens here.
 class BriefingAssembler {
-  const BriefingAssembler({this.cap = 10});
+  const BriefingAssembler({
+    this.perSourceCap = defaultPerSourceCap,
+    this.sectionCap = defaultSectionCap,
+  });
 
-  /// Max fresh items kept per source.
-  final int cap;
+  /// Most articles ONE source may contribute to its section.
+  ///
+  /// Measured on the real feed list on 2026-08-24: La Jornada alone published
+  /// 108 fresh items that day while Marca published 1. Capping per feed made
+  /// the briefing a mirror of who publishes loudest; capping per feed WITHIN a
+  /// theme keeps every source in the room without letting one own the shelf.
+  static const int defaultPerSourceCap = 6;
+
+  /// Most articles one SECTION may show. Seven themes at twelve is already a
+  /// long read — but they arrive collapsed behind their digest, so this is the
+  /// depth available to whoever opens a theme, not what anyone must read.
+  static const int defaultSectionCap = 12;
+
+  final int perSourceCap;
+  final int sectionCap;
 
   /// True iff [published], in the device's local day, is [now]'s day or the day
   /// before. Undated items (`published == null`) are NOT fresh — without a
@@ -46,8 +70,10 @@ class BriefingAssembler {
     required DateTime now,
     required DateTime generatedAt,
   }) {
-    final articles = <BriefingArticle>[];
     final skipped = <String>[];
+    // Section order = the order its first source appears in the config.
+    final sectionOrder = <String>[];
+    final freshBySection = <String, List<List<BriefingArticle>>>{};
 
     for (final harvest in mergeHarvestsByName(harvests)) {
       if (harvest.failed) {
@@ -66,18 +92,30 @@ class BriefingAssembler {
         continue;
       }
       final seenLinks = <String>{};
-      for (final item in fresh.where((i) => seenLinks.add(i.link)).take(cap)) {
-        articles.add(
+      final queue = [
+        for (final item in fresh
+            .where((i) => seenLinks.add(i.link))
+            .take(perSourceCap))
           BriefingArticle(
             sourceName: harvest.name,
+            section: harvest.section,
             title: item.title,
             url: item.link,
             description: item.description,
             publishedAt: item.published,
             hnObjectId: item.hnObjectId,
           ),
-        );
+      ];
+      if (queue.isEmpty) continue;
+      if (!freshBySection.containsKey(harvest.section)) {
+        sectionOrder.add(harvest.section);
       }
+      freshBySection.putIfAbsent(harvest.section, () => []).add(queue);
+    }
+
+    final articles = <BriefingArticle>[];
+    for (final section in sectionOrder) {
+      articles.addAll(_interleave(freshBySection[section]!, sectionCap));
     }
 
     return OnDeviceBriefing(
@@ -85,6 +123,30 @@ class BriefingAssembler {
       skippedSources: skipped,
       generatedAt: generatedAt,
     );
+  }
+
+  /// Round-robin across a section's sources, one article each per pass, until
+  /// [cap]. Taking six from the loudest feed and then six from the next would
+  /// bury the second source below the fold; interleaving means the top of a
+  /// theme is what several sources led with.
+  static List<BriefingArticle> _interleave(
+    List<List<BriefingArticle>> queues,
+    int cap,
+  ) {
+    final out = <BriefingArticle>[];
+    var depth = 0;
+    while (out.length < cap) {
+      var tookOne = false;
+      for (final queue in queues) {
+        if (depth >= queue.length) continue;
+        out.add(queue[depth]);
+        tookOne = true;
+        if (out.length == cap) return out;
+      }
+      if (!tookOne) break;
+      depth++;
+    }
+    return out;
   }
 }
 
@@ -102,11 +164,13 @@ List<SourceHarvest> mergeHarvestsByName(List<SourceHarvest> harvests) {
   final order = <String>[];
   final items = <String, List<ParsedFeedItem>>{};
   final failed = <String, bool>{};
+  final section = <String, String>{};
 
   for (final harvest in harvests) {
     if (!items.containsKey(harvest.name)) {
       order.add(harvest.name);
       failed[harvest.name] = true;
+      section[harvest.name] = harvest.section;
     }
     items.putIfAbsent(harvest.name, () => []).addAll(harvest.items);
     if (!harvest.failed) failed[harvest.name] = false;
@@ -116,6 +180,7 @@ List<SourceHarvest> mergeHarvestsByName(List<SourceHarvest> harvests) {
     for (final name in order)
       SourceHarvest(
         name: name,
+        section: section[name]!,
         items: items[name]!,
         failed: failed[name]!,
       ),

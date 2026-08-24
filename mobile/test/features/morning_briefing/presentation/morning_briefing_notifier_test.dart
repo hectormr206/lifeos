@@ -2,6 +2,9 @@
 // NO bulk model summarization (fetch + parse + freshness + group only), the
 // model runs ONLY on demand per item, and the on-demand full-article + HN
 // comments summaries are cached back onto the article.
+import 'package:lifeos/features/morning_briefing/domain/briefing_source.dart';
+import 'package:lifeos/features/morning_briefing/domain/section_digest_writer.dart';
+import 'package:lifeos/features/morning_briefing/domain/briefing_assembler.dart';
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -65,10 +68,17 @@ ProviderContainer _container({
   required FakeBriefingNotifications notifications,
   required DateTime now,
   String? languageCode,
+  BriefingSectionDigestWriter? digests,
 }) {
   final container = ProviderContainer(
     overrides: [
       localLlmEngineProvider.overrideWithValue(engine),
+      if (digests == null)
+        briefingSectionDigestWriterProvider.overrideWithValue(
+          const _NoDigests(),
+        )
+      else
+        briefingSectionDigestWriterProvider.overrideWithValue(digests),
       sourceFetcherProvider.overrideWithValue(fetcher),
       morningBriefingPreferencesProvider.overrideWithValue(prefs),
       briefingNotificationsProvider.overrideWithValue(notifications),
@@ -79,6 +89,25 @@ ProviderContainer _container({
   );
   addTearDown(container.dispose);
   return container;
+}
+
+/// A digest writer that writes nothing.
+///
+/// Most tests in this file are about fetching, translating or the on-demand
+/// summaries. The real per-section stage always talks to the model, so leaving
+/// it on would add its generation to every "no model call" assertion here and
+/// hang every test that gates `generate`. One test below uses the real one.
+class _NoDigests implements BriefingSectionDigestWriter {
+  const _NoDigests();
+
+  @override
+  Future<OnDeviceBriefing> fillDigests(
+    OnDeviceBriefing briefing, {
+    void Function(int index, int total)? onSection,
+  }) async => briefing;
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
 void main() {
@@ -144,7 +173,7 @@ void main() {
     expect(briefing.skippedSources, containsAll(['Vieja', 'Hacker News']));
   });
 
-  test('caps at 10 fresh items per source', () async {
+  test('cada fuente aporta como mucho su cuota dentro del tema', () async {
     final buffer = StringBuffer('<rss version="2.0"><channel><title>Prolija</title>');
     final rfc = _toRfc822(today.toUtc());
     for (var i = 0; i < 15; i++) {
@@ -170,7 +199,8 @@ void main() {
         .briefing!
         .groups
         .firstWhere((g) => g.sourceName == 'Prolija');
-    expect(group.articles.length, 10, reason: 'capped at 10 per source');
+    expect(group.articles.length, BriefingAssembler.defaultPerSourceCap,
+        reason: 'una fuente ruidosa no se come su sección');
   });
 
   test('errors when no source yields any fresh item', () async {
@@ -1055,5 +1085,40 @@ void main() {
     expect(container.read(morningBriefingNotifierProvider).sources.length, 1);
     await notifier.removeSource('https://new.com/rss');
     expect(container.read(morningBriefingNotifierProvider).sources, isEmpty);
+  });
+
+  // La etapa se silencia en el resto del archivo, así que ESTA es la que prueba
+  // que la generación la ejecuta de verdad: sin ella, el lector se queda sin lo
+  // único que iba a leer.
+  test('la generación escribe el resumen de cada tema', () async {
+    final engine = FakeLocalLlmEngine(
+      installed: true,
+      reply: (prompt) => prompt.contains('noticias de hoy sobre')
+          ? 'Lo que pasó en el tema.'
+          : 'otra cosa',
+    );
+    final container = _container(
+      engine: engine,
+      fetcher: FakeSourceFetcher(bodies: {
+        'https://a.com/rss': _datedRss('Fuente A', 'Noticia A1', today),
+        hnFrontPageUrl: '{"hits":[]}',
+      }),
+      prefs: FakeMorningBriefingPreferences(
+        initialSources: ['https://a.com/rss'],
+      ),
+      notifications: FakeBriefingNotifications(),
+      now: now,
+      digests: BriefingSectionDigestWriter(engine: engine),
+    );
+    final notifier = container.read(morningBriefingNotifierProvider.notifier);
+    await notifier.ready;
+
+    await notifier.generate();
+
+    final briefing = container.read(morningBriefingNotifierProvider).briefing!;
+    expect(
+      briefing.sectionDigests[kDefaultBriefingSection],
+      'Lo que pasó en el tema.',
+    );
   });
 }

@@ -52,10 +52,11 @@ class MorningBriefingScreen extends ConsumerWidget {
             if (state.translationFailure != null)
               _TranslationFailedNote(detail: state.translationFailure!),
             const SizedBox(height: 12),
-            for (final group in state.briefing!.groups)
-              _SourceSection(
-                key: ValueKey('src::${group.sourceName}'),
-                group: group,
+            for (final section in state.briefing!.sections)
+              _SectionBlock(
+                key: ValueKey('sec::${section.section}'),
+                group: section,
+                digest: state.briefing!.sectionDigests[section.section],
                 state: state,
                 notifier: notifier,
               ),
@@ -253,60 +254,126 @@ class _BriefingHeader extends StatelessWidget {
   }
 }
 
-/// A per-source COLLAPSIBLE section: a header showing `Source (count)`,
-/// COLLAPSED by default, that reveals the source's item cards when tapped. The
-/// titles/briefs are ALREADY translated (eagerly, at generation time) so the
-/// cards render in the app language immediately — no tap-to-translate.
-class _SourceSection extends StatelessWidget {
-  const _SourceSection({
+/// A per-THEME block: the section name, the paragraph that says what happened
+/// in it, and — folded underneath — the articles themselves.
+///
+/// This is the shape the whole briefing is read in. With 249 fresh articles on
+/// a normal day (measured 2026-08-24), reading card by card is not a briefing;
+/// the reader reads one paragraph per theme and decides what to open. So the
+/// paragraph is ALWAYS visible and the cards start folded.
+///
+/// When a theme has no paragraph — no model, or the generation failed — the
+/// headlines take its place. Nothing is invented to fill the gap, and the block
+/// never pretends to have summarized news it did not read.
+class _SectionBlock extends StatelessWidget {
+  const _SectionBlock({
     super.key,
     required this.group,
+    required this.digest,
     required this.state,
     required this.notifier,
   });
 
-  final BriefingGroup group;
+  final BriefingSectionGroup group;
+  final String? digest;
   final MorningBriefingState state;
   final MorningBriefingNotifier notifier;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
+    final text = digest?.trim() ?? '';
     return Card(
       margin: const EdgeInsets.only(top: 8, bottom: 4),
       clipBehavior: Clip.antiAlias,
-      child: Theme(
-        // Drop the ExpansionTile's default divider lines for a cleaner card.
-        data: theme.copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          // Collapsed by default; expansion state is kept per screen session.
-          initiallyExpanded: false,
-          maintainState: true,
-          leading: Container(width: 3, height: 20, color: LifeOSColors.teal),
-          title: Text(
-            '${group.sourceName} (${group.articles.length})',
-            style: theme.textTheme.titleMedium?.copyWith(
-              fontWeight: FontWeight.w600,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 14, 16, 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Container(
+                      width: 3,
+                      height: 20,
+                      color: LifeOSColors.teal,
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        group.section,
+                        style: theme.textTheme.titleMedium?.copyWith(
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                if (text.isNotEmpty)
+                  Text(text, style: theme.textTheme.bodyMedium)
+                else
+                  // The honest fallback: no paragraph, so the headlines speak.
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      for (final article in group.articles.take(4))
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 2),
+                          child: Text(
+                            '· ${article.displayTitle}',
+                            style: theme.textTheme.bodyMedium,
+                          ),
+                        ),
+                    ],
+                  ),
+                const SizedBox(height: 4),
+                Text(
+                  group.sourceNames.join(' · '),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ],
             ),
           ),
-          childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-          children: [
-            for (final article in group.articles)
-              _ArticleCard(
-                key: ValueKey(article.key),
-                article: article,
-                isSummarizing: state.isSummarizingArticle(article.key),
-                isSummaryQueued: state.isQueuedArticle(article.key),
-                summaryFailure: state.articleFailures[article.key],
-                isSummarizingComments: state.isSummarizingComments(article.key),
-                isCommentsQueued: state.isQueuedComments(article.key),
-                commentsFailure: state.commentFailures[article.key],
-                modelOnFallbackBackend: state.modelOnFallbackBackend,
-                onRequestSummary: () => notifier.summarizeArticle(article),
-                onRequestComments: () => notifier.summarizeComments(article),
+          Theme(
+            data: theme.copyWith(dividerColor: Colors.transparent),
+            child: ExpansionTile(
+              initiallyExpanded: false,
+              maintainState: true,
+              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+              title: Text(
+                'Ver las ${group.articles.length} noticias',
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: LifeOSColors.teal,
+                ),
               ),
-          ],
-        ),
+              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              children: [
+                for (final article in group.articles)
+                  _ArticleCard(
+                    key: ValueKey(article.key),
+                    article: article,
+                    isSummarizing: state.isSummarizingArticle(article.key),
+                    isSummaryQueued: state.isQueuedArticle(article.key),
+                    summaryFailure: state.articleFailures[article.key],
+                    isSummarizingComments:
+                        state.isSummarizingComments(article.key),
+                    isCommentsQueued: state.isQueuedComments(article.key),
+                    commentsFailure: state.commentFailures[article.key],
+                    modelOnFallbackBackend: state.modelOnFallbackBackend,
+                    onRequestSummary: () => notifier.summarizeArticle(article),
+                    onRequestComments: () => notifier.summarizeComments(article),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }

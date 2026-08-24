@@ -44,18 +44,21 @@ OnDeviceBriefing _briefing() => OnDeviceBriefing(
       articles: const [
         BriefingArticle(
           sourceName: 'Fuente A',
+          section: 'Mundo',
           title: 'Primera noticia de hoy',
           url: 'https://a.com/1',
           description: 'Detalle de la primera noticia',
         ),
         BriefingArticle(
           sourceName: 'Fuente A',
+          section: 'Mundo',
           title: 'Segunda de la mañana',
           url: 'https://a.com/2',
           description: 'Detalle de la segunda',
         ),
         BriefingArticle(
           sourceName: 'Hacker News',
+          section: 'Tecnología',
           title: 'Historia de última hora',
           url: 'https://news.ycombinator.com/item?id=1',
           hnObjectId: '1',
@@ -71,6 +74,7 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
       articles: const [
         BriefingArticle(
           sourceName: 'English Source',
+          section: 'Mundo',
           title: 'The Future of AI',
           url: 'https://en.com/1',
           description: 'A look at the future',
@@ -79,6 +83,7 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
         ),
         BriefingArticle(
           sourceName: 'English Source',
+          section: 'Mundo',
           title: 'Untranslated Headline',
           url: 'https://en.com/2',
           description: 'Some brief',
@@ -86,6 +91,21 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
         ),
       ],
     );
+
+/// Opens the fold of the theme block titled [section].
+///
+/// The briefing is read by THEME now, so a test that wants a card first has to
+/// unfold its section — the same two steps the reader takes.
+Future<void> _openSection(WidgetTester tester, String section) async {
+  final block = find.ancestor(
+    of: find.text(section),
+    matching: find.byType(Card),
+  );
+  await tester.tap(
+    find.descendant(of: block, matching: find.textContaining('Ver las ')),
+  );
+  await tester.pumpAndSettle();
+}
 
 /// Wraps [app] in the fully faked provider scope. Returns the whole scoped
 /// widget rather than a bare override list because Riverpod 3 does not export
@@ -165,20 +185,21 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    // Header shows the source name + its item count.
-    expect(find.text('Fuente A (2)'), findsOneWidget);
-    expect(find.text('Hacker News (1)'), findsOneWidget);
+    // Cabecera por TEMA, con las fuentes que lo alimentan acreditadas debajo.
+    expect(find.text('Mundo'), findsOneWidget);
+    expect(find.text('Tecnología'), findsOneWidget);
+    expect(find.text('Fuente A'), findsOneWidget);
+    expect(find.text('Hacker News'), findsOneWidget);
   });
 
-  testWidgets('sources are COLLAPSED by default and expand on tap', (tester) async {
+  testWidgets('los temas vienen PLEGADOS y se abren al tocar', (tester) async {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
     // Collapsed: the item cards are not visible (offstage children are skipped).
     expect(find.text('Primera noticia de hoy'), findsNothing);
 
-    await tester.tap(find.text('Fuente A (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
 
     // Expanded: the source's cards are revealed.
     expect(find.text('Primera noticia de hoy'), findsOneWidget);
@@ -189,8 +210,7 @@ void main() {
     await tester.pumpWidget(_app(_translatedBriefing()));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('English Source (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
 
     // First article: shows the cached Spanish translation, not the English title.
     expect(find.text('El futuro de la IA'), findsOneWidget);
@@ -204,8 +224,7 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
-    await tester.tap(find.text('Hacker News (1)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Tecnología');
 
     expect(find.text('Historia de última hora'), findsOneWidget);
     expect(find.textContaining('Sin resumen'), findsOneWidget);
@@ -222,8 +241,7 @@ void main() {
 
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Fuente A (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
 
     await tester.tap(find.text('Ver noticia completa →').first);
     await tester.pumpAndSettle();
@@ -240,8 +258,7 @@ void main() {
 
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Fuente A (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
     await tester.tap(find.text('Ver noticia completa →').first);
     await tester.pumpAndSettle();
 
@@ -257,8 +274,7 @@ void main() {
 
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Fuente A (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
     await tester.tap(find.text('Ver noticia completa →').first);
     await tester.pumpAndSettle();
 
@@ -288,8 +304,7 @@ void main() {
 
     await tester.pumpWidget(_app(_briefing(), engine, fetcher));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Fuente A (2)'));
-    await tester.pumpAndSettle();
+    await _openSection(tester, 'Mundo');
 
     await tester.tap(find.text('Ver resumen completo').first);
     await tester.pump();
@@ -317,8 +332,7 @@ void main() {
   group('a failed summary says WHAT failed and what to do about it', () {
     /// Opens "Fuente A" and taps the first "Ver resumen completo".
     Future<void> requestFirstSummary(WidgetTester tester) async {
-      await tester.tap(find.text('Fuente A (2)'));
-      await tester.pumpAndSettle();
+      await _openSection(tester, 'Mundo');
       await tester.tap(find.text('Ver resumen completo').first);
       await tester.pumpAndSettle();
     }
@@ -421,8 +435,7 @@ void main() {
   // the user can expand and quote back.
   group('the underlying exception is reachable, and never the headline', () {
     Future<void> requestFirstSummary(WidgetTester tester) async {
-      await tester.tap(find.text('Fuente A (2)'));
-      await tester.pumpAndSettle();
+      await _openSection(tester, 'Mundo');
       await tester.tap(find.text('Ver resumen completo').first);
       await tester.pumpAndSettle();
     }
@@ -531,8 +544,9 @@ void main() {
       await tester.tap(find.byType(FloatingActionButton));
       await tester.pumpAndSettle();
 
-      // Sanity: the regenerated briefing really is the English feed.
-      expect(find.text('English Source (1)'), findsOneWidget);
+      // Sanity: the regenerated briefing really is the English feed — el bloque
+      // acredita a su fuente debajo del tema.
+      expect(find.text('English Source'), findsOneWidget);
       expect(find.textContaining('idioma original'), findsOneWidget);
       expect(find.text('Ver detalles técnicos'), findsOneWidget);
 
@@ -556,8 +570,7 @@ void main() {
         _app(_briefing(), engine, FakeSourceFetcher(bodies: {'https://a.com/1': page})),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Fuente A (2)'));
-      await tester.pumpAndSettle();
+      await _openSection(tester, 'Mundo');
 
       await tester.tap(find.text('Ver resumen completo').first);
       await tester.pump();
@@ -586,8 +599,7 @@ void main() {
         _app(_briefing(), engine, FakeSourceFetcher(bodies: {'https://a.com/1': page})),
       );
       await tester.pumpAndSettle();
-      await tester.tap(find.text('Fuente A (2)'));
-      await tester.pumpAndSettle();
+      await _openSection(tester, 'Mundo');
       await tester.tap(find.text('Ver resumen completo').first);
       await tester.pump();
       await tester.pump();

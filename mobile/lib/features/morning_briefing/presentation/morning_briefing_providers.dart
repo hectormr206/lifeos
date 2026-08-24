@@ -1,5 +1,6 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../local_model/presentation/local_model_providers.dart';
 import '../data/dio_source_fetcher.dart';
 import '../data/local_briefing_scheduler.dart';
 import '../data/source_content_extractor.dart';
@@ -9,6 +10,7 @@ import '../domain/briefing_background_work.dart';
 import '../domain/briefing_notifications.dart';
 import '../domain/briefing_scheduler.dart';
 import '../domain/morning_briefing_preferences.dart';
+import '../domain/section_digest_writer.dart';
 import '../domain/source_fetcher.dart';
 
 /// Local-only persistence for the on-device briefing (sources + last briefing).
@@ -29,8 +31,21 @@ final sourceContentExtractorProvider = Provider<SourceContentExtractor>(
   (ref) => const SourceContentExtractor(),
 );
 
-/// Pure freshness/group/cap assembler (today/yesterday, 10 per source). Plain
-/// provider; overridable in tests.
+/// Writer of the per-section paragraph — the last model stage of a generation.
+///
+/// It is a PROVIDER and not a `new` inside the notifier so a test can silence
+/// this stage: most briefing tests are about fetching, translating or the
+/// on-demand summaries, and a stage that always talks to the model would put
+/// its own generation into every one of those assertions.
+final briefingSectionDigestWriterProvider =
+    Provider<BriefingSectionDigestWriter>(
+      (ref) => BriefingSectionDigestWriter(
+        engine: ref.read(localLlmEngineProvider),
+      ),
+    );
+
+/// Pure freshness/group/cap assembler (today/yesterday, per-source and
+/// per-section caps). Plain provider; overridable in tests.
 final briefingAssemblerProvider = Provider<BriefingAssembler>(
   (ref) => const BriefingAssembler(),
 );

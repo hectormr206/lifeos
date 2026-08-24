@@ -56,7 +56,7 @@ void main() {
 
     test('el tope por fuente se aplica al total fusionado, no a cada mitad', () {
       // Si no, dos entradas duplicadas darían el doble de noticias que una.
-      const capped = BriefingAssembler(cap: 3);
+      const capped = BriefingAssembler(perSourceCap: 3);
       final b = capped.assemble([
         SourceHarvest(
             name: 'BBC Mundo',

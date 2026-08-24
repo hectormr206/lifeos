@@ -86,3 +86,8 @@ void main() {
     });
   });
 }
+
+// El sello del boletín es la única evidencia visible de si la generación
+// automática ocurrió. Antes se ponía ANTES de descargar nada, así que decía
+// cuándo ARRANCÓ la tarea; leído por el usuario, y por mí al diagnosticar,
+// parecía la hora en que el boletín quedó hecho.

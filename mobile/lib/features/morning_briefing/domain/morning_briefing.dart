@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import 'briefing_source.dart' show kDefaultBriefingSection;
+
 /// One news article inside an on-device morning briefing ("boletín matutino").
 ///
 /// Rebuilt to mirror the laptop's per-item card (axi/templates/briefings.html):
@@ -16,6 +18,7 @@ class BriefingArticle {
     required this.sourceName,
     required this.title,
     required this.url,
+    this.section = kDefaultBriefingSection,
     this.description = '',
     this.publishedAt,
     this.hnObjectId,
@@ -29,6 +32,12 @@ class BriefingArticle {
 
   /// Human-readable source name (feed/channel title or "Hacker News").
   final String sourceName;
+
+  /// The THEME this article belongs to — the section configured on its source
+  /// ("Mundo", "México", "Tecnología"…). It is what the briefing is grouped
+  /// and summarized by: three world feeds telling the same story belong under
+  /// one heading, not in three separate blocks.
+  final String section;
 
   /// Feed-native headline (kept in its original language — see the translation
   /// note in the notifier: on-demand summaries carry the app language instead).
@@ -131,6 +140,7 @@ class BriefingArticle {
     sourceName: sourceName,
     title: title,
     url: url,
+    section: section,
     description: description,
     publishedAt: publishedAt,
     hnObjectId: hnObjectId,
@@ -146,6 +156,7 @@ class BriefingArticle {
     'sourceName': sourceName,
     'title': title,
     'url': url,
+    'section': section,
     'description': description,
     if (publishedAt != null) 'publishedAt': publishedAt!.toIso8601String(),
     if (hnObjectId != null) 'hnObjectId': hnObjectId,
@@ -163,6 +174,10 @@ class BriefingArticle {
         sourceName: (json['sourceName'] as String?) ?? '',
         title: (json['title'] as String?) ?? '',
         url: (json['url'] as String?) ?? '',
+        // A briefing cached before sections existed has no field; it reads as
+        // the default shelf rather than crashing or vanishing.
+        section:
+            (json['section'] as String?) ?? kDefaultBriefingSection,
         description: (json['description'] as String?) ?? '',
         publishedAt: DateTime.tryParse((json['publishedAt'] as String?) ?? ''),
         hnObjectId: json['hnObjectId'] as String?,
@@ -180,6 +195,7 @@ class BriefingArticle {
       other.sourceName == sourceName &&
       other.title == title &&
       other.url == url &&
+      other.section == section &&
       other.description == description &&
       other.publishedAt == publishedAt &&
       other.hnObjectId == hnObjectId &&
@@ -195,6 +211,7 @@ class BriefingArticle {
     sourceName,
     title,
     url,
+    section,
     description,
     publishedAt,
     hnObjectId,
@@ -216,6 +233,25 @@ class BriefingGroup {
   final List<BriefingArticle> articles;
 }
 
+/// A run of articles that share a SECTION — the theme block the reader
+/// actually navigates ("Mundo", "México"…), with the sources mixed inside.
+class BriefingSectionGroup {
+  const BriefingSectionGroup({required this.section, required this.articles});
+
+  final String section;
+  final List<BriefingArticle> articles;
+
+  /// The distinct sources feeding this theme, in appearance order — what the
+  /// header credits so the reader still knows who is talking.
+  List<String> get sourceNames {
+    final seen = <String>[];
+    for (final a in articles) {
+      if (!seen.contains(a.sourceName)) seen.add(a.sourceName);
+    }
+    return seen;
+  }
+}
+
 /// A briefing built entirely ON DEVICE — the phone fetching, parsing, and
 /// freshness-filtering its configured news feeds plus Hacker News, with NO bulk
 /// model summarization (that runs only on demand, per item). Deliberately
@@ -225,6 +261,7 @@ class OnDeviceBriefing {
   const OnDeviceBriefing({
     required this.articles,
     this.skippedSources = const [],
+    this.sectionDigests = const {},
     required this.generatedAt,
   });
 
@@ -235,6 +272,12 @@ class OnDeviceBriefing {
   /// Names of sources that returned zero fresh items today (shown as a
   /// "sin novedades hoy" note).
   final List<String> skippedSources;
+
+  /// One short paragraph per section, written on-device from the headlines of
+  /// that theme — what the reader reads to decide what to open. A section
+  /// missing from this map has no paragraph, and its headlines speak for
+  /// themselves; nothing is ever invented to fill the gap.
+  final Map<String, String> sectionDigests;
 
   /// When this briefing was produced (device local time).
   final DateTime generatedAt;
@@ -256,11 +299,50 @@ class OnDeviceBriefing {
     return out;
   }
 
+  /// Articles grouped into consecutive same-SECTION runs (build order
+  /// preserved). This is the grouping the screen renders.
+  List<BriefingSectionGroup> get sections {
+    final out = <BriefingSectionGroup>[];
+    for (final article in articles) {
+      if (out.isNotEmpty && out.last.section == article.section) {
+        out.last.articles.add(article);
+      } else {
+        out.add(
+          BriefingSectionGroup(section: article.section, articles: [article]),
+        );
+      }
+    }
+    return out;
+  }
+
   /// Returns a copy with the article identified by [key] replaced by [updated].
   OnDeviceBriefing replaceArticle(String key, BriefingArticle updated) =>
       OnDeviceBriefing(
         articles: articles.map((a) => a.key == key ? updated : a).toList(),
         skippedSources: skippedSources,
+        sectionDigests: sectionDigests,
+        generatedAt: generatedAt,
+      );
+
+  /// Returns a copy stamped with the instant the briefing FINISHED.
+  ///
+  /// The stamp used to be taken before the first fetch, so "Generado 08:10"
+  /// meant "started at 08:10" and read to the user as "this is what 08:10
+  /// looked like". It is the only visible evidence of whether the automatic
+  /// run happened, so it has to say when the briefing was actually ready.
+  OnDeviceBriefing stampedAt(DateTime finishedAt) => OnDeviceBriefing(
+    articles: articles,
+    skippedSources: skippedSources,
+    sectionDigests: sectionDigests,
+    generatedAt: finishedAt,
+  );
+
+  /// Returns a copy carrying [digests] as its per-section paragraphs.
+  OnDeviceBriefing withSectionDigests(Map<String, String> digests) =>
+      OnDeviceBriefing(
+        articles: articles,
+        skippedSources: skippedSources,
+        sectionDigests: digests,
         generatedAt: generatedAt,
       );
 
@@ -274,6 +356,7 @@ class OnDeviceBriefing {
   Map<String, dynamic> toJson() => {
     'articles': articles.map((a) => a.toJson()).toList(),
     'skippedSources': skippedSources,
+    if (sectionDigests.isNotEmpty) 'sectionDigests': sectionDigests,
     'generatedAt': generatedAt.toIso8601String(),
   };
 
@@ -285,6 +368,13 @@ class OnDeviceBriefing {
         skippedSources: ((json['skippedSources'] as List<dynamic>?) ?? const [])
             .map((e) => e.toString())
             .toList(),
+        sectionDigests: {
+          for (final entry
+              in ((json['sectionDigests'] as Map<dynamic, dynamic>?) ??
+                      const {})
+                  .entries)
+            entry.key.toString(): entry.value.toString(),
+        },
         generatedAt:
             DateTime.tryParse((json['generatedAt'] as String?) ?? '') ??
             DateTime.now(),
@@ -315,14 +405,24 @@ class OnDeviceBriefing {
       other is OnDeviceBriefing &&
       _listEquals(other.articles, articles) &&
       _stringListEquals(other.skippedSources, skippedSources) &&
+      _sameDigests(other.sectionDigests, sectionDigests) &&
       other.generatedAt == generatedAt;
 
   @override
   int get hashCode => Object.hash(
     Object.hashAll(articles),
     Object.hashAll(skippedSources),
+    Object.hashAll(sectionDigests.entries.map((e) => Object.hash(e.key, e.value))),
     generatedAt,
   );
+}
+
+bool _sameDigests(Map<String, String> a, Map<String, String> b) {
+  if (a.length != b.length) return false;
+  for (final entry in a.entries) {
+    if (b[entry.key] != entry.value) return false;
+  }
+  return true;
 }
 
 bool _listEquals(List<BriefingArticle> a, List<BriefingArticle> b) {

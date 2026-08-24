@@ -40,7 +40,7 @@ void main() {
     expect(briefing.skippedSources, containsAll(['Vacia', 'Caida']));
   });
 
-  test('caps at 10 items per source', () {
+  test('cada fuente aporta como mucho su cuota dentro del tema', () {
     final items = List.generate(
         14, (i) => _item('n$i', DateTime(2026, 7, 22, 0, i)));
     final briefing = assembler.assemble(
@@ -48,7 +48,8 @@ void main() {
       now: now,
       generatedAt: generatedAt,
     );
-    expect(briefing.groups.single.articles.length, 10);
+    expect(briefing.groups.single.articles.length,
+        BriefingAssembler.defaultPerSourceCap);
   });
 
   test('JSON round-trips through encode/decode', () {

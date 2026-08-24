@@ -1,4 +1,3 @@
-import '../domain/briefing_source.dart';
 import 'dart:async';
 
 import 'package:timezone/timezone.dart' as tz;
@@ -6,15 +5,17 @@ import 'package:timezone/timezone.dart' as tz;
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/domain/on_device_translator.dart';
 import '../domain/briefing_assembler.dart';
-import '../domain/briefing_brief_writer.dart';
 import '../domain/briefing_background_work.dart';
+import '../domain/briefing_brief_writer.dart';
 import '../domain/briefing_harvester.dart';
 import '../domain/briefing_notifications.dart';
 import '../domain/briefing_schedule.dart';
 import '../domain/briefing_scheduler.dart';
+import '../domain/briefing_source.dart';
 import '../domain/briefing_translation.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/morning_briefing_preferences.dart';
+import '../domain/section_digest_writer.dart';
 
 /// Everything the headless background generation needs — a MINIMAL service
 /// graph (no Riverpod, no UI providers), fully injectable so the runner body
@@ -128,9 +129,9 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   // The harvester fetches URLs; the section is what the user reads them under.
   // Only the ENABLED ones: a source turned off must not keep being fetched in
   // the background, or "desactivada" means nothing.
-  final harvests = await deps.harvester.harvestAll([
-    for (final s in enabledBriefingSources(sources)) s.url,
-  ]);
+  final harvests = await deps.harvester.harvestAll(
+    enabledBriefingSources(sources),
+  );
   final assembled = deps.assembler.assemble(
     harvests,
     now: base,
@@ -168,6 +169,11 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
         fetcher: deps.harvester.fetcher,
         extractor: deps.harvester.extractor,
       ).fillMissing(briefing);
+      // Last stage, with the model still warm: one paragraph per section, so
+      // the reader can decide what to open without reading every card.
+      briefing = await BriefingSectionDigestWriter(
+        engine: engine,
+      ).fillDigests(briefing);
     } catch (_) {
       briefing = assembled; // keep originals — never lose the fetched news
     } finally {
@@ -178,6 +184,10 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
       }
     }
   }
+
+  // Stamped at the END: the visible date has to say when the briefing was
+  // ready, not when the task woke up.
+  briefing = briefing.stampedAt(deps.now());
 
   await deps.preferences.saveLastBriefing(briefing);
 

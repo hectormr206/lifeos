@@ -1,5 +1,6 @@
 import '../data/source_content_extractor.dart';
 import 'briefing_assembler.dart';
+import 'briefing_source.dart';
 import 'source_fetcher.dart';
 
 /// Hacker News front-page candidates via the Algolia JSON API. Fetched with the
@@ -11,6 +12,10 @@ const String hnFrontPageUrl =
 
 /// The HN Algolia single-item (comments thread) endpoint prefix.
 const String hnItemUrlPrefix = 'https://hn.algolia.com/api/v1/items/';
+
+/// Hacker News is always fetched, but it belongs to a theme like everything
+/// else so it gets a heading and a digest instead of floating loose.
+const String hackerNewsSection = 'Tecnología';
 
 /// Reusable fetch+parse stage of the briefing pipeline: harvests every
 /// configured feed plus Hacker News into [SourceHarvest]es, with per-source
@@ -30,14 +35,16 @@ class BriefingHarvester {
   /// fetch with its 0-based index; [onHackerNews] fires before the HN fetch —
   /// both are UI-progress seams, unused by the background path.
   Future<List<SourceHarvest>> harvestAll(
-    List<String> sources, {
+    List<BriefingSource> sources, {
     void Function(int index, int total)? onFeed,
     void Function()? onHackerNews,
   }) async {
     final harvests = <SourceHarvest>[];
     for (var i = 0; i < sources.length; i++) {
       onFeed?.call(i, sources.length);
-      harvests.add(await harvestFeed(sources[i]));
+      harvests.add(
+        await harvestFeed(sources[i].url, section: sources[i].displaySection),
+      );
     }
     onHackerNews?.call();
     harvests.add(await harvestHackerNews());
@@ -46,16 +53,23 @@ class BriefingHarvester {
 
   /// Fetch + parse ONE feed URL. Never throws: any failure yields a
   /// `failed: true` harvest labeled with the URL's host.
-  Future<SourceHarvest> harvestFeed(String url) async {
+  Future<SourceHarvest> harvestFeed(
+    String url, {
+    String section = kDefaultBriefingSection,
+  }) async {
     try {
       final body = await fetcher.fetch(url);
       final feed = extractor.parseFeed(body, url: url);
       final name = feed.sourceTitle.trim().isEmpty
           ? hostLabel(url)
           : feed.sourceTitle.trim();
-      return SourceHarvest(name: name, items: feed.items);
+      return SourceHarvest(name: name, section: section, items: feed.items);
     } catch (_) {
-      return SourceHarvest(name: hostLabel(url), failed: true);
+      return SourceHarvest(
+        name: hostLabel(url),
+        section: section,
+        failed: true,
+      );
     }
   }
 
@@ -64,9 +78,17 @@ class BriefingHarvester {
     try {
       final body = await fetcher.fetch(hnFrontPageUrl);
       final feed = extractor.parseHackerNews(body);
-      return SourceHarvest(name: feed.sourceTitle, items: feed.items);
+      return SourceHarvest(
+        name: feed.sourceTitle,
+        section: hackerNewsSection,
+        items: feed.items,
+      );
     } catch (_) {
-      return const SourceHarvest(name: 'Hacker News', failed: true);
+      return const SourceHarvest(
+        name: 'Hacker News',
+        section: hackerNewsSection,
+        failed: true,
+      );
     }
   }
 

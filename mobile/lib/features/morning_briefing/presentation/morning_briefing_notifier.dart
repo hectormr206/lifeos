@@ -438,7 +438,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // Shared fetch+parse stage (also the background task's) with UI progress.
     final harvester = BriefingHarvester(fetcher: fetcher, extractor: extractor);
     final harvests = await harvester.harvestAll(
-      [for (final s in enabledBriefingSources(state.sources)) s.url],
+      enabledBriefingSources(state.sources),
       onFeed: (i, total) => state = state.copyWith(
         phase: BriefingPhase.fetching,
         progressLabel: 'Leyendo fuente ${i + 1} de ${total + 1}…',
@@ -473,6 +473,14 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // them — this is the phone doing the same. Runs BEFORE the notification,
     // so "tu boletín está listo" is only ever said about a finished briefing.
     briefing = await _writeMissingBriefs(briefing);
+
+    // FOURTH stage: one paragraph per section — the thing the reader reads to
+    // decide what to open. Last, so it summarizes the FINAL text of each card
+    // (translated, and with the written briefs already in place).
+    briefing = await _writeSectionDigests(briefing);
+    // Stamp it now that it IS a briefing: the date on screen is the reader's
+    // only evidence of whether the automatic run happened.
+    briefing = briefing.stampedAt(clock());
 
     _articleAttempts.clear();
     _commentAttempts.clear();
@@ -532,6 +540,26 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
           if (_disposed) return;
           state = state.copyWith(
             progressLabel: 'Resumiendo noticias ${i + 1} de $total…',
+          );
+        },
+      );
+    } catch (_) {
+      return briefing;
+    }
+  }
+
+  /// Writes the per-section paragraph. Best-effort like every model stage: a
+  /// failure leaves the briefing exactly as it came in, with its headlines.
+  Future<OnDeviceBriefing> _writeSectionDigests(
+    OnDeviceBriefing briefing,
+  ) async {
+    try {
+      return await ref.read(briefingSectionDigestWriterProvider).fillDigests(
+        briefing,
+        onSection: (i, total) {
+          if (_disposed) return;
+          state = state.copyWith(
+            progressLabel: 'Resumiendo el tema ${i + 1} de $total…',
           );
         },
       );
