@@ -100,19 +100,19 @@ void main() {
     expect(await h.prefs.schedule(), const BriefingSchedule(enabled: true, hour: 8, minute: 0));
     expect(h.scheduler.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace),
         reason: 'reminder armed for today 8:00 (still ahead of 6:00)');
-    expect(h.backgroundWork.lastDelay, const Duration(hours: 2),
-        reason: 'the WorkManager one-off is armed for the SAME instant (6:00 → 8:00)');
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 1, minutes: 40),
+        reason: 'the work is armed for the START (6:00 → 7:40), so las 8:00 lo encuentran hecho');
   });
 
   test('arming also schedules the background one-off with the next-run delay', () async {
     final h = _harness(now: morning, initialSchedule: const BriefingSchedule(enabled: true));
     await h.notifier.ready;
 
-    expect(h.backgroundWork.lastDelay, const Duration(hours: 2),
-        reason: 'hydration arms the headless generation for today 8:00');
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 1, minutes: 40),
+        reason: 'hydration arms the headless generation to FINISH by today 8:00');
 
     await h.notifier.setScheduleTime(9, 15);
-    expect(h.backgroundWork.lastDelay, const Duration(hours: 3, minutes: 15),
+    expect(h.backgroundWork.lastDelay, const Duration(hours: 2, minutes: 55),
         reason: 'a schedule change re-registers the work at the new instant');
   });
 

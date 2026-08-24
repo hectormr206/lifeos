@@ -104,7 +104,8 @@ void main() {
     expect(h.prefs.saveCount, 0);
     expect(h.notifications.shown, 0);
     expect(h.reminder.lastScheduled, DateTime(2026, 7, 23, 8, 0).add(kBriefingReminderGrace));
-    expect(h.work.lastDelay, DateTime(2026, 7, 23, 8, 0).difference(atSlot),
+    expect(h.work.lastDelay,
+        DateTime(2026, 7, 23, 8, 0).subtract(BriefingSchedule.lead).difference(atSlot),
         reason: 'next one-off armed for tomorrow — the chain is self-perpetuating');
   });
 
@@ -182,7 +183,7 @@ void main() {
     expect(h.work.scheduledDelays, isEmpty);
   });
 
-  test('fired BEFORE the slot → skips (shouldRunNow) and re-arms for today\'s slot', () async {
+  test('fired BEFORE the start → skips (shouldRunNow) and re-arms for today\'s start', () async {
     final early = DateTime(2026, 7, 22, 7, 30);
     final h = _harness(now: early);
 
@@ -190,7 +191,8 @@ void main() {
 
     expect(h.prefs.saveCount, 0);
     expect(h.reminder.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace));
-    expect(h.work.lastDelay, const Duration(minutes: 30));
+    expect(h.work.lastDelay, const Duration(minutes: 10),
+        reason: 'el arranque de un boletín de las 8:00 es a las 7:40');
   });
 
   test('a HUNG run hits the hard timeout and still completes cleanly', () async {

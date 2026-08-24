@@ -61,9 +61,13 @@ class SharedPrefsMorningBriefingPreferences
     // Dedupe on the way out, not only on the way in: a list that already
     // holds the same feed twice (pasted by hand, or filed under two sections)
     // would otherwise keep showing two identical groups forever.
-    return dedupeBriefingSources([
-      for (final line in stored) BriefingSource.decode(line),
-    ]);
+    // Heal on the way out: a feed that died after we shipped it lives on in
+    // every device's stored list, where editing the defaults never reaches it.
+    return healBriefingSources(
+      dedupeBriefingSources([
+        for (final line in stored) BriefingSource.decode(line),
+      ]),
+    );
   }
 
   @override

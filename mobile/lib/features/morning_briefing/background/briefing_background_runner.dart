@@ -223,7 +223,11 @@ Future<void> _rearm(
   await deps.reminderScheduler.scheduleReminder(
     next.add(kBriefingReminderGrace),
   );
-  await deps.backgroundWork.scheduleOneOff(next.difference(base));
+  // Arm the WORK at the start instant and the REMINDER at the promised hour:
+  // the generation needs a head start to be finished when the reader looks.
+  await deps.backgroundWork.scheduleOneOff(
+    next.subtract(BriefingSchedule.lead).difference(base),
+  );
 }
 
 Future<void> _rearmSafely(BriefingBackgroundDeps deps) async {

@@ -142,7 +142,9 @@ const List<BriefingSource> _shipped = [
     section: 'Mundo',
   ),
   BriefingSource(
-    url: 'https://elpais.com/rss/elpais/portada.xml',
+    // No la portada de `elpais.com/rss/...`: ese feed sirve noticias de 2020
+    // (medido el 2026-08-24). Ver [deadBriefingSources].
+    url: 'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada',
     section: 'Mundo',
   ),
   BriefingSource(
@@ -161,10 +163,6 @@ const List<BriefingSource> _shipped = [
     section: 'Tecnología',
   ),
   BriefingSource(url: 'https://hipertextual.com/feed', section: 'Tecnología'),
-  BriefingSource(
-    url: 'https://www.genbeta.com/index.xml',
-    section: 'Tecnología',
-  ),
   BriefingSource(
     url: 'https://www.microsiervos.com/index.xml',
     section: 'Tecnología',
@@ -192,10 +190,6 @@ const List<BriefingSource> _shipped = [
   ),
   BriefingSource(
     url: 'https://www.scientificamerican.com/platform/syndication/rss/',
-    section: 'Ciencia y salud',
-  ),
-  BriefingSource(
-    url: 'https://www.who.int/rss-feeds/news-english.xml',
     section: 'Ciencia y salud',
   ),
   // Deportes
@@ -254,6 +248,60 @@ String briefingSourceKey(String url) {
 /// the same headlines in two groups with the same name, which reads like a
 /// bug because it is one. The first entry wins so the order the user sees
 /// does not shuffle.
+/// Built-in feeds that stopped publishing, mapped to their live replacement
+/// (or to null when there is none and the entry should simply go).
+///
+/// WHY A MAP AND NOT JUST AN EDIT TO `_shipped`. The source list is written to
+/// the device the first time the briefing screen is opened, and from then on
+/// [MorningBriefingPreferences.sources] returns THAT list — editing the
+/// shipped defaults never reaches anyone who already used the app. This is the
+/// same lesson the BBC duplicate taught in `mergeHarvestsByName`, one layer up.
+///
+/// Measured 2026-08-24, each by fetching the feed and reading the date of its
+/// NEWEST item:
+///   * El País portada  → newest item from 27 February 2020 (six years stale);
+///     `feeds.elpais.com/mrss-s/...` is the live one, 145 items from today.
+///   * Genbeta          → newest item 31 December 2025; `/feed` returns 404.
+///   * OMS (inglés)     → newest item 25 February 2026.
+const Map<String, String?> deadBriefingSources = {
+  'https://elpais.com/rss/elpais/portada.xml':
+      'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada',
+  'https://www.genbeta.com/index.xml': null,
+  'https://www.who.int/rss-feeds/news-english.xml': null,
+};
+
+/// Rewrites dead built-in feeds to their live replacement and drops the ones
+/// that have none, leaving everything else — including anything the user added
+/// by hand — exactly as it was.
+///
+/// A source the user switched OFF stays off: healing fixes a broken address,
+/// it does not overrule a decision. Running it twice changes nothing.
+List<BriefingSource> healBriefingSources(List<BriefingSource> sources) {
+  final healed = <BriefingSource>[];
+  for (final source in sources) {
+    final key = briefingSourceKey(source.url);
+    final match = deadBriefingSources.keys.where(
+      (dead) => briefingSourceKey(dead) == key,
+    );
+    if (match.isEmpty) {
+      healed.add(source);
+      continue;
+    }
+    final replacement = deadBriefingSources[match.first];
+    if (replacement == null) continue;
+    healed.add(
+      BriefingSource(
+        url: replacement,
+        section: source.section,
+        enabled: source.enabled,
+        builtIn: source.builtIn,
+      ),
+    );
+  }
+  // A device whose list already held the replacement now holds it twice.
+  return dedupeBriefingSources(healed);
+}
+
 List<BriefingSource> dedupeBriefingSources(List<BriefingSource> sources) {
   final seen = <String>{};
   return [

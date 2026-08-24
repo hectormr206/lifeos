@@ -23,6 +23,20 @@ class BriefingSchedule {
   static const int defaultHour = 8;
   static const int defaultMinute = 0;
 
+  /// How long BEFORE [hour]:[minute] the generation has to start so the
+  /// briefing is FINISHED — not merely started — at the hour the user chose.
+  ///
+  /// The chosen hour is a DEADLINE, not a starting gun. Measured on the test
+  /// Pixel on 2026-08-24: an 8:00 briefing was stamped 08:10, because reading
+  /// eighteen feeds, translating them and writing the missing briefs takes
+  /// minutes. Whoever asked for news at 7:00 wants to READ them at 7:00.
+  ///
+  /// Twenty minutes is deliberately more than the ten measured: the cost of
+  /// finishing early is slightly older news, and the cost of finishing late is
+  /// an empty screen at the exact moment the user looks. Revisit this number
+  /// when the pipeline grows work (a section digest will).
+  static const Duration lead = Duration(minutes: 20);
+
   /// Whether the daily automatic briefing is on.
   final bool enabled;
 
@@ -58,6 +72,26 @@ class BriefingSchedule {
     return candidate;
   }
 
+  /// The next instant the GENERATION has to begin so the briefing is ready at
+  /// [nextRun] — that is, [nextRun] minus [lead]. This is what the schedulers
+  /// arm; [nextRun] stays the promise made to the reader, and the fallback
+  /// reminder keeps pointing at THAT hour.
+  ///
+  /// The result is deliberately allowed to be in the PAST: between the start
+  /// instant and the promised hour there is still time to be useful, and a
+  /// negative delay means "as soon as the OS allows" to every scheduler here.
+  /// Deriving it from [nextRun] is what keeps today's reminder from silently
+  /// jumping to tomorrow the moment the start instant passes.
+  DateTime nextStart(
+    DateTime now, {
+    DateTime? lastGeneratedAt,
+    tz.Location? location,
+  }) => nextRun(
+    now,
+    lastGeneratedAt: lastGeneratedAt,
+    location: location,
+  ).subtract(lead);
+
   /// Whether an automatic run is due RIGHT NOW: the schedule is enabled,
   /// today's scheduled time already arrived, and no briefing was generated
   /// today yet ([lastGeneratedAt] — the already-generated-today guard).
@@ -67,8 +101,10 @@ class BriefingSchedule {
     tz.Location? location,
   }) {
     if (!enabled) return false;
-    final todaySlot = _slot(now, now.day, location);
-    if (now.isBefore(todaySlot)) return false;
+    // Due from the START moment, not from the deadline: at the deadline the
+    // briefing must already exist.
+    final todayStart = _slot(now, now.day, location).subtract(lead);
+    if (now.isBefore(todayStart)) return false;
     final lastLocal = _inZone(lastGeneratedAt, location);
     if (lastLocal != null && _sameDay(now, lastLocal)) return false;
     return true;

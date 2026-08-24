@@ -47,8 +47,11 @@ void main() {
       expect(off.shouldRunNow(DateTime(2026, 7, 22, 9, 0)), isFalse);
     });
 
-    test('false before today\'s slot', () {
-      expect(schedule.shouldRunNow(DateTime(2026, 7, 22, 7, 59)), isFalse);
+    test('false before today\'s START (the slot minus the lead)', () {
+      // El arranque de un boletín de las 8:00 es a las 7:40: a las 7:39
+      // todavía no toca, a las 7:59 ya lleva rato trabajando.
+      expect(schedule.shouldRunNow(DateTime(2026, 7, 22, 7, 39)), isFalse);
+      expect(schedule.shouldRunNow(DateTime(2026, 7, 22, 7, 59)), isTrue);
     });
 
     test('true at/after the slot with no briefing today', () {

@@ -383,11 +383,15 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // reminder below stays as the graceful floor (OS deferred/killed the
     // task), and the in-app timer covers the app-open case — the shared
     // already-generated-today guard keeps the three from double-generating.
-    await backgroundWork.scheduleOneOff(next.difference(base));
+    // The work starts a lead earlier than the promised hour; the reminder and
+    // the in-app timer keep their own meanings (the floor, and the app-open
+    // case). All three still share the already-generated-today guard.
+    final start = next.subtract(BriefingSchedule.lead);
+    await backgroundWork.scheduleOneOff(start.difference(base));
     if (_disposed) return;
     await scheduler.scheduleReminder(next.add(kBriefingReminderGrace));
     if (_disposed) return;
-    _autoRunTimer = Timer(next.difference(base), _onAutoRunTimer);
+    _autoRunTimer = Timer(start.difference(base), _onAutoRunTimer);
   }
 
   Future<void> _onAutoRunTimer() async {
