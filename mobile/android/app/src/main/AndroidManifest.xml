@@ -33,6 +33,13 @@
              silently drops the alarm). -->
     <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM"/>
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED"/>
+    <!-- REQUEST_IGNORE_BATTERY_OPTIMIZATIONS: el boletín automático tiene una
+         HORA. Medido en un Pixel el 2026-08-24, con la app en el bucket de
+         reposo RARE y sin esta exención, Android arrancó la tarea diez minutos
+         tarde y puede retrasarla horas. Es OPCIONAL y se concede desde la
+         pantalla del boletín, con el motivo delante; sin ella todo sigue
+         funcionando, sólo que a la hora que el sistema decida. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS"/>
     <!-- Optional biometric app lock (fingerprint / face): local_auth's Android
          BiometricPrompt needs USE_BIOMETRIC (API 28+). With
          AuthenticationOptions(biometricOnly = false) the OS automatically

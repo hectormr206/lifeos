@@ -26,6 +26,13 @@ enum AppPermission {
 
   /// REQUEST_INSTALL_PACKAGES — instalar las actualizaciones automáticas.
   installUnknownApps,
+
+  /// REQUEST_IGNORE_BATTERY_OPTIMIZATIONS — que Android deje de posponer el
+  /// boletín automático.
+  ///
+  /// Se concede desde la pantalla del boletín, con el motivo delante, y NUNCA
+  /// desde la bienvenida: ver [permissionsForPlatform].
+  batteryUnrestricted,
 }
 
 /// The permissions worth showing on [operatingSystem], in declaration order.
@@ -45,8 +52,9 @@ enum AppPermission {
 /// [supportsRuntimePermissionPrompts].
 List<AppPermission> permissionsForPlatform(String operatingSystem) => [
       for (final permission in AppPermission.values)
-        if (permission != AppPermission.installUnknownApps ||
-            supportsSideloadedApkInstall(operatingSystem))
+        if (permission != AppPermission.batteryUnrestricted &&
+            (permission != AppPermission.installUnknownApps ||
+                supportsSideloadedApkInstall(operatingSystem)))
           permission,
     ];
 
@@ -97,6 +105,8 @@ extension AppPermissionInfo on AppPermission {
         AppPermission.camera => Permission.camera,
         AppPermission.photos => Permission.photos,
         AppPermission.installUnknownApps => Permission.requestInstallPackages,
+        AppPermission.batteryUnrestricted =>
+          Permission.ignoreBatteryOptimizations,
       };
 
   /// Short user-facing name (neutral Spanish).
@@ -106,6 +116,7 @@ extension AppPermissionInfo on AppPermission {
         AppPermission.camera => 'Cámara',
         AppPermission.photos => 'Fotos',
         AppPermission.installUnknownApps => 'Instalar apps',
+        AppPermission.batteryUnrestricted => 'Boletín puntual',
       };
 
   /// One-line explanation of WHY LifeOS needs it (neutral Spanish).
@@ -117,5 +128,7 @@ extension AppPermissionInfo on AppPermission {
         AppPermission.photos => 'Para adjuntar imágenes desde tu galería.',
         AppPermission.installUnknownApps =>
           'Para instalar las actualizaciones automáticas de la app.',
+        AppPermission.batteryUnrestricted =>
+          'Para que Android no retrase tu boletín y esté listo a tu hora.',
       };
 }

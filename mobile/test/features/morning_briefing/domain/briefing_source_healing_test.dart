@@ -93,4 +93,50 @@ void main() {
       reason: 'lo que enviamos debe estar ya curado',
     );
   });
+
+  group('secciones', () {
+    // ENCONTRADO EN EL PIXEL, 2026-08-24: el teléfono guardó sus fuentes como
+    // URLs sueltas (de antes de que existieran las secciones), así que las
+    // dieciocho caían en "General" y el boletín era UN bloque de 74 noticias.
+    // Con el tope por sección eso habría borrado temas enteros.
+    test('una fuente que enviamos recupera su tema', () {
+      final healed = healBriefingSources([
+        const BriefingSource(
+          url: 'https://www.xataka.com/index.xml',
+          section: kDefaultBriefingSection,
+        ),
+      ]);
+      expect(healed.single.section, 'Tecnología');
+    });
+
+    test('no pisa el tema que el usuario eligió', () {
+      final healed = healBriefingSources([
+        const BriefingSource(
+          url: 'https://www.xataka.com/index.xml',
+          section: 'Mis cosas',
+        ),
+      ]);
+      expect(healed.single.section, 'Mis cosas');
+    });
+
+    test('una fuente ajena se queda donde está', () {
+      final healed = healBriefingSources([
+        const BriefingSource(
+          url: 'https://ejemplo.com/feed',
+          section: kDefaultBriefingSection,
+        ),
+      ]);
+      expect(healed.single.section, kDefaultBriefingSection);
+    });
+
+    test('el recambio de una fuente muerta también trae su tema', () {
+      final healed = healBriefingSources([
+        const BriefingSource(
+          url: 'https://elpais.com/rss/elpais/portada.xml',
+          section: kDefaultBriefingSection,
+        ),
+      ]);
+      expect(healed.single.section, 'Mundo');
+    });
+  });
 }

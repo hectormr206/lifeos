@@ -1,6 +1,8 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../local_model/presentation/local_model_providers.dart';
+import '../../permissions/domain/app_permission.dart';
+import '../../permissions/presentation/permissions_providers.dart';
 import '../data/dio_source_fetcher.dart';
 import '../data/local_briefing_scheduler.dart';
 import '../data/source_content_extractor.dart';
@@ -69,4 +71,15 @@ final briefingSchedulerProvider = Provider<BriefingScheduler>(
 /// Best-effort plugin wrapper; overridden with a fake in tests.
 final briefingBackgroundWorkProvider = Provider<BriefingBackgroundWork>(
   (ref) => WorkmanagerBriefingBackgroundWork(),
+);
+
+/// Whether Android is still allowed to postpone the briefing task.
+///
+/// A FutureProvider so the card is a pure read of the OS state: nothing is
+/// requested until the user asks for it. Invalidated after a grant so the card
+/// disappears immediately.
+final batteryUnrestrictedStateProvider = FutureProvider<PermissionState>(
+  (ref) => ref
+      .read(permissionsGatewayProvider)
+      .status(AppPermission.batteryUnrestricted),
 );

@@ -288,4 +288,5 @@ IconData _iconFor(AppPermission permission) => switch (permission) {
       AppPermission.camera => Icons.photo_camera_outlined,
       AppPermission.photos => Icons.photo_library_outlined,
       AppPermission.installUnknownApps => Icons.system_update_outlined,
+      AppPermission.batteryUnrestricted => Icons.battery_saver_outlined,
     };

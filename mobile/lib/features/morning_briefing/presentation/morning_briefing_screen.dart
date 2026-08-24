@@ -7,9 +7,12 @@ import 'package:go_router/go_router.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../theme/lifeos_theme.dart';
 import '../../local_model/presentation/engine_failure_details.dart';
+import '../../permissions/domain/app_permission.dart';
+import '../../permissions/presentation/permission_request_helper.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/summary_failure.dart';
 import 'morning_briefing_notifier.dart';
+import 'morning_briefing_providers.dart';
 
 /// The ON-DEVICE "Boletín" screen: a grouped, card-per-item view of the latest
 /// briefing the phone built from its feeds + Hacker News (fetch/parse/freshness,
@@ -40,6 +43,7 @@ class MorningBriefingScreen extends ConsumerWidget {
         padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
         children: [
           _ScheduleCard(state: state, notifier: notifier),
+          if (state.schedule.enabled) const _BatteryDelayCard(),
           if (state.isGenerating)
             _ProgressCard(label: state.progressLabel ?? l10n.briefingGenerating)
           else if (state.phase == BriefingPhase.error && state.error != null)
@@ -251,6 +255,66 @@ class _BriefingHeader extends StatelessWidget {
   static String _formatTimestamp(DateTime dt) {
     String two(int n) => n.toString().padLeft(2, '0');
     return '${two(dt.day)}/${two(dt.month)}/${dt.year} ${two(dt.hour)}:${two(dt.minute)}';
+  }
+}
+
+/// "Android puede retrasar tu boletín, y así se arregla."
+///
+/// Measured on a Pixel on 2026-08-24: with LifeOS in the RARE standby bucket
+/// and no battery exemption, the scheduled task started ten minutes late — and
+/// the OS is allowed to defer it by hours. No amount of scheduling code fixes
+/// that from inside the app; only the exemption does.
+///
+/// So the screen says what is happening and offers the permission. It NEVER
+/// asks on its own: the user grants it deliberately, with the reason in front
+/// of them. Once granted — or where the permission does not exist, or once the
+/// user has said no for good — the card disappears rather than nagging.
+class _BatteryDelayCard extends ConsumerWidget {
+  const _BatteryDelayCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final state = ref.watch(batteryUnrestrictedStateProvider);
+    final resolved = state.hasValue ? state.value : null;
+    if (resolved != PermissionState.denied) return const SizedBox.shrink();
+    final theme = Theme.of(context);
+    return Card(
+      margin: const EdgeInsets.only(bottom: 8),
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Android puede retrasar tu boletín',
+              style: theme.textTheme.titleSmall?.copyWith(
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Para ahorrar batería, el sistema pospone las tareas de las apps '
+              'que usas poco. Con este permiso tu boletín se prepara a su hora.',
+              style: theme.textTheme.bodyMedium,
+            ),
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton(
+                onPressed: () async {
+                  await ensurePermission(
+                    context,
+                    ref,
+                    AppPermission.batteryUnrestricted,
+                  );
+                  ref.invalidate(batteryUnrestrictedStateProvider);
+                },
+                child: const Text('Permitir'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

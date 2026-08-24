@@ -280,19 +280,19 @@ List<BriefingSource> healBriefingSources(List<BriefingSource> sources) {
   final healed = <BriefingSource>[];
   for (final source in sources) {
     final key = briefingSourceKey(source.url);
-    final match = deadBriefingSources.keys.where(
-      (dead) => briefingSourceKey(dead) == key,
+    final dead = deadBriefingSources.keys.where(
+      (url) => briefingSourceKey(url) == key,
     );
-    if (match.isEmpty) {
-      healed.add(source);
-      continue;
+    var url = source.url;
+    if (dead.isNotEmpty) {
+      final replacement = deadBriefingSources[dead.first];
+      if (replacement == null) continue; // no live equivalent → it goes
+      url = replacement;
     }
-    final replacement = deadBriefingSources[match.first];
-    if (replacement == null) continue;
     healed.add(
       BriefingSource(
-        url: replacement,
-        section: source.section,
+        url: url,
+        section: _sectionFor(url, source.section),
         enabled: source.enabled,
         builtIn: source.builtIn,
       ),
@@ -300,6 +300,27 @@ List<BriefingSource> healBriefingSources(List<BriefingSource> sources) {
   }
   // A device whose list already held the replacement now holds it twice.
   return dedupeBriefingSources(healed);
+}
+
+/// The theme a source belongs to.
+///
+/// FOUND ON THE TEST PIXEL, 2026-08-24: that phone had stored its feeds as
+/// bare URLs — the format from before sections existed — so all eighteen read
+/// as "General" and the whole briefing rendered as ONE block of 74 articles.
+/// With a per-section cap that would not just look wrong, it would DROP whole
+/// topics. So a feed we shipped gets its shipped theme back.
+///
+/// A theme the user actually chose always wins: healing repairs what was never
+/// filled in, it never overrules a decision.
+String _sectionFor(String url, String stored) {
+  if (stored.trim().isNotEmpty && stored.trim() != kDefaultBriefingSection) {
+    return stored;
+  }
+  final key = briefingSourceKey(url);
+  for (final shipped in _shipped) {
+    if (briefingSourceKey(shipped.url) == key) return shipped.section;
+  }
+  return stored;
 }
 
 List<BriefingSource> dedupeBriefingSources(List<BriefingSource> sources) {
