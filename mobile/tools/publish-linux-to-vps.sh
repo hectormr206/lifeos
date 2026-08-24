@@ -67,6 +67,13 @@ VN="$(rg -o '^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' -r '$1' "$MOBILE_DIR/pubspec.
 [[ -n "$VN" ]] || { echo "ERROR: no pude leer 'version:' de pubspec.yaml" >&2; exit 1; }
 NOTES="${1:-$(git -C "$REPO_ROOT" log -1 --format='%h %s' 2>/dev/null || echo "release $BUILD_NUMBER")}"
 
+# Mismo guardarraíl que el publicador de Android, y por la misma razón: el canal
+# de Linux publicó 908 y 911 con la misma etiqueta.
+# shellcheck source=lib/version-guard.sh
+source "$MOBILE_DIR/tools/lib/version-guard.sh"
+lifeos_guard_version "$VN" "$BASE_URL/$ARCH/manifest.json" \
+  "$KEY_HEADER" "$UPDATE_ACCESS_KEY" "$REPO_ROOT"
+
 # Build-time preflight for the system-tray plugin. tray_manager's
 # linux/CMakeLists.txt aborts with a FATAL_ERROR when neither
 # ayatana-appindicator3-0.1 nor appindicator3-0.1 is present, and it does so

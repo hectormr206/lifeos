@@ -34,6 +34,15 @@ KEY_HEADER="X-LifeOS-Update-Key"
 # that monotonic bump is exactly what lets the phone detect the update.
 BUILD_NUMBER="$(git -C "$REPO_ROOT" rev-list --count HEAD)"
 NOTES="${1:-$(git -C "$REPO_ROOT" log -1 --format='%h %s' 2>/dev/null || echo "release $BUILD_NUMBER")}"
+
+# Antes de gastar catorce minutos compilando: ¿esta versión ya está publicada?
+VN_PLANNED="$(rg -o '^version:\s*([0-9]+\.[0-9]+\.[0-9]+)' -r '$1' "$MOBILE_DIR/pubspec.yaml" | head -1)"
+[[ -n "$VN_PLANNED" ]] || { echo "ERROR: no pude leer 'version:' de pubspec.yaml" >&2; exit 1; }
+# shellcheck source=lib/version-guard.sh
+source "$MOBILE_DIR/tools/lib/version-guard.sh"
+lifeos_guard_version "$VN_PLANNED" "$UPDATE_BASE_URL/manifest" \
+  "$KEY_HEADER" "$UPDATE_ACCESS_KEY" "$REPO_ROOT"
+
 echo "→ Building release APK (versionCode $BUILD_NUMBER)…"
 flutter build apk --release \
   --build-number="$BUILD_NUMBER" \
