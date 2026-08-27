@@ -33,10 +33,6 @@ class OnDeviceChatRepository implements ChatRepository {
   /// must run one-at-a-time rather than corrupt shared state.
   Future<void> _lock = Future<void>.value();
 
-  /// Lazily load the weights exactly once, guarded so concurrent first calls
-  /// don't double-load.
-  Future<void>? _loadFuture;
-
   Future<T> _serialize<T>(Future<T> Function() task) {
     final result = _lock.then((_) => task());
     // Chain the lock on completion (success OR failure) so one failed call
@@ -58,7 +54,12 @@ class OnDeviceChatRepository implements ChatRepository {
           // Build the decorated prompt (may recall memory async) BEFORE loading
           // the model, so the embedder is disposed by the time the LLM loads.
           final prompt = await _decoratePrompt(text);
-          await (_loadFuture ??= _engine.load());
+          // EVERY send loads. `load()` is idempotent and returns immediately
+          // when the weights are already resident, so this costs nothing while
+          // the model is warm — and it is what makes an idle release
+          // (IdleUnloadLlmEngine) invisible instead of a StateError on the
+          // next message. Caching this future once would break exactly there.
+          await _engine.load();
           final result = await _engine.generate(prompt);
           // Lighter empty-guard than the vision path (no image retry): if the
           // backend still degenerated to empty, show a neutral-Spanish fallback
@@ -74,9 +75,6 @@ class OnDeviceChatRepository implements ChatRepository {
             metrics: result.metrics,
           );
         } catch (error) {
-          // Reset so a later attempt can retry loading after a transient
-          // failure (e.g. model not installed yet).
-          _loadFuture = null;
           throw ChatException('Axi (modelo local) no pudo responder: $error');
         }
       });
@@ -88,7 +86,12 @@ class OnDeviceChatRepository implements ChatRepository {
           // the model, so the embedder is disposed by the time the LLM loads.
           // Both the primary attempt and the escape retry send the same text.
           final prompt = await _decoratePrompt(text);
-          await (_loadFuture ??= _engine.load());
+          // EVERY send loads. `load()` is idempotent and returns immediately
+          // when the weights are already resident, so this costs nothing while
+          // the model is warm — and it is what makes an idle release
+          // (IdleUnloadLlmEngine) invisible instead of a StateError on the
+          // next message. Caching this future once would break exactly there.
+          await _engine.load();
           // Routes to the on-device model's VISION path (all photos in one
           // turn). If the installed variant is text-only, the engine throws and
           // we surface a clear Spanish message rather than silently dropping the
@@ -120,7 +123,6 @@ class OnDeviceChatRepository implements ChatRepository {
             metrics: result.metrics,
           );
         } catch (error) {
-          _loadFuture = null;
           throw ChatException(
             'Axi (modelo local) no pudo analizar la imagen. '
             'Puede que este modelo no soporte visión en este dispositivo. ($error)',

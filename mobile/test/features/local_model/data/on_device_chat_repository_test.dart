@@ -1,6 +1,7 @@
 // Proves OnDeviceChatRepository (roadmap SLICE 1) drives a LocalLlmEngine
 // through a FakeLocalLlmEngine — no flutter_gemma, no download, no real
-// inference: it lazily loads the model once, returns the engine's reply as an
+// inference: it asks the engine to load before each send (the engine owns
+// residency), returns the engine reply as an
 // axi ChatMessage, keeps loadHistory empty (no local persistence this slice),
 // serialises concurrent sends, and surfaces engine failures as ChatException.
 import 'dart:typed_data';
@@ -23,6 +24,22 @@ void main() {
     expect(message.role, ChatRole.axi);
     expect(message.text, 'respuesta a "hola"');
     expect(engine.prompts, ['hola']);
+  });
+
+  test('reloads the model when it was released between two messages', () async {
+    // The desktop engine releases the weights after an idle stretch
+    // (IdleUnloadLlmEngine). A repository that loaded ONCE and cached that
+    // future would generate against a freed native handle on the next message,
+    // so every send must ask the engine to load again — it is idempotent and
+    // free when the model is already resident.
+    final engine = FakeLocalLlmEngine();
+    final repo = OnDeviceChatRepository(engine);
+
+    await repo.sendMessage('hola');
+    await engine.dispose(); // the idle release, as the decorator performs it
+    await repo.sendMessage('sigo aqui');
+
+    expect(engine.loadCount, 2);
   });
 
   test('decoratePrompt prefixes the engine prompt (Axi language + datetime)', () async {
@@ -81,7 +98,10 @@ void main() {
     expect(message.metrics, metrics);
   });
 
-  test('lazily loads the model exactly once across multiple sends', () async {
+  test('asks the engine to load before every send, and generates once each', () async {
+    // Loading is asked for per message ON PURPOSE (see the reload test above):
+    // owning "is it already resident?" belongs to the engine, whose `load()` is
+    // idempotent, not to a cached future here that cannot know about a release.
     final engine = FakeLocalLlmEngine();
     final repo = OnDeviceChatRepository(engine);
 
@@ -89,7 +109,7 @@ void main() {
     await repo.sendMessage('dos');
     await repo.sendMessage('tres');
 
-    expect(engine.loadCount, 1);
+    expect(engine.loadCount, 3);
     expect(engine.generateCount, 3);
   });
 

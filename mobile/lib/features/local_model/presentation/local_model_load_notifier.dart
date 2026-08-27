@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../embedding/embed_model_warmup.dart';
+import '../domain/idle_unload_llm_engine.dart';
 import 'local_model_providers.dart';
 
 /// Lifecycle of getting the on-device weights resident in RAM and ready for
@@ -26,6 +27,15 @@ enum LocalModelLoadStatus {
   /// Loading failed; [LocalModelLoadState.error] carries a neutral-Spanish
   /// message and the UI offers a retry.
   error,
+
+  /// The model WAS resident and the engine released it to give the RAM back
+  /// after an idle stretch ([IdleUnloadLlmEngine]).
+  ///
+  /// Distinct from [idle] on purpose: idle means there is no on-device model in
+  /// play at all, this means there is one, installed and usable, simply not in
+  /// memory right now. Sending stays enabled — the next message reloads it, and
+  /// the banner returns while that happens.
+  released,
 }
 
 /// Immutable UI state for the on-device model load.
@@ -55,6 +65,7 @@ class LocalModelLoadState {
 /// and the other returns instantly.
 class LocalModelLoadNotifier extends Notifier<LocalModelLoadState> {
   Future<void>? _loadFuture;
+  StreamSubscription<LlmResidency>? _residency;
 
   /// Lets tests await the in-flight load deterministically (mirrors the
   /// `ready` seam on the other notifiers).
@@ -67,8 +78,28 @@ class LocalModelLoadNotifier extends Notifier<LocalModelLoadState> {
     if (!ref.watch(localModelEnabledProvider)) {
       return const LocalModelLoadState();
     }
+    // The engine owns residency and can release the weights on its own (the
+    // desktop idle unload). Follow it instead of remembering a "ready" that
+    // stopped being true while nobody was watching.
+    final engine = ref.watch(localLlmEngineProvider);
+    if (engine is IdleUnloadLlmEngine) {
+      _residency = engine.residencyChanges.listen(_onResidency);
+      ref.onDispose(() => _residency?.cancel());
+    }
     _loadFuture = _load();
     return const LocalModelLoadState(status: LocalModelLoadStatus.loading);
+  }
+
+  void _onResidency(LlmResidency residency) {
+    // A failed load owns the state until the user retries: an `unloaded` event
+    // is exactly what that failure already reported, and overwriting it would
+    // hide the error and its "Reintentar".
+    if (state.hasError && residency != LlmResidency.loaded) return;
+    state = switch (residency) {
+      LlmResidency.loading => const LocalModelLoadState(status: LocalModelLoadStatus.loading),
+      LlmResidency.loaded => const LocalModelLoadState(status: LocalModelLoadStatus.ready),
+      LlmResidency.unloaded => const LocalModelLoadState(status: LocalModelLoadStatus.released),
+    };
   }
 
   Future<void> _load() async {

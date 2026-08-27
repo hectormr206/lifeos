@@ -20,6 +20,7 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
     this.loadShouldFail = false,
     this.loadGate,
     this.generateGate,
+    this.disposeGate,
     String Function(String prompt)? reply,
     String Function(String prompt)? imageReply,
     GenerationMetrics? metrics,
@@ -62,6 +63,10 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   /// the first is still running (the queue's whole reason to exist). Null =
   /// generation resolves immediately.
   final Completer<void>? generateGate;
+
+  /// Optional gate [dispose] awaits before it finishes — lets a test hold a
+  /// release open and observe what a request arriving MID-RELEASE does.
+  final Completer<void>? disposeGate;
   final String Function(String prompt) reply;
   final String Function(String prompt) imageReply;
 
@@ -90,6 +95,10 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
   Uint8List? lastImageBytes;
   List<Uint8List>? lastImages;
   bool disposed = false;
+
+  /// How many times [dispose] was called — what proves an idle release actually
+  /// freed the weights (and that it happened exactly once).
+  int disposeCount = 0;
   LocalLlmBackend? loadedBackend;
 
   /// Scriptable stand-in for the real engine's GPU→CPU fallback signal, so the
@@ -176,6 +185,8 @@ class FakeLocalLlmEngine implements LocalLlmEngine {
 
   @override
   Future<void> dispose() async {
+    disposeCount++;
+    if (disposeGate != null) await disposeGate!.future;
     disposed = true;
   }
 }

@@ -6,6 +6,7 @@ import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/local_model/domain/idle_unload_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_load_notifier.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 
@@ -34,7 +35,75 @@ ProviderContainer _container(FakeLocalLlmEngine engine, {required bool enabled})
   return container;
 }
 
+/// A [Timer] the test fires by hand, so the idle release is deterministic.
+class _ManualTimer implements Timer {
+  _ManualTimer(this._callback);
+
+  final void Function() _callback;
+  bool cancelled = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled;
+
+  @override
+  int get tick => 0;
+
+  void fire() {
+    if (cancelled) return;
+    cancelled = true;
+    _callback();
+  }
+}
+
 void main() {
+  test('follows the engine when it releases the model, and again when it reloads', () async {
+    // The desktop engine frees the weights after an idle stretch. The banner
+    // must not keep saying "listo" about a model that is no longer in RAM, and
+    // it must show "Cargando el modelo…" again when the next message reloads it.
+    final inner = FakeLocalLlmEngine(installed: true);
+    final timers = <_ManualTimer>[];
+    final engine = IdleUnloadLlmEngine(
+      inner,
+      scheduleTimer: (_, cb) {
+        final t = _ManualTimer(cb);
+        timers.add(t);
+        return t;
+      },
+    );
+    final container = ProviderContainer(
+      overrides: [
+        localLlmEngineProvider.overrideWithValue(engine),
+        localModelEnabledProvider.overrideWith(() => _FixedEnabledNotifier(true)),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    await container.read(localModelLoadProvider.notifier).ready;
+    expect(container.read(localModelLoadProvider).status, LocalModelLoadStatus.ready);
+
+    timers.lastWhere((t) => !t.cancelled).fire();
+    await engine.pendingRelease;
+    await Future<void>.delayed(Duration.zero);
+
+    final released = container.read(localModelLoadProvider);
+    expect(released.status, LocalModelLoadStatus.released);
+    expect(released.isReady, isFalse, reason: 'nothing is resident any more');
+    expect(released.isLoading, isFalse, reason: 'no load is running, so no spinner');
+
+    // A later request re-loads: the banner comes back honestly (loading first,
+    // then ready) instead of jumping straight to a silent ready.
+    final seen = <LocalModelLoadStatus>[];
+    container.listen(localModelLoadProvider, (_, next) => seen.add(next.status));
+    await engine.load();
+    await Future<void>.delayed(Duration.zero);
+
+    expect(seen, [LocalModelLoadStatus.loading, LocalModelLoadStatus.ready]);
+    expect(container.read(localModelLoadProvider).isReady, isTrue);
+  });
+
   test('stays idle and never touches the engine in cloud/HTTP mode', () async {
     final engine = FakeLocalLlmEngine(installed: true);
     final container = _container(engine, enabled: false);

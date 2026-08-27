@@ -5,6 +5,7 @@ import '../data/permission_handler_notification_gateway.dart';
 import '../data/vps_brain_model_gateway.dart';
 import '../domain/brain_model_update_gateway.dart';
 import '../domain/brain_model_version_store.dart';
+import '../domain/idle_unload_llm_engine.dart';
 import '../domain/llm_request_queue.dart';
 import '../domain/local_llm_engine.dart';
 import '../domain/local_model_preferences.dart';
@@ -26,20 +27,32 @@ final localModelConfigProvider = Provider<LocalModelConfig>((ref) => const Local
 final llmRequestQueueProvider = Provider<LlmRequestQueue>((ref) => LlmRequestQueue());
 
 /// The single, long-lived on-device engine (roadmap SLICE 1, model lifecycle):
-/// plain (non-autoDispose) Provider so the loaded weights are NOT reloaded per
-/// screen. Disposed with the ProviderContainer via [Ref.onDispose].
-/// Overridden with a `FakeLocalLlmEngine` in tests.
+/// plain (non-autoDispose) Provider so the ENGINE is not rebuilt per screen.
+/// Disposed with the ProviderContainer via [Ref.onDispose]. Overridden with a
+/// `FakeLocalLlmEngine` in tests.
 ///
-/// Wrapped in [SerialLlmEngine]: serialization belongs at the engine, because
-/// every feature holds this same instance and a queue in one of them would
-/// leave the rest racing.
+/// Two decorators, in this order — the order is the design:
+///
+///   IdleUnloadLlmEngine( SerialLlmEngine( FlutterGemmaLlmEngine ) )
+///
+///   * [SerialLlmEngine] (inner) — serialization belongs at the engine, because
+///     every feature holds this same instance and a queue in one of them would
+///     leave the rest racing.
+///   * [IdleUnloadLlmEngine] (outer) — gives the RAM back once the model has
+///     been idle a while, so a background generation on the desktop does not
+///     leave ~2.6GB resident for the rest of the session the way it used to.
+///     It is OUTSIDE the queue on purpose: its release is submitted as one more
+///     queued operation, so it can never free the native handle underneath a
+///     running generation.
 final localLlmEngineProvider = Provider<LocalLlmEngine>((ref) {
   // No `initializer` override → uses the production default, which registers
   // the real `.litertlm` inference engine (LiteRtLmEngine) with flutter_gemma
   // once before the first model load. Tests override this provider with a fake.
-  final engine = SerialLlmEngine(
-    FlutterGemmaLlmEngine(ref.watch(localModelConfigProvider)),
-    ref.watch(llmRequestQueueProvider),
+  final engine = IdleUnloadLlmEngine(
+    SerialLlmEngine(
+      FlutterGemmaLlmEngine(ref.watch(localModelConfigProvider)),
+      ref.watch(llmRequestQueueProvider),
+    ),
   );
   ref.onDispose(engine.dispose);
   return engine;
