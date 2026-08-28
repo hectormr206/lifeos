@@ -19,11 +19,100 @@ import 'morning_briefing_providers.dart';
 /// NO bulk model summarization). Each item can be summarized ON DEMAND with the
 /// local model; HN items can also summarize their comments. Mirrors the
 /// laptop's per-item card (axi/templates/briefings.html).
-class MorningBriefingScreen extends ConsumerWidget {
+/// The briefing, read by theme.
+///
+/// WHY THIS IS STATEFUL. What the reader has OPEN — which theme folds, which
+/// summary panels — cannot live inside the widgets that show it. The body is a
+/// lazy list: a card that scrolls out of the viewport is destroyed, and with it
+/// any `State` it was holding. Two symptoms came from exactly that, reported
+/// 2026-08-27: theme folds closing on their own while scrolling, and a summary
+/// that "opens and closes immediately and throws me to the end of the news".
+///
+/// The second one is the first one's consequence: when folds restore closed,
+/// the list's total height collapses, the scroll offset no longer fits and gets
+/// clamped to the bottom. So the reader lands at the end holding a card that
+/// looks shut.
+///
+/// The folds were worse than merely forgetful: `ExpansionTile` persists itself
+/// through `PageStorage`, whose identifier is built from the `PageStorageKey`s
+/// of its ancestors — and there were none, so EVERY theme shared ONE slot. The
+/// last tile to write decided for all of them. Opening four themes and scrolling
+/// back found them shut.
+///
+/// Here the open-set is the single source of truth, held above the list where
+/// scrolling cannot reach it. The tiles also carry their own `PageStorageKey`
+/// so the framework's own persistence agrees with it instead of fighting it.
+class MorningBriefingScreen extends ConsumerStatefulWidget {
   const MorningBriefingScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MorningBriefingScreen> createState() => _MorningBriefingScreenState();
+}
+
+class _MorningBriefingScreenState extends ConsumerState<MorningBriefingScreen> {
+  /// Themes the reader unfolded, by section name.
+  final Set<String> _openSections = <String>{};
+
+  /// Article keys whose full-summary panel is open.
+  final Set<String> _openSummaries = <String>{};
+
+  /// Article keys whose comments panel is open.
+  final Set<String> _openComments = <String>{};
+
+  void _toggleSection(String section, bool open) => setState(() {
+        if (open) {
+          _openSections.add(section);
+        } else {
+          _openSections.remove(section);
+        }
+      });
+
+  /// Opening a summary panel is also what ASKS for the summary — but only when
+  /// there is nothing to show yet and the last failure was not a permanent one.
+  /// A cause nothing can fix is not re-run behind the reader's back: the
+  /// explanation is already on screen, and a second identical fetch is work he
+  /// never asked for.
+  void _toggleSummary(BriefingArticle article, MorningBriefingNotifier notifier,
+      MorningBriefingState state) {
+    final opening = !_openSummaries.contains(article.key);
+    setState(() {
+      if (opening) {
+        _openSummaries.add(article.key);
+      } else {
+        _openSummaries.remove(article.key);
+      }
+    });
+    if (opening &&
+        (article.fullSummary ?? '').isEmpty &&
+        !state.isSummarizingArticle(article.key) &&
+        !_isPermanent(state.articleFailures[article.key])) {
+      notifier.summarizeArticle(article);
+    }
+  }
+
+  void _toggleComments(BriefingArticle article, MorningBriefingNotifier notifier,
+      MorningBriefingState state) {
+    final opening = !_openComments.contains(article.key);
+    setState(() {
+      if (opening) {
+        _openComments.add(article.key);
+      } else {
+        _openComments.remove(article.key);
+      }
+    });
+    if (opening &&
+        (article.commentsSummary ?? '').isEmpty &&
+        !state.isSummarizingComments(article.key) &&
+        !_isPermanent(state.commentFailures[article.key])) {
+      notifier.summarizeComments(article);
+    }
+  }
+
+  static bool _isPermanent(SummaryAttemptFailure? failure) =>
+      failure != null && failure.failure.recovery == SummaryRecovery.none;
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(morningBriefingNotifierProvider);
     final notifier = ref.read(morningBriefingNotifierProvider.notifier);
     final l10n = AppLocalizations.of(context);
@@ -63,6 +152,12 @@ class MorningBriefingScreen extends ConsumerWidget {
                 digest: state.briefing!.sectionDigests[section.section],
                 state: state,
                 notifier: notifier,
+                isOpen: _openSections.contains(section.section),
+                onToggle: (open) => _toggleSection(section.section, open),
+                openSummaries: _openSummaries,
+                openComments: _openComments,
+                onToggleSummary: (a) => _toggleSummary(a, notifier, state),
+                onToggleComments: (a) => _toggleComments(a, notifier, state),
               ),
             if (state.briefing!.skippedSources.isNotEmpty)
               _SkippedNote(sources: state.briefing!.skippedSources),
@@ -336,12 +431,27 @@ class _SectionBlock extends StatelessWidget {
     required this.digest,
     required this.state,
     required this.notifier,
+    required this.isOpen,
+    required this.onToggle,
+    required this.openSummaries,
+    required this.openComments,
+    required this.onToggleSummary,
+    required this.onToggleComments,
   });
 
   final BriefingSectionGroup group;
   final String? digest;
   final MorningBriefingState state;
   final MorningBriefingNotifier notifier;
+
+  /// Whether this theme is unfolded. Owned by the screen, not by the tile —
+  /// see [MorningBriefingScreen] for why.
+  final bool isOpen;
+  final ValueChanged<bool> onToggle;
+  final Set<String> openSummaries;
+  final Set<String> openComments;
+  final ValueChanged<BriefingArticle> onToggleSummary;
+  final ValueChanged<BriefingArticle> onToggleComments;
 
   @override
   Widget build(BuildContext context) {
@@ -404,44 +514,84 @@ class _SectionBlock extends StatelessWidget {
               ],
             ),
           ),
-          Theme(
-            data: theme.copyWith(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              initiallyExpanded: false,
-              maintainState: true,
-              tilePadding: const EdgeInsets.symmetric(horizontal: 16),
-              title: Text(
-                'Ver las ${group.articles.length} noticias',
-                style: theme.textTheme.bodyMedium?.copyWith(
-                  fontWeight: FontWeight.w600,
-                  color: LifeOSColors.teal,
-                ),
-              ),
-              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
-              children: [
-                for (final article in group.articles)
-                  _ArticleCard(
-                    key: ValueKey(article.key),
-                    article: article,
-                    isSummarizing: state.isSummarizingArticle(article.key),
-                    isSummaryQueued: state.isQueuedArticle(article.key),
-                    summaryFailure: state.articleFailures[article.key],
-                    isSummarizingComments:
-                        state.isSummarizingComments(article.key),
-                    isCommentsQueued: state.isQueuedComments(article.key),
-                    commentsFailure: state.commentFailures[article.key],
-                    modelOnFallbackBackend: state.modelOnFallbackBackend,
-                    onRequestSummary: () => notifier.summarizeArticle(article),
-                    onRequestComments: () => notifier.summarizeComments(article),
+          // El pliegue se pinta a mano a proposito. `ExpansionTile` guarda su
+          // estado en `PageStorage`, cuyo identificador sale de los
+          // `PageStorageKey` de los ancestros: sin ninguno, TODOS los temas
+          // compartian una casilla; poniendo uno, la comparten con cualquier
+          // scrollable de dentro (un `SelectableText` leyo ese `bool` como
+          // offset y tiro la pantalla). Con el estado ya en la pantalla, el
+          // widget solo tiene que dibujarlo.
+          InkWell(
+            onTap: () => onToggle(!isOpen),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      _foldLabel(group.articles.length),
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        fontWeight: FontWeight.w600,
+                        color: LifeOSColors.teal,
+                      ),
+                    ),
                   ),
-              ],
+                  Icon(
+                    isOpen ? Icons.expand_less : Icons.expand_more,
+                    color: LifeOSColors.teal,
+                  ),
+                ],
+              ),
             ),
           ),
+          // Plegado = FUERA del arbol, no meramente invisible: con el estado
+          // ya en la pantalla, destruir las tarjetas al plegar no pierde nada
+          // y ahorra construir decenas de noticias que nadie esta mirando.
+          // Sin animación de tamaño a propósito: `AnimatedSize` animaría
+          // CUALQUIER cambio de alto — abrir un resumen haría crecer el tema
+          // entero poco a poco y desplazaría todo lo de abajo bajo el dedo del
+          // lector, que es justo la queja que trajo este arreglo. Y plegado
+          // significa FUERA del árbol, no sólo invisible: con el estado ya en
+          // la pantalla, destruir las tarjetas no pierde nada y ahorra
+          // construir decenas de noticias que nadie está mirando.
+          if (isOpen)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 0, 12, 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  for (final article in group.articles)
+                    _ArticleCard(
+                      key: ValueKey(article.key),
+                      article: article,
+                      isSummarizing: state.isSummarizingArticle(article.key),
+                      isSummaryQueued: state.isQueuedArticle(article.key),
+                      summaryFailure: state.articleFailures[article.key],
+                      isSummarizingComments:
+                          state.isSummarizingComments(article.key),
+                      isCommentsQueued: state.isQueuedComments(article.key),
+                      commentsFailure: state.commentFailures[article.key],
+                      modelOnFallbackBackend: state.modelOnFallbackBackend,
+                      showSummary: openSummaries.contains(article.key),
+                      showComments: openComments.contains(article.key),
+                      onToggleSummary: () => onToggleSummary(article),
+                      onToggleComments: () => onToggleComments(article),
+                      onRequestSummary: () => notifier.summarizeArticle(article),
+                      onRequestComments: () => notifier.summarizeComments(article),
+                    ),
+                ],
+              ),
+            ),
         ],
       ),
     );
   }
 }
+
+/// The fold's label, in agreement with what is behind it. A section with a
+/// single item used to read "Ver las 1 noticias".
+String _foldLabel(int count) =>
+    count == 1 ? 'Ver la noticia' : 'Ver las $count noticias';
 
 /// "Some items are in their original language, and here is why."
 ///
@@ -502,7 +652,7 @@ class _SkippedNote extends StatelessWidget {
 /// article, an on-demand "Ver resumen completo", and (HN only) an on-demand
 /// "Ver resumen de comentarios". Stateful so the two panels toggle locally;
 /// the summary text/spinner/error come from the notifier state (props).
-class _ArticleCard extends StatefulWidget {
+class _ArticleCard extends StatelessWidget {
   const _ArticleCard({
     super.key,
     required this.article,
@@ -513,6 +663,10 @@ class _ArticleCard extends StatefulWidget {
     required this.isCommentsQueued,
     required this.commentsFailure,
     required this.modelOnFallbackBackend,
+    required this.showSummary,
+    required this.showComments,
+    required this.onToggleSummary,
+    required this.onToggleComments,
     required this.onRequestSummary,
     required this.onRequestComments,
   });
@@ -539,22 +693,22 @@ class _ArticleCard extends StatefulWidget {
   /// because that is the moment "slow" and "hung" become indistinguishable.
   final bool modelOnFallbackBackend;
 
+  /// Whether each panel is open. Held by [MorningBriefingScreen], because a
+  /// card that scrolls out of view is destroyed and any state of its own would
+  /// go with it — which is exactly how a just-opened summary closed itself.
+  final bool showSummary;
+  final bool showComments;
+  final VoidCallback onToggleSummary;
+  final VoidCallback onToggleComments;
+
   final VoidCallback onRequestSummary;
   final VoidCallback onRequestComments;
-
-  @override
-  State<_ArticleCard> createState() => _ArticleCardState();
-}
-
-class _ArticleCardState extends State<_ArticleCard> {
-  bool _showSummary = false;
-  bool _showComments = false;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final l10n = AppLocalizations.of(context);
-    final article = widget.article;
+    final article = this.article;
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
@@ -604,60 +758,60 @@ class _ArticleCardState extends State<_ArticleCard> {
             // On-demand full-article summary.
             if (article.url.isNotEmpty)
               _ActionRow(
-                label: _showSummary
+                label: showSummary
                     ? l10n.briefingHideFullSummary
                     : l10n.briefingFullSummary,
                 color: LifeOSColors.teal,
-                onTap: _toggleSummary,
+                onTap: onToggleSummary,
               ),
-            if (_showSummary)
+            if (showSummary)
               _SummaryPanel(
-                loading: widget.isSummarizing,
+                loading: isSummarizing,
                 loadingLabel: l10n.briefingSummarizing,
-                queued: widget.isSummaryQueued,
+                queued: isSummaryQueued,
                 queuedLabel: l10n.briefingSummaryQueued,
                 queuedHint: l10n.briefingSummaryQueuedHint,
-                failure: widget.summaryFailure,
-                failureMessage: widget.summaryFailure == null
+                failure: summaryFailure,
+                failureMessage: summaryFailure == null
                     ? null
                     : _failureMessage(
                         l10n,
-                        widget.summaryFailure!.failure,
+                        summaryFailure!.failure,
                         comments: false,
                       ),
-                slowBackend: widget.modelOnFallbackBackend,
+                slowBackend: modelOnFallbackBackend,
                 slowBackendLabel: l10n.briefingModelSlowBackend,
-                onRetry: widget.onRequestSummary,
+                onRetry: onRequestSummary,
                 onInstallModel: () => _openModelScreen(context),
                 text: article.fullSummary,
               ),
             // On-demand HN comments summary.
             if (article.isHackerNews)
               _ActionRow(
-                label: _showComments
+                label: showComments
                     ? l10n.briefingHideCommentsSummary
                     : l10n.briefingCommentsSummary,
                 color: LifeOSColors.pink,
-                onTap: _toggleComments,
+                onTap: onToggleComments,
               ),
-            if (_showComments)
+            if (showComments)
               _SummaryPanel(
-                loading: widget.isSummarizingComments,
+                loading: isSummarizingComments,
                 loadingLabel: l10n.briefingSummarizingComments,
-                queued: widget.isCommentsQueued,
+                queued: isCommentsQueued,
                 queuedLabel: l10n.briefingSummaryQueued,
                 queuedHint: l10n.briefingSummaryQueuedHint,
-                failure: widget.commentsFailure,
-                failureMessage: widget.commentsFailure == null
+                failure: commentsFailure,
+                failureMessage: commentsFailure == null
                     ? null
                     : _failureMessage(
                         l10n,
-                        widget.commentsFailure!.failure,
+                        commentsFailure!.failure,
                         comments: true,
                       ),
-                slowBackend: widget.modelOnFallbackBackend,
+                slowBackend: modelOnFallbackBackend,
                 slowBackendLabel: l10n.briefingModelSlowBackend,
-                onRetry: widget.onRequestComments,
+                onRetry: onRequestComments,
                 onInstallModel: () => _openModelScreen(context),
                 text: article.commentsSummary,
               ),
@@ -696,28 +850,7 @@ class _ArticleCardState extends State<_ArticleCard> {
   /// A failure that nothing can fix is not re-run behind the user's back when
   /// he reopens the panel: the explanation is already there, and a second
   /// identical fetch is work he never asked for.
-  static bool _isPermanent(SummaryAttemptFailure? failure) =>
-      failure != null && failure.failure.recovery == SummaryRecovery.none;
 
-  void _toggleSummary() {
-    setState(() => _showSummary = !_showSummary);
-    if (_showSummary &&
-        (widget.article.fullSummary ?? '').isEmpty &&
-        !widget.isSummarizing &&
-        !_isPermanent(widget.summaryFailure)) {
-      widget.onRequestSummary();
-    }
-  }
-
-  void _toggleComments() {
-    setState(() => _showComments = !_showComments);
-    if (_showComments &&
-        (widget.article.commentsSummary ?? '').isEmpty &&
-        !widget.isSummarizingComments &&
-        !_isPermanent(widget.commentsFailure)) {
-      widget.onRequestComments();
-    }
-  }
 
   /// Opens the article in the EXTERNAL browser — the action the link's own
   /// label promises.

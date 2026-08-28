@@ -80,15 +80,35 @@ class BriefingSectionDigestWriter {
       );
       final text = result.text.replaceAll(RegExp(r'\s+'), ' ').trim();
       if (text.isEmpty) return null;
-      return _clip(text);
+      return clip(text);
     } catch (_) {
       return null;
     }
   }
 
-  static String _clip(String text) => text.length <= maxDigestChars
-      ? text
-      : '${text.substring(0, maxDigestChars).trimRight()}…';
+  /// Recorta a [maxDigestChars] SIN partir palabras.
+  ///
+  /// Cortar a media palabra ("hay discusiones so…") es peor que decir una frase
+  /// menos: el lector no sabe si la idea seguía o si el modelo se colgó. Se
+  /// busca el último cierre de frase que quepa; si no hay ninguno, se retrocede
+  /// hasta el último espacio y ahí sí se marcan los puntos suspensivos, que
+  /// entonces significan lo que parecen: "esto sigue".
+  static String clip(String text) {
+    final trimmed = text.trim();
+    if (trimmed.length <= maxDigestChars) return trimmed;
+    final head = trimmed.substring(0, maxDigestChars);
+    var cut = -1;
+    for (final end in ['.', '?', '!', '…']) {
+      final at = head.lastIndexOf(end);
+      if (at > cut) cut = at;
+    }
+    // Una frase sola y larguísima no debe dejar un resumen de tres palabras:
+    // por debajo de la mitad del cupo preferimos el corte por palabra.
+    if (cut >= maxDigestChars ~/ 2) return head.substring(0, cut + 1).trimRight();
+    final space = head.lastIndexOf(' ');
+    final body = space > 0 ? head.substring(0, space) : head;
+    return '${body.trimRight()}…';
+  }
 
   /// The instruction. It names the job (help me decide what to open), forbids
   /// invention, and hands over exactly the headlines the reader already has.
@@ -99,11 +119,20 @@ class BriefingSectionDigestWriter {
       final brief = article.displayDescription.trim();
       if (brief.isNotEmpty) lines.writeln('  $brief');
     }
-    return 'Estas son las noticias de hoy sobre ${group.section}.\n'
+    return promptFor(section: group.section, lines: lines.toString());
+  }
+
+  /// El texto que se le pide al modelo, expuesto para poder fijar en una prueba
+  /// lo que se le exige — sin montar un grupo de noticias entero.
+  static String promptFor({required String section, required String lines}) {
+    return 'Estas son las noticias de hoy sobre $section.\n'
         'Escribe en español un resumen de 2 a 4 frases que le diga a alguien '
         'qué está pasando en este tema, para que decida qué leer.\n'
         'Si varias fuentes cuentan lo mismo, cuéntalo UNA vez. '
         'Usa solo lo que está aquí abajo: no inventes datos, nombres ni cifras. '
+        'Empieza directamente por la noticia más importante. '
+        'No empieces describiendo la lista: nada de "las noticias cubren", '
+        '"se abordan diversos temas" ni "este resumen trata sobre". '
         'Responde SOLO con el resumen: sin título, sin viñetas y sin comillas.\n\n'
         '$lines';
   }

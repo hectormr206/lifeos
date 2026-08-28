@@ -102,7 +102,9 @@ Future<void> _openSection(WidgetTester tester, String section) async {
     matching: find.byType(Card),
   );
   await tester.tap(
-    find.descendant(of: block, matching: find.textContaining('Ver las ')),
+    // "Ver la noticia" cuando hay una sola, "Ver las N noticias" cuando hay
+    // varias: el pliegue concuerda con lo que tiene detrás.
+    find.descendant(of: block, matching: find.textContaining('Ver la')),
   );
   await tester.pumpAndSettle();
 }
