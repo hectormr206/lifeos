@@ -103,7 +103,10 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
     for (final node in forgettable) {
       await store.softDeleteNode(node.uuid);
     }
-    ref.invalidate(brain3dPayloadProvider);
+    // El payload cuelga de `localGraphStoreProvider`, que cachea su error:
+            // invalidar sólo el payload releería el mismo fallo. Se reabre la raíz.
+            reopenGraphDatabaseFrom(ref);
+            ref.invalidate(brain3dPayloadProvider);
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('Olvidados ${forgettable.length}.')),
@@ -153,6 +156,9 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
             await store.softDeleteNode(uuid);
             if (!mounted) return;
             setState(() => _selectedId = null);
+            // El payload cuelga de `localGraphStoreProvider`, que cachea su error:
+            // invalidar sólo el payload releería el mismo fallo. Se reabre la raíz.
+            reopenGraphDatabaseFrom(ref);
             ref.invalidate(brain3dPayloadProvider);
           },
           onCleanUp: () => _cleanUp(value.nodes, value.edges),
@@ -160,6 +166,9 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
             final store = await ref.read(localGraphStoreProvider.future);
             await store.mergeNodes(loserUuid: loser, winnerUuid: winner);
             if (!mounted) return;
+            // El payload cuelga de `localGraphStoreProvider`, que cachea su error:
+            // invalidar sólo el payload releería el mismo fallo. Se reabre la raíz.
+            reopenGraphDatabaseFrom(ref);
             ref.invalidate(brain3dPayloadProvider);
           },
         ),

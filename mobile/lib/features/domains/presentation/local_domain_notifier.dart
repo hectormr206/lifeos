@@ -1,3 +1,4 @@
+import 'dart:io' show stderr;
 import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/memory/domain/relationship_reminders.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -129,7 +130,10 @@ class LocalDomainNotifier extends Notifier<LocalDomainUiState> {
         summary: summary,
         reminders: reminders,
       );
-    } catch (_) {
+    } catch (error) {
+      _lastFailureWasOpen = true;
+      // ignore: avoid_print
+      stderr.writeln('lifeos: no se pudo abrir la memoria local: $error');
       state = state.copyWith(
         loading: false,
         error: 'No se pudo abrir la memoria local de este dispositivo.',
@@ -137,7 +141,17 @@ class LocalDomainNotifier extends Notifier<LocalDomainUiState> {
     }
   }
 
-  Future<void> refresh() => _bootstrapFuture = _load();
+  /// Cierto mientras el último intento acabara en fallo. Reintentar sin
+  /// reabrir sería releer el mismo error cacheado — ver [reopenGraphDatabase].
+  bool _lastFailureWasOpen = false;
+
+  Future<void> refresh() {
+    if (_lastFailureWasOpen) {
+      _lastFailureWasOpen = false;
+      reopenGraphDatabase(ref);
+    }
+    return _bootstrapFuture = _load();
+  }
 
   Future<void> setTypeFilter(String? type) {
     state = state.copyWith(typeFilter: type);

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io' show stderr;
 import 'dart:collection';
 import 'dart:typed_data';
 
@@ -433,13 +434,44 @@ class ChatNotifier extends Notifier<ChatUiState> {
     return waiter.future;
   }
 
+  /// El último fallo fue al ABRIR la base (no al leerla), así que el handle
+  /// cacheado está envenenado y hay que reabrir antes de volver a intentarlo.
+  bool _lastFailureWasOpen = false;
+
+  /// Por qué no se pudo recuperar la conversación, tal cual lo dijo quien
+  /// falló. Se guarda porque antes se tiraba: sin esto, un usuario reporta
+  /// "no abre mi conversación" y no hay nada que mirar.
+  Object? _historyError;
+  Object? get historyError => _historyError;
+
   Future<void> _hydratePersisted() async {
     var failed = false;
     for (var attempt = 0; attempt < _hydrationAttempts; attempt++) {
       if (_disposed) return;
+      // ABRIR y LEER son dos fallos distintos y se tratan distinto.
+      //
+      // Si no ABRE, el handle es un FutureProvider cuyo error queda cacheado
+      // para toda la vida del proceso: releerlo devuelve el mismo fallo
+      // eternamente, que es lo que convertía un tropiezo de un segundo en
+      // "cierra la aplicación y vuelve a entrar". Hay que invalidarlo.
+      //
+      // Si ABRIÓ y falló la LECTURA, la base está sana y es de todas las
+      // pantallas: cerrarla bajo sus pies sería peor que el fallo original.
+      final ChatHistoryRepository repo;
       try {
-        final repo = await _history();
-        if (repo != null) {
+        repo = await ref.read(chatHistoryRepositoryProvider.future);
+        _lastFailureWasOpen = false;
+      } catch (error) {
+        if (_disposed) return;
+        failed = true;
+        _lastFailureWasOpen = true;
+        _noteHistoryError(error, opening: true);
+        ref.invalidate(graphDatabaseHandleProvider);
+        await _pause(Duration(milliseconds: 150 * (attempt + 1)));
+        continue;
+      }
+      try {
+        {
           final persisted = await repo.loadMessages();
           if (_disposed) return;
           if (persisted.isNotEmpty) {
@@ -448,6 +480,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
               hydrating: false,
               historyUnavailable: false,
             );
+            _historyError = null;
             return;
           }
           // Read fine and there is genuinely nothing: a new user. Settle, or
@@ -456,12 +489,14 @@ class ChatNotifier extends Notifier<ChatUiState> {
             hydrating: false,
             historyUnavailable: false,
           );
+          _historyError = null;
           return;
         }
-      } catch (_) {
+      } catch (error) {
         // Falló DE VERDAD. Se recuerda para no acabar fingiendo un chat vacío
         // si se agotan los intentos.
         failed = true;
+        _noteHistoryError(error, opening: false);
       }
       // Checked again right here: the awaits above can span a screen being
       // closed, and starting a timer after that leaves one pending on a widget
@@ -483,9 +518,22 @@ class ChatNotifier extends Notifier<ChatUiState> {
   /// que es exactamente lo que el usuario llevaba semanas haciendo.
   Future<void> retryHistory() async {
     if (_disposed) return;
+    // Si lo que falló fue abrir, reintentar sin reabrir es releer el mismo
+    // error cacheado: el botón prometía algo que no podía cumplir.
+    if (_lastFailureWasOpen) ref.invalidate(graphDatabaseHandleProvider);
     state = state.copyWith(hydrating: true, historyUnavailable: false);
     _persistedHydration = _hydratePersisted();
     await _persistedHydration;
+  }
+
+  /// Deja constancia de la causa: en memoria para la pantalla, y en stderr
+  /// para el diario del sistema. En el escritorio eso es lo único que queda
+  /// cuando el usuario avisa horas después.
+  void _noteHistoryError(Object error, {required bool opening}) {
+    _historyError = error;
+    final que = opening ? 'abrir' : 'leer';
+    // ignore: avoid_print
+    stderr.writeln('lifeos: no se pudo $que la conversación guardada: $error');
   }
 
   /// Clears the visible conversation and the persisted on-device history for

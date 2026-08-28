@@ -1,3 +1,4 @@
+import 'dart:io' show stderr;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/clock/clock.dart';
@@ -103,8 +104,11 @@ class MiVidaNotifier extends Notifier<MiVidaState> {
         sections: sections,
         reminders: reminders,
       );
-    } catch (_) {
+    } catch (error) {
       if (!ref.mounted) return;
+      _lastFailureWasOpen = true;
+      // ignore: avoid_print
+      stderr.writeln('lifeos: no se pudo abrir la memoria local: $error');
       state = state.copyWith(
         loading: false,
         error: 'No se pudo abrir la memoria local de este dispositivo.',
@@ -112,7 +116,17 @@ class MiVidaNotifier extends Notifier<MiVidaState> {
     }
   }
 
-  Future<void> refresh() => _bootstrapFuture = _load();
+  /// Cierto mientras el último intento acabara en fallo. Reintentar sin
+  /// reabrir sería releer el mismo error cacheado — ver [reopenGraphDatabase].
+  bool _lastFailureWasOpen = false;
+
+  Future<void> refresh() {
+    if (_lastFailureWasOpen) {
+      _lastFailureWasOpen = false;
+      reopenGraphDatabase(ref);
+    }
+    return _bootstrapFuture = _load();
+  }
 
   Future<void> setQuery(String query) {
     state = state.copyWith(query: query);

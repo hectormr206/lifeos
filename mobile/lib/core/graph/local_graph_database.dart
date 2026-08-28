@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite_common/sqlite_api.dart';
 
@@ -56,7 +58,11 @@ class LocalGraphDatabase {
   ///    `local_graph_migrations.dart` + `MIGRATIONS.md`).
   Future<Database> open() async {
     final path = await databasePath();
-    final key = await _keyStore.loadOrCreateKey();
+    // Si el fichero ya está, esto NO es la primera vez: una llave ausente es un
+    // fallo del llavero, no permiso para acuñar otra. Ver [GraphKeyStore].
+    final key = await _keyStore.loadOrCreateKey(
+      databaseExists: File(path).existsSync(),
+    );
 
     return openGuardedGraphDatabase(
       path: path,

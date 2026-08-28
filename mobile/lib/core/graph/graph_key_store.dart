@@ -35,10 +35,29 @@ class GraphKeyStore {
   /// read/cleared independently (same convention as `core/auth/token_store`).
   static const String _secureKey = 'lifeos.graph.db_key';
 
-  /// Return the persisted key, generating + storing one on first access.
-  Future<String> loadOrCreateKey() async {
+  /// Return the persisted key, minting + storing one ONLY on a genuine first
+  /// run.
+  ///
+  /// [databaseExists] is what makes that judgement honest. An empty read used
+  /// to mean "first time", full stop — so a keyring that answered empty for a
+  /// moment (locked at login, secret service not up yet) made this mint a NEW
+  /// key and write it OVER the old one. The database on disk is then encrypted
+  /// under a key nobody has any more: total, silent, irreversible loss of
+  /// everything the user ever told Axi.
+  ///
+  /// A database that exists plus a key that does not is not a first run. It is
+  /// a failure, and it has to sound like one: this throws and touches nothing,
+  /// so the real key is still there when the keyring comes back.
+  Future<String> loadOrCreateKey({bool databaseExists = false}) async {
     final existing = await _storage.read(key: _secureKey);
     if (existing != null && existing.isNotEmpty) return existing;
+    if (databaseExists) {
+      throw StateError(
+        'La memoria de este dispositivo existe pero su llave no apareció en el '
+        'llavero del sistema. No se acuña otra: eso dejaría los datos ilegibles '
+        'para siempre. Revisa que el llavero esté desbloqueado y vuelve a abrir.',
+      );
+    }
     final key = _generateKeyHex();
     await _storage.write(key: _secureKey, value: key);
     return key;
