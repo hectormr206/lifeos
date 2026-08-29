@@ -43,12 +43,21 @@ class BriefingAssembler {
   /// 108 fresh items that day while Marca published 1. Capping per feed made
   /// the briefing a mirror of who publishes loudest; capping per feed WITHIN a
   /// theme keeps every source in the room without letting one own the shelf.
-  static const int defaultPerSourceCap = 6;
+  ///
+  /// Raised 6 -> 8 on 2026-08-29: the reader said he felt he was missing things.
+  /// He was right. Measured that morning across all 16 feeds: 367 fresh items
+  /// published, 52 reaching him.
+  static const int defaultPerSourceCap = 8;
 
-  /// Most articles one SECTION may show. Seven themes at twelve is already a
-  /// long read — but they arrive collapsed behind their digest, so this is the
-  /// depth available to whoever opens a theme, not what anyone must read.
-  static const int defaultSectionCap = 12;
+  /// Most articles one SECTION may show. They arrive collapsed behind their
+  /// digest, so this is the depth available to whoever opens a theme, not what
+  /// anyone must read.
+  ///
+  /// Raised 12 -> 20 the same day, and this is the cap that was actually
+  /// binding: Mundo had 174 fresh items and showed 12, México 122 and showed
+  /// 12. The per-source cap stays well below it on purpose — El País (118 items
+  /// that day) and La Jornada (98) would otherwise own their themes outright.
+  static const int defaultSectionCap = 20;
 
   final int perSourceCap;
   final int sectionCap;

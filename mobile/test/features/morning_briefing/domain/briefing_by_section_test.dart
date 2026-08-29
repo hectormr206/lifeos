@@ -62,7 +62,11 @@ void main() {
     final mexico = briefing.sections.single.articles;
     final jornada = mexico.where((a) => a.sourceName == 'La Jornada').length;
 
-    expect(mexico, hasLength(BriefingAssembler.defaultSectionCap));
+    // Dos fuentes a ocho: el tema se queda en dieciséis, no en el tope de
+    // veinte. El tope de tema sólo muerde a partir de tres fuentes, y la cuota
+    // por fuente es lo que impide que la más ruidosa se lo quede todo — que es
+    // lo que esta prueba defiende.
+    expect(mexico, hasLength(2 * BriefingAssembler.defaultPerSourceCap));
     expect(
       jornada,
       lessThanOrEqualTo(BriefingAssembler.defaultPerSourceCap),
@@ -103,5 +107,25 @@ void main() {
     ], now: _now, generatedAt: _now);
 
     expect(briefing.sections.map((s) => s.section), ['Deportes', 'Mundo']);
+  });
+
+  test('con tres fuentes ruidosas, el tope del TEMA es el que manda', () {
+    // El caso real de Mundo el 2026-08-29: BBC 16, El País 118 y NYT 40
+    // noticias frescas. Sin tope de tema serían veinticuatro tarjetas.
+    final briefing = assembler.assemble([
+      _harvest('BBC Mundo', 'Mundo', List.generate(40, (i) => 'b$i')),
+      _harvest('El País', 'Mundo', List.generate(40, (i) => 'p$i')),
+      _harvest('NYT', 'Mundo', List.generate(40, (i) => 'n$i')),
+    ], now: _now, generatedAt: _now);
+
+    final mundo = briefing.sections.single.articles;
+    expect(mundo, hasLength(BriefingAssembler.defaultSectionCap));
+    for (final fuente in ['BBC Mundo', 'El País', 'NYT']) {
+      expect(
+        mundo.where((a) => a.sourceName == fuente),
+        isNotEmpty,
+        reason: 'el recorte del tema no puede dejar fuera a una fuente entera',
+      );
+    }
   });
 }

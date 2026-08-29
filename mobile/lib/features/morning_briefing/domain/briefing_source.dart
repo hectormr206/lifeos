@@ -133,6 +133,7 @@ class BriefingSource {
 /// by accident.
 List<BriefingSource> get defaultBriefingSources => [
   for (final source in _shipped) source.asBuiltIn(),
+  for (final source in _addedAug2026) source.asBuiltIn(),
 ];
 
 const List<BriefingSource> _shipped = [
@@ -198,6 +199,15 @@ const List<BriefingSource> _shipped = [
     section: 'Deportes',
   ),
 ];
+// Medidas el 2026-08-29 antes de proponerlas: cada una respondió, publicó en
+// las últimas veinticuatro horas y se contó su cadencia semanal. Nada de
+// fiarse del nombre — tres de las fuentes que se enviaron a ojo acabaron
+// muertas y hubo que quitarlas.
+//
+// DEPORTES estaba en cero porque su único feed (Marca fútbol MX) llevaba SEIS
+// DÍAS sin publicar: una noticia en toda la semana. No era el tope, era la
+// fuente.
+
 
 /// Sources grouped by section, sections in the order they first appear.
 ///
@@ -329,4 +339,87 @@ List<BriefingSource> dedupeBriefingSources(List<BriefingSource> sources) {
     for (final source in sources)
       if (seen.add(briefingSourceKey(source.url))) source,
   ];
+}
+
+/// Fuentes de fábrica añadidas el 2026-08-29 para los tres temas que estaban
+/// secos. Ver [builtInsOfferedBefore] para cómo llegan a un dispositivo que ya
+/// tenía su lista guardada.
+const List<BriefingSource> _addedAug2026 = [
+  // Deportes: 200 items en la semana, mexicano y vivo hoy.
+  BriefingSource(url: 'https://www.record.com.mx/rss', section: 'Deportes'),
+  // Deportes: 44 en la semana, mexicano.
+  BriefingSource(
+    url: 'https://www.excelsior.com.mx/rss/adrenalina',
+    section: 'Deportes',
+  ),
+  // Linux: 32 en la semana, la más prolífica de todas las candidatas.
+  BriefingSource(url: 'https://www.phoronix.com/rss.php', section: 'Linux'),
+  // Linux: 12 en la semana, práctica y menos de hardware que Phoronix.
+  BriefingSource(url: 'https://itsfoss.com/feed/', section: 'Linux'),
+  // IA: 10 en la semana y SÓLO de IA, que es lo que le faltaba al tema.
+  BriefingSource(
+    url: 'https://the-decoder.com/feed/',
+    section: 'Inteligencia artificial',
+  ),
+  // IA: 10 en la semana, con más fondo que titular.
+  BriefingSource(
+    url: 'https://www.technologyreview.com/feed/',
+    section: 'Inteligencia artificial',
+  ),
+];
+
+/// Las fuentes de fábrica que YA se le habían ofrecido a todo el mundo antes de
+/// que existiera [withNewBuiltIns].
+///
+/// Es la línea base que hace honesta la pregunta "¿esto es nuevo o el usuario
+/// lo borró?". Sin ella sólo había dos salidas, ambas malas: no añadir nunca
+/// nada (y entonces enviar una fuente en el código no se la da a nadie), o
+/// añadirlo todo siempre (y resucitarle al usuario lo que quitó a propósito).
+///
+/// NO se toca al añadir fuentes nuevas: lo que se envíe a partir de ahora es
+/// precisamente lo que no está aquí.
+const Set<String> builtInsOfferedBefore = {
+  'https://feeds.bbci.co.uk/mundo/rss.xml',
+  'https://feeds.elpais.com/mrss-s/pages/ep/site/elpais.com/portada',
+  'https://rss.nytimes.com/services/xml/rss/nyt/World.xml',
+  'https://expansion.mx/rss',
+  'https://www.jornada.com.mx/rss/edicion.xml',
+  'https://www.xataka.com/index.xml',
+  'https://hipertextual.com/feed',
+  'https://www.microsiervos.com/index.xml',
+  'https://simonwillison.net/atom/everything/',
+  'https://huggingface.co/blog/feed.xml',
+  'https://www.muylinux.com/feed/',
+  'https://www.linuxadictos.com/feed/',
+  'https://blog.desdelinux.net/feed/',
+  'https://www.muyinteresante.com/feed/',
+  'https://www.scientificamerican.com/platform/syndication/rss/',
+  'https://www.marca.com/rss/futbol/mexico.xml',
+};
+
+/// Devuelve [stored] más las fuentes de fábrica que NUNCA se le han ofrecido a
+/// este dispositivo, cada una con su tema.
+///
+/// [alreadyOffered] son las claves ya ofrecidas ([briefingSourceKey]). Una
+/// fuente de fábrica que está en esa lista y no en [stored] es una que el
+/// usuario quitó: se respeta y no vuelve.
+List<BriefingSource> withNewBuiltIns(
+  List<BriefingSource> stored, {
+  required Set<String> alreadyOffered,
+}) {
+  final tiene = {for (final s in stored) briefingSourceKey(s.url)};
+  // Una lista SIN una sola fuente de fábrica es una curación deliberada: o la
+  // vació entera, o la sustituyó por las suyas. Meterle nada ahí es pisarle una
+  // decisión explícita, y eso es peor que no darle las novedades.
+  final deFabrica = {
+    for (final s in defaultBriefingSources) briefingSourceKey(s.url),
+  };
+  if (!tiene.any(deFabrica.contains)) return stored;
+  final result = List<BriefingSource>.from(stored);
+  for (final shipped in defaultBriefingSources) {
+    final key = briefingSourceKey(shipped.url);
+    if (tiene.contains(key) || alreadyOffered.contains(key)) continue;
+    result.add(shipped);
+  }
+  return dedupeBriefingSources(result);
 }

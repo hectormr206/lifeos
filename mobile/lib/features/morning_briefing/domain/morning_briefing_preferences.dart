@@ -38,6 +38,12 @@ class SharedPrefsMorningBriefingPreferences
     : _prefs = prefs; // ignore: prefer_initializing_formals
 
   static const String sourcesKey = 'morning_briefing_sources';
+
+  /// Las fuentes de fábrica que YA se le ofrecieron a este dispositivo. Es lo
+  /// que permite distinguir "esto es nuevo" de "esto lo quitó el usuario", sin
+  /// lo cual enviar una fuente en el código no se la da a nadie que ya tenga su
+  /// lista guardada. Ver [withNewBuiltIns].
+  static const String offeredBuiltInsKey = 'morning_briefing_offered_builtins';
   static const String lastBriefingKey = 'morning_briefing_last';
   static const String scheduleEnabledKey = 'morning_briefing_schedule_enabled';
   static const String scheduleHourKey = 'morning_briefing_schedule_hour';
@@ -63,11 +69,32 @@ class SharedPrefsMorningBriefingPreferences
     // would otherwise keep showing two identical groups forever.
     // Heal on the way out: a feed that died after we shipped it lives on in
     // every device's stored list, where editing the defaults never reaches it.
-    return healBriefingSources(
+    final curadas = healBriefingSources(
       dedupeBriefingSources([
         for (final line in stored) BriefingSource.decode(line),
       ]),
     );
+    // Las fuentes de fábrica enviadas DESPUÉS de que este dispositivo guardara
+    // su lista no llegarían nunca por su cuenta: `heal` cura muertas y temas,
+    // no añade. La primera vez que corre esto, la línea base es lo que ya se
+    // había ofrecido, así que sólo entra lo genuinamente nuevo.
+    final ofrecidas = p.getStringList(offeredBuiltInsKey)?.toSet() ??
+        {for (final url in builtInsOfferedBefore) briefingSourceKey(url)};
+    final conNuevas = withNewBuiltIns(curadas, alreadyOffered: ofrecidas);
+    final todasOfrecidas = {
+      ...ofrecidas,
+      for (final s in defaultBriefingSources) briefingSourceKey(s.url),
+    };
+    if (conNuevas.length != curadas.length ||
+        todasOfrecidas.length != ofrecidas.length) {
+      await p.setStringList(offeredBuiltInsKey, todasOfrecidas.toList());
+      if (conNuevas.length != curadas.length) {
+        await p.setStringList(sourcesKey, [
+          for (final s in conNuevas) s.encode(),
+        ]);
+      }
+    }
+    return conNuevas;
   }
 
   @override
