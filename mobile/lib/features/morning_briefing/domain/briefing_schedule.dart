@@ -35,7 +35,18 @@ class BriefingSchedule {
   /// finishing early is slightly older news, and the cost of finishing late is
   /// an empty screen at the exact moment the user looks. Revisit this number
   /// when the pipeline grows work (a section digest will).
-  static const Duration lead = Duration(minutes: 20);
+  /// Cuánto ANTES de la hora elegida empieza a prepararse el boletín.
+  ///
+  /// Subido de 20 a 45 minutos el 2026-08-30. Los veinte se midieron cuando el
+  /// boletín traía ~52 noticias; el 2026-08-29 se subieron los topes y pasaron a
+  /// ser ~100, con lo que el trabajo del modelo dejó de caber. Android además
+  /// pospone la tarea por su cuenta (medido: diez minutos con la app en el cubo
+  /// RARE), y ese retraso se come el adelanto antes de empezar.
+  ///
+  /// Adelantar no cuesta batería de más: es el mismo trabajo, antes. Lo que sí
+  /// costaría es llegar tarde, que es cuando el usuario toca la notificación y
+  /// se encuentra la aplicación descargando fuentes delante de él.
+  static const Duration lead = Duration(minutes: 45);
 
   /// Whether the daily automatic briefing is on.
   final bool enabled;

@@ -48,10 +48,19 @@ void main() {
     });
 
     test('false before today\'s START (the slot minus the lead)', () {
-      // El arranque de un boletín de las 8:00 es a las 7:40: a las 7:39
-      // todavía no toca, a las 7:59 ya lleva rato trabajando.
-      expect(schedule.shouldRunNow(DateTime(2026, 7, 22, 7, 39)), isFalse);
-      expect(schedule.shouldRunNow(DateTime(2026, 7, 22, 7, 59)), isTrue);
+      // Derivado de la constante, no escrito a mano: el adelanto ha cambiado
+      // dos veces y cada vez dejó números mintiendo por los tests.
+      final arranque = DateTime(2026, 7, 22, 8, 0).subtract(BriefingSchedule.lead);
+      expect(
+        schedule.shouldRunNow(arranque.subtract(const Duration(minutes: 1))),
+        isFalse,
+        reason: 'un minuto antes del arranque todavía no toca',
+      );
+      expect(
+        schedule.shouldRunNow(arranque.add(const Duration(minutes: 1))),
+        isTrue,
+        reason: 'pasado el arranque ya está trabajando',
+      );
     });
 
     test('true at/after the slot with no briefing today', () {

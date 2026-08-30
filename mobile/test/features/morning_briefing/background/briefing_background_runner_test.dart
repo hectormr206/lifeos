@@ -5,6 +5,8 @@
 // cleanly without crashing, the "listo" notification posts on success, the
 // fired "toca aquí" reminder is removed, and the next-day chain (reminder +
 // one-off work) is re-armed after EVERY outcome. No plugins, no network.
+import 'dart:async';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/morning_briefing/domain/briefing_scheduler.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
@@ -184,7 +186,8 @@ void main() {
   });
 
   test('fired BEFORE the start → skips (shouldRunNow) and re-arms for today\'s start', () async {
-    final early = DateTime(2026, 7, 22, 7, 30);
+    final arranque = DateTime(2026, 7, 22, 8, 0).subtract(BriefingSchedule.lead);
+    final early = arranque.subtract(const Duration(minutes: 10));
     final h = _harness(now: early);
 
     await runMorningBriefingBackgroundTask(h.deps);
@@ -192,7 +195,76 @@ void main() {
     expect(h.prefs.saveCount, 0);
     expect(h.reminder.lastScheduled, DateTime(2026, 7, 22, 8, 0).add(kBriefingReminderGrace));
     expect(h.work.lastDelay, const Duration(minutes: 10),
-        reason: 'el arranque de un boletín de las 8:00 es a las 7:40');
+        reason: 'se re-arma para el arranque, que es la hora menos el adelanto');
+  });
+
+  test('si el tiempo se acaba TRADUCIENDO, las noticias ya cosechadas se guardan',
+      () async {
+    // Lo que reportó el usuario el 2026-08-30: toca la notificación y la app se
+    // pone a "Leyendo fuente 13 de 23" delante de él.
+    //
+    // El presupuesto de ocho minutos se midió con ~52 noticias; el 2026-08-29
+    // se subieron los topes y pasaron a ser ~100. Cuando el modelo no termina a
+    // tiempo, el `timeout` de fuera abortaba la corrida ENTERA y se tiraba
+    // también lo ya descargado: cero guardado, cero aviso. A las 8:00 saltaba el
+    // recordatorio, él lo tocaba, y la generación empezaba de cero.
+    //
+    // Descargar las noticias y traducirlas son dos trabajos, no uno. Que el
+    // segundo no quepa no puede borrar el primero.
+    final colgado = Completer<void>();
+    addTearDown(() => colgado.complete());
+    final h = _harness(
+      now: atSlot,
+      modelAvailable: true,
+      engineOverride: FakeLocalLlmEngine(installed: true, generateGate: colgado),
+      timeout: const Duration(milliseconds: 200),
+    );
+
+    final ok = await runMorningBriefingBackgroundTask(h.deps);
+
+    expect(ok, isTrue);
+    expect(
+      h.prefs.saveCount,
+      greaterThan(0),
+      reason: 'las noticias que SÍ se descargaron tienen que quedar guardadas',
+    );
+    expect(
+      (await h.prefs.lastBriefing())?.articles,
+      isNotEmpty,
+      reason: 'sin traducir es peor que traducido, pero infinitamente mejor '
+          'que una pantalla en blanco que se pone a descargar delante de él',
+    );
+    expect(
+      h.notifications.shown,
+      greaterThan(0),
+      reason: 'hay boletín que leer, así que se avisa',
+    );
+  });
+
+  test('con tiempo justo, lo que sobrevive es el RESUMEN de cada tema', () async {
+    // El resumen por tema es lo primero que se lee y lo que decide qué abrir.
+    // Escribirlo el último significaba que un corte por tiempo mataba justo eso
+    // y dejaba cien titulares sin nada que ayude a elegir. Va primero: cuesta
+    // siete llamadas al modelo, no cien.
+    var llamadas = 0;
+    final h = _harness(
+      now: atSlot,
+      modelAvailable: true,
+      reply: (_) {
+        llamadas++;
+        return 'Lo que está pasando en este tema, en una frase.';
+      },
+    );
+
+    await runMorningBriefingBackgroundTask(h.deps);
+
+    final guardado = await h.prefs.lastBriefing();
+    expect(
+      guardado?.sectionDigests,
+      isNotEmpty,
+      reason: 'el resumen de tema es lo que no puede faltar',
+    );
+    expect(llamadas, greaterThan(0));
   });
 
   test('a HUNG run hits the hard timeout and still completes cleanly', () async {

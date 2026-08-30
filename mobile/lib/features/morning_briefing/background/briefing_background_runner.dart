@@ -95,7 +95,12 @@ Future<bool> runMorningBriefingBackgroundTask(
   BriefingBackgroundDeps deps,
 ) async {
   try {
-    await _run(deps).timeout(deps.timeout);
+    // El presupuesto NO envuelve la corrida entera: lo reparte por dentro, con
+    // una fecha límite compartida. Envolverla entera hacía que agotar el tiempo
+    // traduciendo tirara también las noticias ya descargadas — cero guardado,
+    // cero aviso, y el usuario abriendo la app a que se generara todo delante
+    // de él. Ver [_run].
+    await _run(deps);
   } catch (_) {
     // No network / model OOM / timeout / anything: clean skip. Still try to
     // re-arm so tomorrow's run exists even after a bad day.
@@ -105,6 +110,9 @@ Future<bool> runMorningBriefingBackgroundTask(
 }
 
 Future<void> _run(BriefingBackgroundDeps deps) async {
+  // Reloj de pared compartido por todas las etapas: el presupuesto es del
+  // trabajo entero, pero se reparte, no se juega a todo o nada.
+  final reloj = Stopwatch()..start();
   final schedule = await deps.preferences.schedule();
   final location = await _locationSafely(deps);
   final base = deps.now();
@@ -129,9 +137,13 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   // The harvester fetches URLs; the section is what the user reads them under.
   // Only the ENABLED ones: a source turned off must not keep being fetched in
   // the background, or "desactivada" means nothing.
-  final harvests = await deps.harvester.harvestAll(
-    enabledBriefingSources(sources),
-  );
+  // La cosecha tiene su propio techo: una red colgada no puede comerse el
+  // turno entero y dejar al modelo sin tiempo. Si ni esto cabe, no hay nada que
+  // guardar y la corrida sí se abandona — pero eso ya es "no hubo noticias",
+  // no "las tiré".
+  final harvests = await deps.harvester
+      .harvestAll(enabledBriefingSources(sources))
+      .timeout(deps.timeout);
   final assembled = deps.assembler.assemble(
     harvests,
     now: base,
@@ -147,35 +159,51 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
   var briefing = assembled;
   final engine = deps.engine;
   if (engine != null && await _modelAvailableSafely(deps)) {
+    // Cada etapa con lo que QUEDE del presupuesto, y lo que termina se conserva.
+    // Descargar las noticias y escribirlas con el modelo son trabajos distintos:
+    // que el segundo no quepa no puede borrar el primero, ni las etapas del
+    // modelo que sí acabaron.
+    Duration restante() {
+      final left = deps.timeout - reloj.elapsed;
+      return left.isNegative ? Duration.zero : left;
+    }
     // HEAVY + INTENTIONAL: loading the ~2.6GB model headless is the cost the
     // user accepted for a ready-made briefing. The pipeline never throws
     // (per-source isolation; catastrophic failure keeps originals), and the
     // engine is released right after so the background process frees the RAM.
     try {
+      // ORDEN DELIBERADO: primero el resumen de cada tema.
+      //
+      // Es lo primero que lee y lo que le dice qué abrir, y cuesta siete
+      // llamadas al modelo, no cien. Iba el último —cuando ya estaba todo
+      // traducido y con sus briefs— así que un corte por tiempo se llevaba
+      // exactamente lo único que hace legible un boletín de cien titulares.
+      // Escrito desde los titulares en su idioma original sale igual de bien:
+      // el modelo lee inglés y responde en español, que es lo que la traducción
+      // haría de todos modos.
+      briefing = await BriefingSectionDigestWriter(
+        engine: engine,
+      ).fillDigests(assembled).timeout(restante());
       final pipeline = BriefingTranslationPipeline(
         translator: OnDeviceTranslator(engine),
         extractor: deps.harvester.extractor,
       );
-      briefing = await pipeline.translateAll(
-        assembled,
-        languageCode: await deps.languageCode(),
-      );
-      // Then write the briefs the feeds never carried, while the model is
-      // still loaded. Both stages finish BEFORE the notification below, so
-      // "tu boletín está listo" is only ever said about a finished briefing —
-      // translated, and with every card carrying text.
+      briefing = await pipeline
+          .translateAll(
+            briefing,
+            languageCode: await deps.languageCode(),
+          )
+          .timeout(restante());
       briefing = await BriefingBriefWriter(
         engine: engine,
         fetcher: deps.harvester.fetcher,
         extractor: deps.harvester.extractor,
-      ).fillMissing(briefing);
-      // Last stage, with the model still warm: one paragraph per section, so
-      // the reader can decide what to open without reading every card.
-      briefing = await BriefingSectionDigestWriter(
-        engine: engine,
-      ).fillDigests(briefing);
+      ).fillMissing(briefing).timeout(restante());
     } catch (_) {
-      briefing = assembled; // keep originals — never lose the fetched news
+      // Se acabó el tiempo o el modelo falló. `briefing` ya trae lo que las
+      // etapas anteriores SÍ terminaron; se guarda eso, no se vuelve al
+      // principio. Antes esto hacía `briefing = assembled` y tiraba también las
+      // traducciones ya hechas.
     } finally {
       try {
         await engine.dispose();
