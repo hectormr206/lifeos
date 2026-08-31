@@ -12,7 +12,11 @@ void main() {
   });
 
   test('se corta en la última frase COMPLETA, nunca a media palabra', () {
-    final long = '${'Primera frase completa que cabe entera. ' * 9}'
+    // Dimensionado desde la constante: ya cambió de 420 a 700 y estas cadenas
+    // se quedaron cortas, con lo que dejaron de probar el recorte.
+    final repeticiones =
+        (BriefingSectionDigestWriter.maxDigestChars / 40).ceil();
+    final long = '${'Primera frase completa que cabe entera. ' * repeticiones}'
         'Y esta última se pasa del límite y no debería aparecer a medias';
 
     final clipped = BriefingSectionDigestWriter.clip(long);
@@ -38,8 +42,10 @@ void main() {
   });
 
   test('los cierres de frase con ? y ! también valen', () {
-    final long = '${'¿Qué está pasando aquí? ' * 15}'
-        '${'Una cola larguísima que se pasa del límite permitido y sobra. ' * 3}';
+    final repeticiones =
+        (BriefingSectionDigestWriter.maxDigestChars / 24).ceil();
+    final long = '${'¿Qué está pasando aquí? ' * repeticiones}'
+        '${'Una cola larguísima que se pasa del límite permitido y sobra. ' * 6}';
 
     final clipped = BriefingSectionDigestWriter.clip(long);
 

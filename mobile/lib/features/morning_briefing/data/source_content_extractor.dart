@@ -378,6 +378,12 @@ class SourceContentExtractor {
     var s = raw.replaceAllMapped(_cdata, (m) => m.group(1) ?? '');
     s = s.replaceAll(_anyTag, ' ');
     s = _decodeEntities(s);
+    // Y OTRA VEZ, porque hay feeds que mandan el CDATA ESCAPADO:
+    // `&lt;![CDATA[…]]&gt;` en vez de CDATA de verdad. Excélsior lo hace, y el
+    // lector veía títulos como "<![CDATA[Mateo logra sueño universitario…]]>".
+    // Desenvolver antes de decodificar no lo alcanza: el marcado sólo aparece
+    // DESPUÉS de decodificar, cuando ya nadie volvía a mirarlo.
+    s = s.replaceAllMapped(_cdata, (m) => m.group(1) ?? '');
     return s.replaceAll(_whitespace, ' ').trim();
   }
 
@@ -398,6 +404,11 @@ class SourceContentExtractor {
     var s = raw.replaceAllMapped(_cdata, (m) => m.group(1) ?? '');
     s = s.replaceAll(_anyTag, ' '); // strip literal tags
     s = _decodeEntities(s); // escaped tags/entities reappear
+    // El CDATA escapado reaparece AQUÍ, y hay que desenvolverlo ANTES del
+    // siguiente barrido de etiquetas: `<![CDATA[…]]>` no tiene ningún `>`
+    // dentro, así que el barrido se lo llevaba entero — contenido incluido — y
+    // la tarjeta se quedaba sin resumen. Excélsior manda sus feeds así.
+    s = s.replaceAllMapped(_cdata, (m) => m.group(1) ?? '');
     s = s.replaceAll(_anyTag, ' '); // strip the now-revealed tags
     s = _decodeEntities(s); // decode any remaining nested entities
     // Drop invisible non-whitespace BEFORE collapsing, so what is left is

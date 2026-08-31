@@ -29,14 +29,22 @@ class BriefingSectionDigestWriter {
   static const int topK = 20;
   static const double topP = 0.9;
 
-  /// A digest has to be readable at a glance — a few sentences, not an essay.
-  /// Anything longer is the model ignoring the instruction, and is cut rather
-  /// than trusted.
-  static const int maxDigestChars = 420;
+  /// Tope de UNA tanda, no del resumen entero.
+  ///
+  /// Subido de 420 el 2026-08-31. El lector explicó para qué usa el resumen:
+  /// "que abarque todas las noticias y una buena parte de cada una, sin
+  /// excepción… para que sin abrir la pestaña pueda enterarme de qué pasa y por
+  /// qué". En 420 caracteres eso no cabe ni de lejos.
+  static const int maxDigestChars = 700;
 
-  /// Headlines shown to the model per section. The whole point is that the
-  /// section is already capped, so this is a safety rail, not a filter.
-  static const int maxHeadlinesPerSection = 12;
+  /// Noticias por tanda.
+  ///
+  /// EL TECHO NO ES UNA PREFERENCIA, ES DEL MOTOR: `LocalModelConfig` crea el
+  /// chat con `maxOutputTokens: 512` y eso no se puede subir por llamada.
+  /// Pedirle veinte noticias en una sola respuesta devuelve un párrafo cortado
+  /// a media frase, que es PEOR que un resumen corto: parece completo y no lo
+  /// está. Por eso el resumen de una sección se escribe por tandas y se une.
+  static const int articlesPerPass = 5;
 
   /// Fills [OnDeviceBriefing.sectionDigests], returning an updated briefing.
   /// [onSection] fires before each section is written (UI-progress seam).
@@ -70,10 +78,26 @@ class BriefingSectionDigestWriter {
 
   /// The model's paragraph for one section, or null when it gave nothing
   /// usable — in which case that section stays without one.
+  /// El resumen de una sección, escrito por tandas y unido.
+  ///
+  /// Devuelve null sólo cuando NINGUNA tanda dio nada: cobertura parcial es
+  /// mucho mejor que ninguna, y una tanda en la que el modelo se atraganta no
+  /// puede llevarse por delante a las demás.
   Future<String?> _digest(BriefingSectionGroup group) async {
+    final partes = <String>[];
+    for (var i = 0; i < group.articles.length; i += articlesPerPass) {
+      final tanda = group.articles.skip(i).take(articlesPerPass).toList();
+      final texto = await _pass(group.section, tanda);
+      if (texto != null) partes.add(texto);
+    }
+    if (partes.isEmpty) return null;
+    return partes.join('\n\n');
+  }
+
+  Future<String?> _pass(String section, List<BriefingArticle> articles) async {
     try {
       final result = await engine.generate(
-        _prompt(group),
+        promptFor(section: section, lines: _lines(articles)),
         temperature: temperature,
         topK: topK,
         topP: topP,
@@ -84,6 +108,16 @@ class BriefingSectionDigestWriter {
     } catch (_) {
       return null;
     }
+  }
+
+  static String _lines(List<BriefingArticle> articles) {
+    final lines = StringBuffer();
+    for (final article in articles) {
+      lines.writeln('- ${article.displayTitle} (${article.sourceName})');
+      final brief = article.displayDescription.trim();
+      if (brief.isNotEmpty) lines.writeln('  $brief');
+    }
+    return lines.toString();
   }
 
   /// Recorta a [maxDigestChars] SIN partir palabras.
@@ -112,22 +146,14 @@ class BriefingSectionDigestWriter {
 
   /// The instruction. It names the job (help me decide what to open), forbids
   /// invention, and hands over exactly the headlines the reader already has.
-  static String _prompt(BriefingSectionGroup group) {
-    final lines = StringBuffer();
-    for (final article in group.articles.take(maxHeadlinesPerSection)) {
-      lines.writeln('- ${article.displayTitle} (${article.sourceName})');
-      final brief = article.displayDescription.trim();
-      if (brief.isNotEmpty) lines.writeln('  $brief');
-    }
-    return promptFor(section: group.section, lines: lines.toString());
-  }
 
   /// El texto que se le pide al modelo, expuesto para poder fijar en una prueba
   /// lo que se le exige — sin montar un grupo de noticias entero.
   static String promptFor({required String section, required String lines}) {
     return 'Estas son las noticias de hoy sobre $section.\n'
-        'Escribe en español un resumen de 2 a 4 frases que le diga a alguien '
-        'qué está pasando en este tema, para que decida qué leer.\n'
+        'Cuenta en español QUÉ pasó en cada una y POR QUÉ importa, una o dos '
+        'frases por noticia. No te dejes ninguna: quien lee esto quiere '
+        'enterarse sin abrir las noticias.\n'
         'Si varias fuentes cuentan lo mismo, cuéntalo UNA vez. '
         'Usa solo lo que está aquí abajo: no inventes datos, nombres ni cifras. '
         'Empieza directamente por la noticia más importante. '

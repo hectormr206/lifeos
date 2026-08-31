@@ -13,9 +13,18 @@ const String hnFrontPageUrl =
 /// The HN Algolia single-item (comments thread) endpoint prefix.
 const String hnItemUrlPrefix = 'https://hn.algolia.com/api/v1/items/';
 
-/// Hacker News is always fetched, but it belongs to a theme like everything
-/// else so it gets a heading and a digest instead of floating loose.
-const String hackerNewsSection = 'Tecnología';
+/// Hacker News tiene TEMA PROPIO.
+///
+/// Vivía dentro de "Tecnología" y ahí compartía el cupo del tema con Xataka,
+/// Hipertextual y Microsiervos: con ocho por fuente repartidos entre cuatro,
+/// aportaba unas cinco noticias — menos que las diez de antes de que existieran
+/// los temas. La API de HN devuelve veinte, justo el cupo de un tema.
+///
+/// La alternativa era subir el tope por fuente, y eso arregla HN estropeando lo
+/// demás: dejaría que Récord (28 noticias al día) y La Jornada (98) se coman sus
+/// temas enteros. Un tema propio le da su cupo completo y su propio resumen, en
+/// vez de diluir sus historias dentro del de Tecnología.
+const String hackerNewsSection = 'Hacker News';
 
 /// Reusable fetch+parse stage of the briefing pipeline: harvests every
 /// configured feed plus Hacker News into [SourceHarvest]es, with per-source
