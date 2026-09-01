@@ -53,11 +53,24 @@ class BriefingAssembler {
   /// digest, so this is the depth available to whoever opens a theme, not what
   /// anyone must read.
   ///
-  /// Raised 12 -> 20 the same day, and this is the cap that was actually
-  /// binding: Mundo had 174 fresh items and showed 12, México 122 and showed
-  /// 12. The per-source cap stays well below it on purpose — El País (118 items
-  /// that day) and La Jornada (98) would otherwise own their themes outright.
-  static const int defaultSectionCap = 20;
+  /// Subido 12 -> 20 el 2026-08-29 y devuelto a 12 el 2026-09-01, con la
+  /// medición delante: en el Pixel, un boletín de ~100 noticias tarda NUEVE
+  /// minutos (1 leyendo 23 fuentes, 4 traduciendo, 4 resumiendo ocho temas).
+  /// La ventana que Android da a una tarea en segundo plano es de ~10 minutos y
+  /// paramos a los 8, así que con 20 la generación automática de la mañana —la
+  /// única que importa, porque es la que tiene que estar lista al tocar la
+  /// notificación— no llegaba al final y los últimos temas quedaban sin
+  /// resumen.
+  ///
+  /// Doce deja ~75 noticias, que sí caben, y de paso mejora la calidad del
+  /// resumen: se escribe en tandas de cinco por orden de llegada, y con menos
+  /// noticias por tema hay menos tandas que mezclan cosas sin relación (en
+  /// México salía acero para obras públicas junto a un teléfono Samsung y a
+  /// Olivia Rodrigo).
+  ///
+  /// Sigue siendo el cap que MUERDE: la cuota por fuente se queda por debajo a
+  /// propósito, porque El País publicó 118 noticias ese día y La Jornada 98.
+  static const int defaultSectionCap = 12;
 
   final int perSourceCap;
   final int sectionCap;

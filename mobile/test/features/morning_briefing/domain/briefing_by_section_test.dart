@@ -62,11 +62,19 @@ void main() {
     final mexico = briefing.sections.single.articles;
     final jornada = mexico.where((a) => a.sourceName == 'La Jornada').length;
 
-    // Dos fuentes a ocho: el tema se queda en dieciséis, no en el tope de
-    // veinte. El tope de tema sólo muerde a partir de tres fuentes, y la cuota
-    // por fuente es lo que impide que la más ruidosa se lo quede todo — que es
-    // lo que esta prueba defiende.
-    expect(mexico, hasLength(2 * BriefingAssembler.defaultPerSourceCap));
+    // Cuántas caben es el MENOR de los dos topes: lo que las fuentes pueden
+    // aportar entre todas, o lo que el tema admite. Escrito así en vez de con
+    // un número, porque los dos topes ya han cambiado tres veces en una semana
+    // y cada vez dejaron esta prueba afirmando algo falso.
+    expect(
+      mexico,
+      hasLength(
+        [
+          2 * BriefingAssembler.defaultPerSourceCap,
+          BriefingAssembler.defaultSectionCap,
+        ].reduce((a, b) => a < b ? a : b),
+      ),
+    );
     expect(
       jornada,
       lessThanOrEqualTo(BriefingAssembler.defaultPerSourceCap),
