@@ -41,7 +41,14 @@ endif()
 # of modifying this function.
 function(APPLY_STANDARD_SETTINGS TARGET)
   target_compile_features(${TARGET} PUBLIC cxx_std_14)
-  target_compile_options(${TARGET} PRIVATE -Wall -Werror)
+  # -Wno-error=deprecated-declarations: esta funcion se aplica TAMBIEN a los
+  # targets de los plugins, y una API que el sistema deprecia en codigo de
+  # terceros no es un defecto nuestro ni algo que podamos arreglar aqui.
+  # Medido: tray_manager llama app_indicator_new (tray_manager_plugin.cc:118)
+  # y con -Werror a secas eso tumbaba la publicacion entera de escritorio.
+  # Sigue siendo un AVISO a proposito, no se silencia: el dia que la API
+  # desaparezca de verdad queremos haberlo visto venir.
+  target_compile_options(${TARGET} PRIVATE -Wall -Werror -Wno-error=deprecated-declarations)
   target_compile_options(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:-O3>")
   target_compile_definitions(${TARGET} PRIVATE "$<$<NOT:$<CONFIG:Debug>>:NDEBUG>")
 endfunction()
