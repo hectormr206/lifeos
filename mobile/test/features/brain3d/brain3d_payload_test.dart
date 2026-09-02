@@ -311,10 +311,19 @@ void main() {
       expect(kBrain3dKinds, contains('entity'));
       expect(kBrain3dKinds, containsAll(['fact', 'person', 'event']));
       expect(kBrain3dKinds, isNot(contains('conversation')));
+      // Las dos listas COMPARTEN 'entity' — el navegador también lo muestra
+      // ahora — pero siguen siendo independientes, y esta es la diferencia que
+      // lo prueba: el navegador lista las conversaciones y el cerebro no.
+      // Mientras esto se cumpla, ninguna de las dos define a la otra.
       expect(
         kLocalGraphKinds.map((e) => e.kind),
-        isNot(contains('entity')),
-        reason: 'adding entity here would silently add a browser chip too',
+        contains('conversation'),
+        reason: 'el navegador sí lista el registro del chat',
+      );
+      expect(
+        kBrain3dKinds,
+        isNot(contains('conversation')),
+        reason: 'el cerebro muestra conocimiento, no el registro del chat',
       );
     });
 

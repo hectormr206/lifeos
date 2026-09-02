@@ -217,6 +217,39 @@ void main() {
     expect(find.text('Le gusta el café'), findsNothing);
   });
 
+  // Las entidades (un lugar, un medicamento, una cosa) se escriben con
+  // `ensureEntity` y durante mucho tiempo no se veían en ninguna pantalla: el
+  // cerebro 3D ya las muestra, y este navegador seguía sin cargarlas. Una cosa
+  // que Axi conoce y que el usuario no puede encontrar en ningún sitio es, a
+  // efectos prácticos, una cosa que no recuerda.
+  testWidgets('las entidades salen en Todos y tienen su propio chip',
+      (tester) async {
+    final store = _FakeLocalGraphStore(nodes: [
+      _node(uuid: 'n1', kind: 'fact', label: 'Le gusta el café'),
+      _node(uuid: 'n2', kind: 'entity', label: 'Monterrey'),
+    ]);
+    await tester.pumpWidget(_app(store));
+    await tester.pumpAndSettle();
+
+    // En "Todos", junto a lo demás.
+    expect(find.text('Monterrey'), findsOneWidget);
+
+    // Y filtrable por su cuenta. Hay que arrastrar la fila de chips: "Cosas"
+    // es el sexto y no cabe en el viewport de 800 px del test, así que el
+    // ListView horizontal ni siquiera lo construye hasta que se acerca.
+    await tester.dragUntilVisible(
+      find.widgetWithText(FilterChip, 'Cosas'),
+      find.byType(ListView).first,
+      const Offset(-200, 0),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.widgetWithText(FilterChip, 'Cosas'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Monterrey'), findsOneWidget);
+    expect(find.text('Le gusta el café'), findsNothing);
+  });
+
   testWidgets('tap node -> detail shows data + relations -> relation navigates',
       (tester) async {
     final store = _FakeLocalGraphStore(

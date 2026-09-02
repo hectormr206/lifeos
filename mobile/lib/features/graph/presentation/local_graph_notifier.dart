@@ -21,6 +21,11 @@ const List<({String kind, String label})> kLocalGraphKinds = [
   (kind: 'conversation', label: 'Conversaciones'),
   (kind: 'person', label: 'Personas'),
   (kind: 'event', label: 'Eventos'),
+  // Las cosas que Axi conoce y que no son ni personas ni sucesos: un lugar, un
+  // medicamento, un objeto. Las escribe `ensureEntity`. Faltaban aquí, así que
+  // ni salían en "Todos" ni tenían chip, y una cosa que el usuario no puede
+  // encontrar en ninguna pantalla es una cosa que, para él, no está guardada.
+  (kind: 'entity', label: 'Cosas'),
 ];
 
 /// Immutable UI state for the local browser list: the active [kind] filter
