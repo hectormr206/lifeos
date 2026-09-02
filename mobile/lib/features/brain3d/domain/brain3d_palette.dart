@@ -21,6 +21,11 @@ const Map<String, Color> kDomainColors = {
   'spirituality': Color(0xFFFF44AA),
   'person': Color(0xFFFF6B9D),
   'reminder': Color(0xFFFFAA33),
+  // Phone-side addition: the laptop never drew generic `entity` nodes, so it
+  // has no colour for them. Periwinkle, far from fact-teal, person-pink and
+  // event-magenta — the alternative was the fallback grey, which reads as "we
+  // do not know what this is".
+  'entity': Color(0xFF9B8CFF),
 };
 
 const Color kDefaultNodeColor = Color(0xFF888888);

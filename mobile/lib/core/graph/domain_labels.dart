@@ -23,6 +23,9 @@ const Map<String, String> _labels = {
   'fact': 'Hecho',
   'person': 'Persona',
   'event': 'Evento',
+  // Generic entities: a place, a medication, an org, a thing. "Cosa" because
+  // that is what the category honestly is; the 3D detail chip shows it.
+  'entity': 'Cosa',
   'personal': 'Personal',
 };
 

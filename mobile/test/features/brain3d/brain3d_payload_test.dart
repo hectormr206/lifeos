@@ -1,5 +1,5 @@
 // Proves the Cerebro 3D payload builder reads the ON-DEVICE graph correctly
-// through the store's read API only: merges the local kinds newest-first,
+// through the store's read API only: merges its OWN kind list newest-first,
 // caps at 500 nodes for phone performance (flagging truncation), keeps only
 // edges whose BOTH endpoints survived the cap (deduped), and serializes to
 // the exact JSON contract assets/brain3d/brain3d.html expects.
@@ -9,6 +9,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/graph_records.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
 import 'package:lifeos/features/brain3d/domain/brain3d_payload.dart';
+import 'package:lifeos/features/graph/presentation/local_graph_notifier.dart'
+    show kLocalGraphKinds;
 
 /// In-memory read-only [LocalGraphStore] over fixed node + edge lists —
 /// same shape as the local browser test's fake.
@@ -231,6 +233,116 @@ void main() {
         'kind': 'involves-person',
       });
       expect(json['truncated'], isFalse);
+    });
+
+    // ── Generic `entity` nodes (SLICE: relations that pointed nowhere) ──────
+    //
+    // MemoryWriter.ensureEntity writes places, medications, orgs and things as
+    // kind `entity`, and RelationExtractor points real triples at them. The 3D
+    // used to load only the browser's chip kinds, so those nodes never entered
+    // the payload — and because an edge survives only when BOTH endpoints did,
+    // "Tere --vive_en--> Monterrey" vanished from the drawing without a word.
+    test('includes entity nodes and the edges that reach them', () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('f1', 'fact', t0, label: 'Tere vive en Monterrey'),
+          _node('p1', 'person', t0.add(const Duration(minutes: 1)),
+              label: 'Tere'),
+          _node('e1', 'entity', t0.add(const Duration(minutes: 2)),
+              label: 'Monterrey'),
+        ],
+        edges: [
+          _edge('r1', 'p1', 'e1', relation: 'vive_en'),
+          _edge('r2', 'f1', 'p1', relation: 'involves-person'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), containsAll(['f1', 'p1', 'e1']));
+      expect(
+        payload.edges.map((e) => e.uuid),
+        containsAll(['r1', 'r2']),
+        reason: 'the entity endpoint is in the payload, so its edge must be too',
+      );
+      final json = payload.toJson();
+      final nodes = (json['nodes'] as List).cast<Map<String, Object?>>();
+      expect(nodes.singleWhere((n) => n['id'] == 'e1')['kind'], 'entity');
+    });
+
+    test('keeps bare single-word entities (isLowValue is a fact-only rule)',
+        () async {
+      // An entity's whole content IS its label: "Monterrey" is one short token
+      // with no data, exactly what isLowValue deletes in a fact. Screening
+      // entities with it would empty the very category this slice adds.
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('e1', 'entity', t0, label: 'Monterrey'),
+          _node('e2', 'entity', t0, label: 'paracetamol'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), containsAll(['e1', 'e2']));
+    });
+
+    test('drops greeting/empty entities so bad extractions do not litter it',
+        () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('g1', 'entity', t0, label: 'hola'),
+          _node('g2', 'entity', t0, label: '  Gracias!  '),
+          _node('g3', 'entity', t0, label: '   '),
+          _node('e1', 'entity', t0, label: 'Monterrey'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), ['e1']);
+    });
+
+    test('the 3D owns its kind list, separate from the browser filter chips',
+        () async {
+      // Decoupled on purpose: kLocalGraphKinds is the memory browser's chip
+      // taxonomy, and letting it define what the brain LOADS is what hid
+      // entities in the first place.
+      expect(kBrain3dKinds, contains('entity'));
+      expect(kBrain3dKinds, containsAll(['fact', 'person', 'event']));
+      expect(kBrain3dKinds, isNot(contains('conversation')));
+      expect(
+        kLocalGraphKinds.map((e) => e.kind),
+        isNot(contains('entity')),
+        reason: 'adding entity here would silently add a browser chip too',
+      );
+    });
+
+    test('the cap still holds (and still flags) once entities are loaded',
+        () async {
+      // 6 nodes per kind across 4 kinds, capped at 10: the 10 newest win and
+      // truncation is still reported. Interleaved timestamps so no single kind
+      // can fill the cap on its own.
+      final kinds = ['fact', 'person', 'event', 'entity'];
+      final nodes = [
+        for (var i = 0; i < 24; i++)
+          _node('n$i', kinds[i % 4], t0.add(Duration(minutes: i)),
+              label: 'nodo $i'),
+      ];
+      final store = _FakeLocalGraphStore(nodes: nodes, edges: [
+        _edge('e-new', 'n23', 'n22'),
+        _edge('e-old', 'n23', 'n0'),
+      ]);
+
+      final payload = await buildBrain3dPayload(store, maxNodes: 10);
+
+      expect(payload.nodes, hasLength(10));
+      expect(payload.truncated, isTrue);
+      expect(
+        payload.nodes.map((n) => n.uuid),
+        [for (var i = 23; i >= 14; i--) 'n$i'],
+      );
+      expect(payload.edges.map((e) => e.uuid), ['e-new']);
     });
 
     test('empty store yields an empty, untruncated payload', () async {

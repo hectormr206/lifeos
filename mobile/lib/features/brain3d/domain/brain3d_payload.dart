@@ -1,6 +1,5 @@
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
-import '../../graph/presentation/local_graph_notifier.dart' show kLocalGraphKinds;
 import '../../memory/data/memory_writer.dart' show isLowValue;
 import '../../memory/domain/subject.dart' show foldAccents;
 
@@ -8,15 +7,35 @@ import '../../memory/domain/subject.dart' show foldAccents;
 /// well; beyond that a phone GPU (and the force layout) starts to crawl.
 const int kBrain3dMaxNodes = 500;
 
+/// The node kinds the Cerebro 3D LOADS, newest-first, in no particular order.
+///
+/// Deliberately the 3D's own list, not the memory browser's `kLocalGraphKinds`:
+/// that constant is a filter-chip taxonomy for a list screen, and borrowing it
+/// here is exactly what hid `entity` nodes — the places, medications, orgs and
+/// things `MemoryWriter.ensureEntity` writes, and the far endpoint of most
+/// extracted relations. Because an edge survives only when BOTH endpoints do,
+/// not loading them silently deleted whole relationships from the drawing
+/// ("Tere --vive_en--> Monterrey" existed in the store and never appeared).
+///
+/// Adding a kind here changes ONE screen. That is the point.
+const List<String> kBrain3dKinds = <String>[
+  'fact',
+  'person',
+  'event',
+  'entity',
+];
+
 /// Chat plumbing kinds EXCLUDED from the Cerebro 3D. The 3D view is the "brain
 /// of your life" — what Axi KNOWS (facts, people, events, domain readings), not
 /// the raw chat log: `conversation` containers ("Chat con Axi") and per-turn
 /// `chat_message`/greeting nodes ("Hola") only clutter it.
+/// Not in [kBrain3dKinds], so nothing loads them in the first place; kept as a
+/// guard on the records themselves, in case they arrive by another door.
 const Set<String> kBrain3dExcludedKinds = <String>{'conversation', 'chat_message'};
 
 /// Trivial greeting / filler phrases (accent-folded, lowercased, ≤ ~2 words)
-/// that carry no informational content. A `fact` node whose whole label is one
-/// of these is dropped from the view. Complements [isLowValue], which only
+/// that carry no informational content. A `fact` or `entity` node whose whole
+/// label is one of these is dropped. Complements [isLowValue], which only
 /// catches SINGLE-token noise — this also covers 2-word greetings.
 const Set<String> _kGreetingStopList = <String>{
   'hola', 'holi', 'hey', 'ola', 'buenas', 'buenos dias', 'buen dia',
@@ -37,14 +56,27 @@ bool _isGreetingFiller(String label) {
 }
 
 /// True when a node is meaningful knowledge worth rendering in the 3D view.
-/// The user hub (`person` with `data.role == 'user'`, "Yo") and all
-/// non-`fact` knowledge (people, events, domain data) are always kept; only
-/// `fact` nodes are screened for low-value greeting/filler noise.
+///
+/// The user hub (`person` with `data.role == 'user'`, "Yo"), people and events
+/// are always kept. Two kinds are screened for noise, with DIFFERENT rules:
+///
+///  * `fact` — full screening. A fact carries its content in `data`, so a bare
+///    short label with nothing behind it is filler ([isLowValue]).
+///  * `entity` — greetings and blanks only. An entity's whole content IS its
+///    label: "Monterrey" is a single short token with an empty `data`, which
+///    [isLowValue] would call worthless. Running it here would delete almost
+///    every entity and re-open the bug this list exists to close. What is left
+///    to catch is a bad extraction that made a node out of "hola".
 bool _isKnowledgeNode(GraphNodeRecord n) {
   if (kBrain3dExcludedKinds.contains(n.kind)) return false;
-  if (n.kind != 'fact') return true;
-  if (isLowValue(n.label, n.data)) return false;
-  if (_isGreetingFiller(n.label)) return false;
+  if (n.kind == 'fact') {
+    if (isLowValue(n.label, n.data)) return false;
+    return !_isGreetingFiller(n.label);
+  }
+  if (n.kind == 'entity') {
+    if (n.label.trim().isEmpty) return false;
+    return !_isGreetingFiller(n.label);
+  }
   return true;
 }
 
@@ -95,7 +127,7 @@ class Brain3dPayload {
 /// fully offline. Consumes only the store's read API (`listNodesByKind` +
 /// `edgesForNode`), like the local graph browser does:
 ///
-///  1. Merge every kind C1 writes on-device, newest-created first.
+///  1. Merge every kind in [kBrain3dKinds], newest-created first.
 ///  2. Cap at [maxNodes] (phone performance — see [kBrain3dMaxNodes]).
 ///  3. Keep only edges connecting two surviving nodes, deduped by uuid.
 Future<Brain3dPayload> buildBrain3dPayload(
@@ -103,15 +135,12 @@ Future<Brain3dPayload> buildBrain3dPayload(
   int maxNodes = kBrain3dMaxNodes,
 }) async {
   final merged = <GraphNodeRecord>[];
-  for (final entry in kLocalGraphKinds) {
-    // Skip chat plumbing (conversation/chat_message) — the 3D view shows
-    // KNOWLEDGE, not the chat log.
-    if (kBrain3dExcludedKinds.contains(entry.kind)) continue;
+  for (final kind in kBrain3dKinds) {
     // +1 so "did we truncate?" is detectable even when one single kind
     // holds more than maxNodes rows.
-    merged.addAll(await store.listNodesByKind(entry.kind, limit: maxNodes + 1));
+    merged.addAll(await store.listNodesByKind(kind, limit: maxNodes + 1));
   }
-  // Drop trivial greeting/filler facts; keep the hub and all real knowledge.
+  // Drop trivial greeting/filler noise; keep the hub and all real knowledge.
   merged.retainWhere(_isKnowledgeNode);
   merged.sort((a, b) => b.createdAt.compareTo(a.createdAt));
 
