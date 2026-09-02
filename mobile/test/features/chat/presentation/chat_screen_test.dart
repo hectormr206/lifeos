@@ -631,6 +631,10 @@ void main() {
     // Compact always-visible line: 40 tokens over the 1.85 s decode window
     // (2.0 s total minus the 150 ms TTFT/prefill) → 22 tok/s.
     expect(find.textContaining('22 tok/s'), findsOneWidget);
+    // The REAL backend the runtime initialized rides along in the same line —
+    // flutter_gemma can fall back to CPU silently, and a benchmark that only
+    // showed the backend behind a tap would hide exactly that.
+    expect(find.textContaining('22 tok/s · 2.0 s · GPU'), findsOneWidget);
     expect(find.byIcon(Icons.bar_chart), findsOneWidget);
 
     // The stats button opens a modal with the full breakdown.

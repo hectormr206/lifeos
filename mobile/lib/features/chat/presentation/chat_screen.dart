@@ -1558,7 +1558,12 @@ class _MetricsLine extends StatelessWidget {
         Icon(Icons.bolt, size: 13, color: muted),
         const SizedBox(width: 2),
         Text(
-          '${metrics.tokensPerSec.round()} tok/s · ${_formatSeconds(metrics.totalMs)}',
+          // The backend rides in the ALWAYS-VISIBLE line, not only in the
+          // modal: flutter_gemma can fall back from the requested accelerator
+          // silently, so this is the one number that says which hardware the
+          // tok/s next to it were actually measured on.
+          '${metrics.tokensPerSec.round()} tok/s · ${_formatSeconds(metrics.totalMs)}'
+          ' · ${metrics.backend.name.toUpperCase()}',
           style: TextStyle(fontSize: 11, color: muted),
         ),
         const SizedBox(width: 2),

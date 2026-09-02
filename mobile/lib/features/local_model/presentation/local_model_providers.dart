@@ -8,13 +8,37 @@ import '../domain/brain_model_version_store.dart';
 import '../domain/idle_unload_llm_engine.dart';
 import '../domain/llm_request_queue.dart';
 import '../domain/local_llm_engine.dart';
+import '../domain/local_model_backend_preference.dart';
 import '../domain/local_model_preferences.dart';
 import '../domain/notification_permission.dart';
 import '../domain/serial_llm_engine.dart';
+import 'local_model_backend_notifier.dart';
+
+/// Persistence for the developer "forzar backend" choice (shared_preferences).
+/// Overridden with a fake in tests.
+final localModelBackendPreferenceProvider = Provider<LocalModelBackendPreference>(
+  (ref) => SharedPrefsLocalModelBackendPreference(),
+);
+
+/// The forced inference backend, or `null` for automatic. See
+/// [ForcedLocalModelBackendNotifier].
+final forcedLocalModelBackendProvider =
+    NotifierProvider<ForcedLocalModelBackendNotifier, LocalLlmBackend?>(
+  ForcedLocalModelBackendNotifier.new,
+);
 
 /// Immutable config for the on-device model (model URL + backend). Overridable
 /// in tests / to try the Pixel Tensor-G5 NPU build.
-final localModelConfigProvider = Provider<LocalModelConfig>((ref) => const LocalModelConfig());
+///
+/// THE ONE SEAM for the forced backend: `FlutterGemmaLlmEngine.load()` resolves
+/// `backend ?? _config.backend`, and every one of the ~11 call sites calls
+/// `load()` with no argument — so putting the choice here reaches all of them
+/// without touching any. Watching the notifier also means a change rebuilds
+/// [localLlmEngineProvider], whose `onDispose` releases the previous engine.
+final localModelConfigProvider = Provider<LocalModelConfig>((ref) {
+  final forced = ref.watch(forcedLocalModelBackendProvider);
+  return forced == null ? const LocalModelConfig() : LocalModelConfig(backend: forced);
+});
 
 /// The ONE FIFO queue every piece of on-device model work goes through.
 ///

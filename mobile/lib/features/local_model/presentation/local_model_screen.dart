@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../domain/local_llm_engine.dart';
 import 'local_model_notifier.dart';
+import 'local_model_providers.dart';
 import 'required_models_manager.dart';
 
 /// Model-manager screen: the unified required-models manager (the four required
@@ -34,6 +36,9 @@ class LocalModelScreen extends ConsumerWidget {
           // TODO(local-model): a future per-row "eliminar" control could let the
           // user free a single model's weights from the manager rows above.
           _UpdateAvailableBanner(manager: manager),
+          // Herramienta de desarrollo, no una función de producto: fuerza el
+          // backend para poder medir GPU contra CPU en el mismo teléfono.
+          const _BackendOverrideSection(),
         ],
       ),
     );
@@ -107,6 +112,63 @@ class _UpdateAvailableBanner extends ConsumerWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+/// Control de desarrollo: en qué hardware se carga el modelo local.
+///
+/// POR QUÉ EXISTE. Todas las llamadas piden `engine.load()` sin argumentos, así
+/// que la app siempre pide GPU y el backend que aparece en las métricas sólo
+/// dice "CPU" cuando una carga falló y cayó al plan B. Sin poder forzar CPU no
+/// hay con qué comparar la GPU, y el benchmark no significa nada.
+///
+/// "Automático" es el comportamiento de siempre (GPU primero, con el respaldo
+/// en CPU del propio motor), y cambiar la opción SUELTA el modelo residente —
+/// si no, la siguiente generación seguiría corriendo en el backend anterior.
+/// NPU queda fuera a propósito: hoy no se usa y no hay pesos para probarla.
+class _BackendOverrideSection extends ConsumerWidget {
+  const _BackendOverrideSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final forced = ref.watch(forcedLocalModelBackendProvider);
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Backend de inferencia',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Para medir. «Automático» pide GPU y cae a CPU si hace falta; '
+            'forzar uno hace que el modelo se cargue ahí en la siguiente '
+            'carga (la actual se suelta al cambiar).',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<LocalLlmBackend?>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment<LocalLlmBackend?>(value: null, label: Text('Automático')),
+              ButtonSegment<LocalLlmBackend?>(value: LocalLlmBackend.gpu, label: Text('GPU')),
+              ButtonSegment<LocalLlmBackend?>(value: LocalLlmBackend.cpu, label: Text('CPU')),
+            ],
+            selected: {forced},
+            onSelectionChanged: (selection) => ref
+                .read(forcedLocalModelBackendProvider.notifier)
+                .setForcedBackend(selection.first),
+          ),
+        ],
       ),
     );
   }

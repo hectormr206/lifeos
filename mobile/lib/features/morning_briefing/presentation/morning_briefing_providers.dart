@@ -41,8 +41,11 @@ final sourceContentExtractorProvider = Provider<SourceContentExtractor>(
 /// its own generation into every one of those assertions.
 final briefingSectionDigestWriterProvider =
     Provider<BriefingSectionDigestWriter>(
+      // `watch`, not `read`: the engine is rebuilt when the forced-backend
+      // developer setting changes, and a writer holding the previous instance
+      // would keep generating on the OLD backend.
       (ref) => BriefingSectionDigestWriter(
-        engine: ref.read(localLlmEngineProvider),
+        engine: ref.watch(localLlmEngineProvider),
       ),
     );
 

@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lifeos/features/embedding/embedding_providers.dart';
+import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
 import 'package:lifeos/features/local_model/presentation/required_models_manager.dart';
@@ -24,6 +25,7 @@ import '../../stt/support/fake_stt.dart';
 import '../../tts/support/fake_tts.dart';
 import '../support/fake_brain_model_ota.dart';
 import '../support/fake_local_llm_engine.dart';
+import 'local_model_backend_notifier_test.dart' show FakeLocalModelBackendPreference;
 
 Future<void> _pump(
   WidgetTester tester, {
@@ -31,6 +33,7 @@ Future<void> _pump(
   FakeLocalLlmEngine? engine,
   FakeBrainModelUpdateGateway? brainGateway,
   FakeBrainModelVersionStore? versionStore,
+  FakeLocalModelBackendPreference? backendPreference,
 }) async {
   final router = GoRouter(
     routes: [
@@ -59,6 +62,10 @@ Future<void> _pump(
         ttsVoiceGatewayProvider.overrideWithValue(FakeTtsVoiceGateway()),
         appLanguageCodeProvider.overrideWithValue('es'),
         embedModelGatewayProvider.overrideWithValue(FakeEmbedModelGateway(installed: null)),
+        // The forced-backend developer control persists through
+        // shared_preferences — fake it so no platform channel is touched.
+        localModelBackendPreferenceProvider
+            .overrideWithValue(backendPreference ?? FakeLocalModelBackendPreference()),
       ],
       child: MaterialApp.router(
         routerConfig: router,
@@ -149,5 +156,34 @@ void main() {
     expect(engine.installedFromFilePaths, hasLength(1));
     expect(versionStore.value?.versionCode, 2);
     expect(find.text('Hay un nuevo modelo disponible'), findsNothing);
+  });
+
+  // ── Forced backend (developer / benchmark affordance) ────────────────────
+  testWidgets('picking CPU persists the choice and releases the loaded model',
+      (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    final prefs = FakeLocalModelBackendPreference();
+    await _pump(tester, installed: true, engine: engine, backendPreference: prefs);
+    await engine.load();
+
+    expect(find.text('Backend de inferencia'), findsOneWidget);
+    await tester.tap(find.text('CPU'));
+    await tester.pumpAndSettle();
+
+    expect(prefs.stored, LocalLlmBackend.cpu);
+    expect(engine.disposeCount, 1);
+  });
+
+  testWidgets('a stored forced backend comes back selected', (tester) async {
+    await _pump(
+      tester,
+      installed: true,
+      backendPreference: FakeLocalModelBackendPreference(LocalLlmBackend.cpu),
+    );
+
+    final segmented = tester.widget<SegmentedButton<LocalLlmBackend?>>(
+      find.byType(SegmentedButton<LocalLlmBackend?>),
+    );
+    expect(segmented.selected, {LocalLlmBackend.cpu});
   });
 }
