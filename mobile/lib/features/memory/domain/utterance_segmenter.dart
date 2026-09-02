@@ -62,8 +62,8 @@ class UtteranceSegmenter {
   /// boundary, so a blood-pressure reading is never chopped mid-sequence.
   /// Words that START a NEW metric phrase after a digit-adjacent " y ": metric
   /// keywords (glucosa, presión, peso…) and the curated first-person preterite
-  /// verbs ([_firstPersonRe]'s list, accented AND folded because the boundary
-  /// scan runs on the RAW utterance). Deliberately EXCLUDES continuation words
+  /// verbs (the [speaksInFirstPerson] list, accented AND folded because the
+  /// boundary scan runs on the RAW utterance). Deliberately EXCLUDES continuation words
   /// of a reading already in progress — "pulso"/"pulsos"/"bpm"/"latidos" — so
   /// "presión 122 77 y pulso 55" stays ONE clause (splitting it would divorce
   /// the pulse from its blood pressure).
@@ -122,29 +122,11 @@ class UtteranceSegmenter {
     caseSensitive: false,
   );
 
-  /// FIRST-PERSON markers that RESET the running family subject back to the
-  /// USER. Deterministic, precision-first — evaluated on accent-FOLDED,
-  /// lowercased text (so "tomé" reads "tome"), and ONLY for clauses that carry
-  /// no family-subject marker of their own:
-  ///   * an explicit "yo" / "conmigo";
-  ///   * a possessive "mi" NOT followed by a relation word ("mi presión",
-  ///     "a mí" — never the "mi esposa" of a family marker);
-  ///   * a reflexive/dative "me" + verb whose folded form ends in -e/-i
-  ///     (first-person preterite "me tomé"/"me pesé"/"me dormí"; the ambiguous
-  ///     -o endings like "me dijo"/"me tomó" are deliberately NOT matched);
-  ///   * a common first-person preterite verb on its own ("dormí 7 horas",
-  ///     "corrí 5km") from a curated folded list — never a bare suffix guess.
-  static final RegExp _firstPersonRe = RegExp(
-    <String>[
-      r'\b(?:yo|conmigo)\b',
-      r'\bmi\b(?!\s+(?:' + relationAlternation + r')\b)',
-      r'\bme\s+[a-z]+[ei]\b',
-      r'\b(?:dormi|desperte|corri|camine|entrene|desayune|comi|cene|tome'
-          r'|medi|pese|sali|llegue|fui|estuve|anduve|hice|tuve|rece|medite'
-          r'|trabaje|jugue|senti|gaste|compre|pague)\b',
-    ].join('|'),
-    caseSensitive: false,
-  );
+  // FIRST-PERSON markers that RESET the running family subject back to the
+  // USER live in ONE place — [speaksInFirstPerson] in `subject.dart` — because
+  // the chat's subject attribution asks the exact same question before it
+  // rewrites a turn with someone else's name in front. That vocabulary and the
+  // cases it deliberately leaves out are documented there.
 
   /// Split [utterance] into subject-attributed clauses (empty for blank input).
   List<UtteranceSegment> segment(String utterance) {
@@ -174,7 +156,7 @@ class UtteranceSegmenter {
           text: _strippedText(detectable, marker),
           subject: marker.subject,
         ));
-      } else if (hadCompanion || _firstPersonRe.hasMatch(folded.toLowerCase())) {
+      } else if (hadCompanion || speaksInFirstPerson(folded)) {
         // FIRST-PERSON RESET: a clause the user explicitly anchors to
         // themself ("yo dormí 7 horas", "me tomé la presión", "salí con mi
         // hermano") returns the running subject to the USER — a preceding

@@ -259,3 +259,95 @@ String subjectPossessive(String subject, {bool en = false}) {
   if (en) return 'your ${_enRelation[rel.toLowerCase()] ?? rel}';
   return 'tu $rel';
 }
+
+// ---------------------------------------------------------------------------
+// FIRST PERSON: when a clause is about the USER, whoever else is being
+// discussed.
+//
+// MEDIDO: con "Tere" como sujeto activo de la conversación, TODO turno
+// posterior salía reescrito con su nombre delante —
+//
+//   FACT domain=finance label=Tere gaste 200 pesos en gasolina
+//   FACT domain=health  label=Tere me duele la cabeza
+//
+// — es decir, los gastos y los síntomas del propio usuario archivados a nombre
+// de su hermana. Un mal archivo es PEOR que uno sin archivar: nadie va a ir a
+// buscar ahí.
+//
+// So this is the gate that separates a clause LEANING ON THE THREAD ("tiene dos
+// hijos", "vive en Monterrey") from one the user anchors to THEMSELF ("me duele
+// la cabeza", "gasté 200 pesos"). It lived inside [UtteranceSegmenter] as a
+// private regex — the same question, asked once, now shared.
+//
+// PRECISION RUNS THE OTHER WAY HERE. A false positive only means a fact stays
+// unattributed, which is recoverable; a false negative files the user's life
+// under someone else, which is not. So when a sentence carries any credible
+// first-person mark, we stop attributing.
+//
+// WHAT IS DELIBERATELY LEFT OUT — and why:
+//   * OPINION verbs in the first person whose CONTENT is about someone else:
+//     "creo/pienso/veo/digo/supongo/recuerdo que tiene dos hijos". The subject
+//     of the sentence is the user, but the FACT is the third person's, so these
+//     must keep being attributed.
+//   * "me dice/parece que vive en Monterrey" DOES read as first person here
+//     (the `me + verbo en -e/-i` rule) and loses the attribution. Accepted:
+//     unattributed, not misattributed.
+//   * Third-person clitics that are not "me" — "le duele la cabeza" — are NOT
+//     first person and keep being attributed to the thread's subject.
+//   * Bare `-e`/`-i` suffix guessing is NOT done: unaccented "gaste" is also a
+//     subjunctive and "-e" is a very common noun ending ("nombre", "padre").
+//     The preterite list is curated instead.
+//   * Ambiguous noun/verb forms ("peso", "gasto", "tomo", "trabajo", "camino")
+//     count as first person ONLY in front of a number, which is how they are
+//     actually logged ("peso 80 kilos") and never how they are read as nouns
+//     ("su peso", "200 pesos").
+
+/// FIRST-PERSON preterite forms, accent-FOLDED (matching runs on folded text).
+const String _fpPreterite =
+    r'dormi|desperte|corri|camine|entrene|desayune|comi|cene|tome|medi|pese'
+    r'|sali|llegue|fui|estuve|anduve|hice|tuve|rece|medite|trabaje|jugue'
+    r'|senti|gaste|compre|pague|bebi|nade|lei|escribi|visite|cocine|agende'
+    r'|reserve|gane|perdi|subi|baje|maneje|comence|empece|termine|pedi|puse'
+    r'|vine|volvi|regrese|descanse|estudie|limpie|cobre|ahorre|vi';
+
+/// FIRST-PERSON present forms that no noun collides with.
+///
+/// Opinion verbs ("creo", "pienso", "veo", "digo", "supongo", "recuerdo") are
+/// deliberately absent: they are first person about a THIRD person's fact.
+const String _fpPresent =
+    r'tengo|estoy|soy|voy|vengo|hago|salgo|duermo|corro|quiero|necesito'
+    r'|puedo|debo|mido|vivo|llevo|uso|pago|compro|juego|leo|escribo|manejo'
+    r'|estudio|descanso|ando|bebo|almuerzo|ceno|desayuno|entreno|nado';
+
+/// Forms that are also everyday NOUNS. First person only in front of a number.
+const String _fpAmbiguousBeforeNumber = r'peso|gasto|tomo|trabajo|camino|paso';
+
+final RegExp _firstPersonRe = RegExp(
+  <String>[
+    // An explicit self-reference.
+    r'\b(?:yo|conmigo|mis|nosotros|nosotras'
+        r'|nuestro|nuestra|nuestros|nuestras)\b',
+    // A possessive "mi" that is NOT the "mi esposa" of a family marker.
+    r'\bmi\b(?!\s+(?:' + relationAlternation + r')\b)',
+    // Reflexive/dative "me" + a verb ending in -e/-i ("me duele", "me tomé",
+    // "me pesé"). The ambiguous -o endings ("me dijo", "me contó") are third
+    // person and stay out.
+    r'\bme\s+[a-z]+[ei]\b',
+    r'\b(?:' + _fpPreterite + r')\b',
+    r'\b(?:' + _fpPresent + r')\b',
+    r'\b(?:' + _fpAmbiguousBeforeNumber + r')\s+(?=\d)',
+    // English, kept light: this app is written in Spanish by its users.
+    r"\b(?:i|im|my|mine|myself|we|our)\b",
+  ].join('|'),
+  caseSensitive: false,
+);
+
+/// True when [text] anchors itself to the USER rather than leaning on whoever
+/// the conversation is about.
+///
+/// Used to decide what NOT to attribute: see the note above for the cases this
+/// deliberately does not cover.
+bool speaksInFirstPerson(String? text) {
+  if (text == null || text.trim().isEmpty) return false;
+  return _firstPersonRe.hasMatch(foldAccents(text).toLowerCase());
+}

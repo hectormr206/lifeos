@@ -18,7 +18,8 @@
 // confident wrong attribution is the failure mode this is built to prevent.
 library;
 
-import '../../memory/domain/subject.dart' show foldAccents;
+import '../../memory/domain/subject.dart'
+    show foldAccents, speaksInFirstPerson;
 import 'order_to_axi.dart';
 
 /// How long a subject survives without being named again.
@@ -248,6 +249,22 @@ String attributeToSubject(String message, ConversationSubject? subject) {
   if (pronoun.hasMatch(trimmed)) {
     return '${subject.name} ${trimmed.replaceFirst(pronoun, '')}';
   }
+
+  // THE USER'S OWN LIFE IS NOT THE SUBJECT'S. Everything above reads a mark of
+  // THIRD person — the subject's own name, "su/sus", a leading "él/ella" — so
+  // it wins outright. What is left is a sentence with no explicit owner, and
+  // there the question is whether it leans on the thread ("tiene dos hijos",
+  // "vive en Monterrey") or is the user talking about themself ("me duele la
+  // cabeza", "gasté 200 pesos en gasolina").
+  //
+  // MEDIDO con "Tere" activa: `gaste 200 pesos en gasolina` se archivaba como
+  // `label=Tere`, y `me duele la cabeza` también. Los gastos y los síntomas del
+  // usuario a nombre de su hermana — exactamente el misfile que este archivo
+  // existe para evitar.
+  //
+  // Ante la duda NO se atribuye: sin dueño es recuperable, con el dueño
+  // equivocado no. [speaksInFirstPerson] documenta qué cubre y qué no.
+  if (speaksInFirstPerson(trimmed)) return message;
 
   return '${subject.name} $trimmed';
 }

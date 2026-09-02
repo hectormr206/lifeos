@@ -253,6 +253,84 @@ void main() {
     });
   });
 
+  group('the user\'s own life is not filed under the person being discussed',
+      () {
+    // MEDIDO: con "Tere" como sujeto ACTIVO, el turno siguiente salía
+    // reescrito con su nombre delante — TODOS ellos, no solo los que se
+    // apoyaban en el hilo:
+    //
+    //   FACT domain=finance label=Tere gaste 200 pesos en gasolina
+    //   FACT domain=health  label=Tere me duele la cabeza
+    //
+    // Es decir: los gastos y los síntomas del PROPIO usuario archivados a
+    // nombre de su hermana. Ese es exactamente el misfile que este archivo
+    // existe para evitar, y es peor que no archivar nada, porque nadie va a
+    // ir a buscar ahí.
+    //
+    // Estos tests encadenan TURNOS con un sujeto vivo, que es la única forma
+    // de reproducirlo: con `knownPeople` vacío y sin sujeto previo el defecto
+    // no aparece, y así fue como se escapó.
+    const people = ['Tere', 'Juan'];
+
+    ConversationSubject? turn(String message,
+            {ConversationSubject? previous, Duration since = Duration.zero}) =>
+        resolveConversationSubject(
+          message: message,
+          knownPeople: people,
+          previous: previous,
+          now: t0.add(since),
+        );
+
+    /// Turno 1 nombra a Tere; turno 2 es lo que el usuario escribe después.
+    String secondTurn(String message) {
+      final first = turn('Ayer vi a Tere');
+      expect(first?.name, 'Tere', reason: 'el arnés debe dejar a Tere activa');
+      final second =
+          turn(message, previous: first, since: const Duration(minutes: 1));
+      expect(second?.name, 'Tere',
+          reason: 'el hilo sigue vivo: el defecto solo aparece así');
+      return attributeToSubject(message, second);
+    }
+
+    test('un gasto en primera persona sigue siendo del usuario', () {
+      expect(secondTurn('gaste 200 pesos en gasolina'),
+          'gaste 200 pesos en gasolina');
+    });
+
+    test('un gasto con acento tampoco cambia de dueño', () {
+      expect(secondTurn('gasté 200 pesos en gasolina'),
+          'gasté 200 pesos en gasolina');
+    });
+
+    test('un síntoma en primera persona sigue siendo del usuario', () {
+      expect(secondTurn('me duele la cabeza'), 'me duele la cabeza');
+    });
+
+    test('un peso y una carrera propios no se archivan en la hermana', () {
+      expect(secondTurn('peso 80 kilos'), 'peso 80 kilos');
+      expect(secondTurn('corrí 5 km'), 'corrí 5 km');
+      expect(secondTurn('tengo cita con el dentista'),
+          'tengo cita con el dentista');
+    });
+
+    // Y la razón por la que el prepend existe TIENE que seguir en pie: "su
+    // hijo Mateo tiene 8" / "tiene dos hijos" no nombran a nadie, y sin el
+    // sujeto del hilo se guardaban colgadas de nadie o de quien estuviera a
+    // mano.
+    test('una frase que se apoya en el hilo sigue nombrando al sujeto', () {
+      expect(secondTurn('tiene dos hijos'), 'Tere tiene dos hijos');
+      expect(secondTurn('vive en Monterrey'), 'Tere vive en Monterrey');
+      expect(secondTurn('trabaja en Bimbo'), 'Tere trabaja en Bimbo');
+    });
+
+    test('el posesivo de tercera persona sigue reescribiéndose', () {
+      // "su" es una marca EXPLÍCITA de tercera persona y gana siempre: se
+      // evalúa antes que cualquier heurística de primera persona.
+      expect(secondTurn('su esposa se llama Marta'),
+          'la esposa de Tere se llama Marta');
+    });
+  });
+
   group('an order to Axi names nobody', () {
     // MEDIDO en el Pixel (build 921): "Cuenta del 1 al 30 separados por comas"
     // dejó "Cuenta" como sujeto de la conversación. Desde ahí cada turno salía
