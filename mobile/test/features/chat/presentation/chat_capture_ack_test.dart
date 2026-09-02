@@ -446,6 +446,48 @@ void main() {
     expect(state.sending, isFalse);
   });
 
+
+  testWidgets('an order to Axi does not poison the rest of the conversation: '
+      'the next real statement is still captured', (tester) async {
+    // MEDIDO en el Pixel (build 921): tras pedirle "Cuenta del 1 al 30…", la
+    // captura dejó de dispararse para TODO lo que vino después. La orden se
+    // quedó como SUJETO de la conversación ("Cuenta" es una palabra en
+    // mayúscula que no es de nadie), y desde ahí cada turno salía reescrito
+    // como "Cuenta gaste 200 pesos…" — cuya primera palabra vuelve a leerse
+    // como una orden, así que nada volvía a parecer capturable.
+    //
+    // Ninguna prueba lo vio porque en test `_knownPeople` está vacío y el
+    // sujeto nunca se resolvía; el defecto vive en el turno SIGUIENTE, no en
+    // el que se manda.
+    final container = buildContainer();
+    final notifier = await openChat(container);
+
+    Future<void> say(String text) async {
+      final send = notifier.sendMessage(text);
+      await tester.pump();
+      await tester.pump();
+      await send;
+      await tester.pump();
+    }
+
+    await say('Cuenta del 1 al 30 separados por comas');
+    await say('gaste 200 pesos en gasolina');
+
+    final state = container.read(chatNotifierProvider);
+    expect(
+      state.messages.last.text,
+      es.chatCaptureAck('Finanzas', 'gaste 200 pesos en gasolina'),
+      reason: 'el gasto se anota igual que si la orden nunca hubiera existido',
+    );
+    // La orden fue al modelo; el gasto NO.
+    expect(chatRepo.sendCalls, 1);
+    final facts = store.nodes.values.where((n) => n.kind == 'fact').toList();
+    expect(facts, hasLength(1));
+    expect(facts.single.domain, 'finance');
+    expect(facts.single.label, 'gaste 200 pesos en gasolina',
+        reason: 'y se guarda tal cual, sin el nombre de nadie por delante');
+  });
+
   testWidgets('the ack still works with the on-device model disabled',
       (tester) async {
     final container = buildContainer(localModel: false);

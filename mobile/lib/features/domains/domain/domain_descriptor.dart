@@ -16,6 +16,7 @@ class DomainDescriptor {
     required this.listKey,
     this.routerHint = '',
     this.keywords = const <String>[],
+    this.weakKeywords = const <String>[],
   });
 
   /// Stable identifier, also used as the `/domains/:key` route segment.
@@ -51,6 +52,28 @@ class DomainDescriptor {
   /// message, DERIVED from [routerHint]. Stems are lowercased and unaccented;
   /// the router folds accents on both sides before a word-boundary match.
   final List<String> keywords;
+
+  /// HOMONYM stems: they belong to this domain, but the SAME word has a common
+  /// everyday meaning that has nothing to do with it. A weak keyword only
+  /// counts once the domain already has a real [keywords] hit — it can make a
+  /// route stronger, never open one on its own.
+  ///
+  /// Born from a measured defect: "Cuenta del 1 al 30 separados por comas" was
+  /// answered "Anotado en Finanzas: …" and stayed in the user's finance data,
+  /// because 'cuenta' (la cuenta del banco) is also the imperative of contar.
+  /// The word is still worth having — "pagué la cuenta de luz" is finance —
+  /// so it is demoted, not deleted.
+  ///
+  /// AUDIT, same pass, deliberately NOT demoted (each one is regularly the
+  /// ONLY signal a genuine record carries, so demoting it would lose the
+  /// record): 'cita' (calendar — "tengo cita con el dentista"), 'clase'
+  /// (learning — "tuve clase de inglés"), 'idea' (learning), 'temperatura'
+  /// (health), 'fuerza'/'fe'/'paz' (a plain phrase like "déjame en paz" is
+  /// mostly caught upstream: an ORDER to Axi never reaches the router's
+  /// verdict, see the command gate in `chat_context_builder`). They stay on the
+  /// list as known homonyms; the day one of them shows up in a real misfile,
+  /// this is where it moves.
+  final List<String> weakKeywords;
 
   @override
   bool operator ==(Object other) => other is DomainDescriptor && other.key == key;
@@ -122,10 +145,13 @@ const domainDescriptors = <DomainDescriptor>[
     keywords: <String>[
       'gasto', 'gaste', 'gastamos', 'ingreso', 'ahorro', 'ahorre', 'deuda',
       'sueldo', 'salario', 'quincena', 'aguinaldo', 'bono', 'precio',
-      'compra', 'compre', 'presupuesto', 'cuenta', 'dinero', 'pago', 'pague',
+      'compra', 'compre', 'presupuesto', 'dinero', 'pago', 'pague',
       'cobre', 'cobraron', 'pagaron', 'gasolina', 'factura', 'renta',
       'hipoteca', 'prestamo', 'pesos',
     ],
+    // 'cuenta' is a perfect homonym: la cuenta del banco vs. "cuenta del 1 al
+    // 30". It stays, demoted — see [DomainDescriptor.weakKeywords].
+    weakKeywords: <String>['cuenta'],
   ),
   DomainDescriptor(
     key: 'exercise',

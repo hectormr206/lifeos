@@ -848,7 +848,7 @@ class ChatNotifier extends Notifier<ChatUiState> {
       summary = const CaptureSummary.empty(); // memory down → model answers.
     }
     if (_disposed) return;
-    if (summary.isEmpty) {
+    if (summary.isEmpty && !summary.wroteDomainlessFact) {
       // Nothing to confirm → normal model reply. The capture already ran, so
       // the write-back is handed its summary and never captures twice.
       await _sendTextToModel(
@@ -859,10 +859,14 @@ class ChatNotifier extends Notifier<ChatUiState> {
       );
       return;
     }
+    // A fact with NO domain has no "Anotado en <Dominio>" to claim — but it was
+    // still written, and a write nobody is told about is a write nobody can
+    // correct. It gets the generic acknowledgment, which says a save happened
+    // and promises no category, because there is none.
     final reply = ChatMessage(
       id: 'capture-ack-${DateTime.now().microsecondsSinceEpoch}',
       role: ChatRole.axi,
-      text: _captureAckText(summary),
+      text: summary.isEmpty ? acknowledgeStatement(text) : _captureAckText(summary),
       timestamp: DateTime.now(),
     );
     // ORDERING: while a generation is draining (e.g. a message typed during a

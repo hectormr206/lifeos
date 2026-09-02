@@ -19,6 +19,7 @@
 library;
 
 import '../../memory/domain/subject.dart' show foldAccents;
+import 'order_to_axi.dart';
 
 /// How long a subject survives without being named again.
 ///
@@ -99,6 +100,12 @@ List<String> namesIn(String message, {bool afterPreposition = true}) {
     final first = word[0];
     if (first.toUpperCase() != first || first.toLowerCase() == first) continue;
     if (_notNames.contains(foldAccents(word.toLowerCase()))) continue;
+    // Una ORDEN no nombra a nadie. Medido en el Pixel: "Cuenta del 1 al 30
+    // separados por comas" dejó a "Cuenta" como sujeto de la conversación, y a
+    // partir de ahí CADA turno se reescribía con ese nombre delante — con lo
+    // que la propia frase volvía a empezar por un imperativo y la captura
+    // determinista dejó de dispararse para todo lo demás.
+    if (isOrderVerb(word)) continue;
     if (!afterPreposition &&
         i > 0 &&
         _placeMarkers.contains(foldAccents(words[i - 1].toLowerCase()))) {

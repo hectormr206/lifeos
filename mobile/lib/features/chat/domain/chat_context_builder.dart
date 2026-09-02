@@ -43,6 +43,7 @@ import '../../memory/domain/person_directory.dart';
 import '../../memory/domain/person_naming.dart';
 import '../../memory/domain/relation_extractor.dart';
 import '../../memory/domain/recall_block.dart';
+import 'order_to_axi.dart';
 import '../../memory/domain/subject.dart';
 import '../../memory/domain/user_naming.dart';
 import '../../memory/domain/utterance_segmenter.dart';
@@ -115,8 +116,10 @@ class CaptureEntry {
 
 /// What the deterministic (model-free) capture wrote for one user turn.
 ///
-/// [entries] is what the chat can CONFIRM back to the user; empty means nothing
-/// domain-typed was written, and the turn must be answered normally (model).
+/// [entries] is what the chat can CONFIRM back to the user by domain; empty
+/// means nothing domain-typed was written — the turn is then answered normally
+/// (model), UNLESS [wroteDomainlessFact] says something was still stored, in
+/// which case it gets the generic acknowledgment rather than silence.
 /// [hasNonHealthContent] is the gate for the model-based open-ended extractor —
 /// a purely medical turn never touches the model.
 class CaptureSummary {
@@ -124,12 +127,26 @@ class CaptureSummary {
     this.entries = const <CaptureEntry>[],
     this.hasNonHealthContent = false,
     this.nonHealthSubject,
+    this.wroteDomainlessFact = false,
   });
 
   const CaptureSummary.empty() : this();
 
   final List<CaptureEntry> entries;
   final bool hasNonHealthContent;
+
+  /// True when the turn really wrote a fact that has NO domain — nothing to say
+  /// "Anotado en <Dominio>" about, and nothing that will ever show up in "Mi
+  /// vida", but a write all the same.
+  ///
+  /// It exists so the turn can still be ACKNOWLEDGED. Writing into someone's
+  /// memory and saying nothing is the worst of the three outcomes: not storing
+  /// it is honest, storing it and saying so is useful, storing it in silence
+  /// leaves something the user cannot see, cannot correct, and does not know is
+  /// there. The caller answers these with the generic acknowledgment
+  /// (`acknowledgeStatement`), which claims a save and NOT a category —
+  /// because a category is exactly what this fact does not have.
+  final bool wroteDomainlessFact;
 
   /// The DETERMINISTIC segment subject (canonical relation label, "esposa")
   /// shared by ALL the non-health clauses of the turn, or null when they are
@@ -430,6 +447,7 @@ class ChatContextBuilder {
 
     final entries = <CaptureEntry>[];
     var hasNonHealthContent = false;
+    var wroteDomainlessFact = false;
     final nonHealthSubjects = <String?>{};
     ChatContextDeps? deps;
     try {
@@ -496,7 +514,9 @@ class ChatContextBuilder {
           nonHealthSubjects.add(seg.subject);
         }
         final fact = await _captureSegmentFact(deps, seg, provenance);
-        if (fact != null) entries.add(fact);
+        final entry = fact.entry;
+        if (entry != null) entries.add(entry);
+        if (fact.domainlessWrite) wroteDomainlessFact = true;
       }
     } catch (_) {
       // Best-effort memory write; a failure never surfaces to the user. What
@@ -509,6 +529,7 @@ class ChatContextBuilder {
       // clause resolved to the SAME family member. Mixed or user-owned → null
       // (user attribution, the safe default).
       nonHealthSubject: nonHealthSubjects.length == 1 ? nonHealthSubjects.single : null,
+      wroteDomainlessFact: wroteDomainlessFact,
     );
   }
 
@@ -645,21 +666,36 @@ class ChatContextBuilder {
   /// extractor is the catch-all for open-ended content. Best-effort indexing
   /// follows so the fact is semantically recallable.
   ///
-  /// Returns the [CaptureEntry] to CONFIRM to the user, or null when nothing
-  /// was written OR the clause landed WITHOUT a domain (a domainless fact has no
-  /// `Anotado en <Dominio>` to claim, so the model answers that turn instead).
-  Future<CaptureEntry?> _captureSegmentFact(
+  /// Returns the [CaptureEntry] to CONFIRM to the user (null when the clause
+  /// landed without a domain, which has no `Anotado en <Dominio>` to claim),
+  /// plus whether a DOMAINLESS fact was really written — so the turn can still
+  /// be acknowledged instead of saved in silence.
+  Future<({CaptureEntry? entry, bool domainlessWrite})> _captureSegmentFact(
     ChatContextDeps deps,
     UtteranceSegment seg,
     Map<String, Object?> provenance,
   ) async {
+    const ({CaptureEntry? entry, bool domainlessWrite}) nothing =
+        (entry: null, domainlessWrite: false);
     final text = seg.text.trim();
-    if (text.isEmpty) return null;
-    final domain = router.routeDomain(text);
+    if (text.isEmpty) return nothing;
+    var domain = router.routeDomain(text);
     if (domain == null &&
         seg.subject == null &&
         !looksLikePersonalRecall(text)) {
-      return null; // no deterministic signal → leave it to the model complement.
+      return nothing; // no deterministic signal → leave it to the model complement.
+    }
+    // A clause the user attributed to a PERSON already has a shelf, even when
+    // no domain keyword fired: "Mi hermana Tere vive en Monterrey" is a note
+    // about that relationship. It used to land with domain null — invisible in
+    // "Mi vida" AND unannounceable — which is the same reasoning [rememberKinship]
+    // states out loud: a memory you cannot see is one you cannot correct.
+    //
+    // EXCEPT a medical shape the parser could not fully own ("de mi esposa
+    // 120/80"): a blood-pressure reading under "Relaciones" is a misfile, and a
+    // misfile is worse than an unfiled entry.
+    if (domain == null && seg.subject != null && !isLoggedVital(text)) {
+      domain = 'relationships';
     }
     final label = renderLabel(rawUtterance: text) ?? text;
     final node = await deps.writer.writeFact(
@@ -672,8 +708,13 @@ class ChatContextBuilder {
       data: <String, dynamic>{'raw_utterance': text, ...provenance},
     );
     await _indexIfPossible(deps, node);
-    if (domain == null) return null;
-    return CaptureEntry(domainKey: domain, title: label, subject: seg.subject);
+    // `writeFact` returns null for a low-value label: nothing landed, so there
+    // is nothing to acknowledge either.
+    if (domain == null) return (entry: null, domainlessWrite: node != null);
+    return (
+      entry: CaptureEntry(domainKey: domain, title: label, subject: seg.subject),
+      domainlessWrite: false,
+    );
   }
 
   /// Best-effort RAG indexing of a freshly-written fact node, disposing the
@@ -1094,11 +1135,13 @@ class ChatContextBuilder {
 
   // ── Write heuristics ──────────────────────────────────────────────────────
 
-  /// True when [text] reads as a personal STATEMENT worth saving: NOT a question
-  /// AND it either carries personal-recall vocabulary or routes to a domain.
+  /// True when [text] reads as a personal STATEMENT worth saving: NOT a question,
+  /// NOT an order given to Axi, AND it either carries personal-recall vocabulary
+  /// or routes to a domain.
   bool _looksLikeStatement(String text) {
     if (text.trim().isEmpty) return false;
     if (_isQuestion(text)) return false;
+    if (_isCommand(text)) return false;
     return looksLikePersonalRecall(text) || router.routeDomain(text) != null;
   }
 
@@ -1111,6 +1154,17 @@ class ChatContextBuilder {
     final first = folded.split(RegExp(r'\s+')).first;
     return _interrogatives.contains(first);
   }
+
+  /// Cheap ORDER detector: a leading imperative addressed to Axi.
+  ///
+  /// Measured on the Pixel: "Cuenta del 1 al 30 separados por comas" was
+  /// answered "Anotado en Finanzas: …" and left a permanent finance record.
+  /// The gate only knew two shapes, question and statement, and an order is
+  /// neither: it describes a TASK, not something that happened to the user.
+  ///
+  /// The verb list lives in `order_to_axi.dart` because the conversation
+  /// SUBJECT needs the same reading — see [looksLikeOrderToAxi].
+  static bool _isCommand(String text) => looksLikeOrderToAxi(text);
 
   static const Set<String> _interrogatives = <String>{
     'que', 'como', 'cuando', 'donde', 'quien', 'quienes', 'cual', 'cuales',

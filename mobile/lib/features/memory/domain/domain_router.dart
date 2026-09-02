@@ -71,7 +71,7 @@ class DomainRouter {
     var bestScore = 0;
     for (final d in _descriptors) {
       if (!routableDomainKeys.contains(d.key)) continue;
-      final score = _score(folded, d.keywords);
+      final score = _score(folded, d);
       if (score == 0) continue;
       if (score > bestScore) {
         bestScore = score;
@@ -84,10 +84,25 @@ class DomainRouter {
     return bestKey.first;
   }
 
-  /// Number of distinct [keywords] that hit [foldedText] on a word boundary.
-  int _score(String foldedText, List<String> keywords) {
+  /// Distinct keyword hits of [d] on [foldedText], word-boundary matched.
+  ///
+  /// [DomainDescriptor.weakKeywords] are HOMONYMS ('cuenta' = la cuenta del
+  /// banco AND the imperative of contar). They are counted ONLY once the domain
+  /// already has a real hit: a weak word can make an existing route stronger
+  /// (and so win a tie), but it can never open one by itself — which is exactly
+  /// how "Cuenta del 1 al 30 separados por comas" ended up filed as Finanzas.
+  ///
+  /// This is deliberately NOT "require two hits". A blanket threshold would
+  /// silence the honest single-word records this router exists for ("mi sueldo
+  /// subió" carries exactly one); the ambiguity lives in specific WORDS, so
+  /// that is where it is paid for.
+  int _score(String foldedText, DomainDescriptor d) {
     var hits = 0;
-    for (final kw in keywords) {
+    for (final kw in d.keywords) {
+      if (_wordBoundaryMatch(foldedText, kw)) hits++;
+    }
+    if (hits == 0) return 0;
+    for (final kw in d.weakKeywords) {
       if (_wordBoundaryMatch(foldedText, kw)) hits++;
     }
     return hits;

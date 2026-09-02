@@ -252,5 +252,43 @@ void main() {
           reason: 'a question about Juan must not be stored as a fact');
     });
   });
-}
 
+  group('an order to Axi names nobody', () {
+    // MEDIDO en el Pixel (build 921): "Cuenta del 1 al 30 separados por comas"
+    // dejó "Cuenta" como sujeto de la conversación. Desde ahí cada turno salía
+    // reescrito con ese nombre delante ("Cuenta gaste 200 pesos en gasolina"),
+    // y como la frase volvía a empezar por un imperativo, la captura
+    // determinista dejó de dispararse para TODO lo que vino después.
+    test('a leading imperative is not a name', () {
+      expect(namesIn('Cuenta del 1 al 30 separados por comas'), isEmpty);
+      expect(
+        resolveConversationSubject(
+          message: 'Cuenta del 1 al 30 separados por comas',
+          knownPeople: const [],
+          now: t0,
+        ),
+        isNull,
+      );
+    });
+
+    test('and it does not steal a thread that was already running', () {
+      final juan = ConversationSubject(name: 'Juan', at: t0);
+      final after = resolve('Cuéntame un chiste',
+          previous: juan, since: const Duration(minutes: 1));
+
+      // Sigue siendo Juan (o nadie), pero nunca "Cuéntame".
+      expect(after?.name, isNot('Cuéntame'));
+    });
+
+    test('and the turn after it is not rewritten with that word in front', () {
+      final poisoned = resolveConversationSubject(
+        message: 'Cuenta del 1 al 30 separados por comas',
+        knownPeople: const [],
+        now: t0,
+      );
+
+      expect(attributeToSubject('gaste 200 pesos en gasolina', poisoned),
+          'gaste 200 pesos en gasolina');
+    });
+  });
+}
