@@ -287,6 +287,24 @@ void main() {
       expect(payload.nodes.map((n) => n.uuid), containsAll(['e1', 'e2']));
     });
 
+    // "Claro" es la telco, y en Mexico sale en cualquier conversacion sobre el
+    // recibo del telefono. La lista de saludos existe para cazar extracciones
+    // MALAS, no para borrar una marca: una entidad que el usuario no encuentra
+    // en ninguna pantalla es, para el, algo que Axi no recuerda — que es justo
+    // el bug que estas entidades vinieron a cerrar.
+    test('una palabra que tambien es marca sobrevive como entidad', () async {
+      final store = _FakeLocalGraphStore(
+        nodes: [
+          _node('c1', 'entity', t0, label: 'Claro'),
+          _node('g1', 'entity', t0, label: 'hola'),
+        ],
+      );
+
+      final payload = await buildBrain3dPayload(store);
+
+      expect(payload.nodes.map((n) => n.uuid), ['c1']);
+    });
+
     test('drops greeting/empty entities so bad extractions do not litter it',
         () async {
       final store = _FakeLocalGraphStore(

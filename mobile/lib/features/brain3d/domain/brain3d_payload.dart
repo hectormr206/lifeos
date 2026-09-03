@@ -45,14 +45,35 @@ const Set<String> _kGreetingStopList = <String>{
 };
 
 /// True when [label] is nothing but a greeting/filler phrase (≤ 2 words).
-bool _isGreetingFiller(String label) {
+/// Lo que se descarta cuando el nodo es una ENTIDAD, que es menos que en un
+/// `fact`. Una entidad nace de un nombre propio que el extractor sacó de una
+/// frase, así que aquí sólo caben las fórmulas que NO pueden ser otra cosa:
+/// saludos, despedidas y agradecimientos.
+///
+/// Fuera quedan a propósito las afirmaciones y muletillas de la lista grande
+/// (`claro`, `vale`, `ok`, `listo`, `perfecto`, `genial`, `sí`, `no`, `ola`):
+/// todas son además nombres o marcas reales — Claro es la telco que sale en
+/// cualquier conversación sobre el recibo del teléfono, y Ola es otra. Como
+/// `fact` siguen siendo relleno y se van; como entidad, no.
+///
+/// La asimetría es deliberada: dejar pasar un nodo "hola" ensucia el dibujo y
+/// se ve, mientras que borrar "Claro" lo esconde en silencio — y una cosa que
+/// el usuario no encuentra en ninguna pantalla es, para él, una que Axi no
+/// recuerda. Ese es exactamente el fallo que estas entidades vinieron a cerrar.
+const Set<String> _kEntityStopList = <String>{
+  'hola', 'holi', 'hey', 'buenas', 'buenos dias', 'buen dia',
+  'buenas tardes', 'buenas noches', 'gracias', 'muchas gracias', 'mil gracias',
+  'de nada', 'adios', 'chao', 'nos vemos', 'hasta luego',
+};
+
+bool _isGreetingFiller(String label, {Set<String>? stopList}) {
   final normalized = foldAccents(label.trim().toLowerCase())
       .replaceAll(RegExp(r'[^\w\s]', unicode: true), ' ')
       .replaceAll(RegExp(r'\s+'), ' ')
       .trim();
   if (normalized.isEmpty) return false;
   if (normalized.split(' ').length > 2) return false;
-  return _kGreetingStopList.contains(normalized);
+  return (stopList ?? _kGreetingStopList).contains(normalized);
 }
 
 /// True when a node is meaningful knowledge worth rendering in the 3D view.
@@ -75,7 +96,7 @@ bool _isKnowledgeNode(GraphNodeRecord n) {
   }
   if (n.kind == 'entity') {
     if (n.label.trim().isEmpty) return false;
-    return !_isGreetingFiller(n.label);
+    return !_isGreetingFiller(n.label, stopList: _kEntityStopList);
   }
   return true;
 }
