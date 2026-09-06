@@ -29,8 +29,6 @@ import '../../features/morning_briefing/domain/briefing_assembler.dart';
 import '../../features/morning_briefing/domain/briefing_harvester.dart';
 import '../../features/morning_briefing/domain/briefing_notifications.dart';
 import '../../features/morning_briefing/domain/morning_briefing_preferences.dart';
-import '../../l10n/language_preference.dart';
-import '../../l10n/locale_providers.dart';
 import '../connectivity/reachability_vpn_probe.dart';
 import '../connectivity/vpn_gate.dart';
 import '../graph/local_graph_database.dart';
@@ -95,7 +93,6 @@ Future<bool> executeMorningBriefingBackgroundTask() async {
     backgroundWork: WorkmanagerBriefingBackgroundWork(),
     now: DateTime.now,
     overrideLocation: _effectiveOverrideLocation,
-    languageCode: _persistedLanguageCode,
   );
   return runMorningBriefingBackgroundTask(deps);
 }
@@ -194,17 +191,3 @@ Future<tz.Location?> _effectiveOverrideLocation() async {
   return (await resolver.resolve()).overrideLocation;
 }
 
-/// The persisted app language ('es' / 'en'): the user's explicit pick, or the
-/// system-language rule for [AppLanguage.system] (same mapping the UI uses).
-Future<String> _persistedLanguageCode() async {
-  try {
-    final language = await SharedPrefsLanguagePreferences().load();
-    return switch (language) {
-      AppLanguage.es => 'es',
-      AppLanguage.en => 'en',
-      AppLanguage.system => resolveSystemLocale().languageCode,
-    };
-  } catch (_) {
-    return 'es'; // the app's default language
-  }
-}
