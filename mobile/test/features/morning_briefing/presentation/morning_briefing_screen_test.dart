@@ -92,6 +92,32 @@ OnDeviceBriefing _translatedBriefing() => OnDeviceBriefing(
       ],
     );
 
+
+/// Echoes each numbered input line back with an "ES " prefix — a stand-in
+/// translation whose only job is to be recognisably NOT the original.
+String _spanishEcho(String prompt) {
+  final buffer = StringBuffer();
+  for (final m in RegExp(r'^(\d+)\. (.*)$', multiLine: true).allMatches(prompt)) {
+    buffer.writeln('${m.group(1)}. ES ${m.group(2)}');
+  }
+  return buffer.toString();
+}
+
+/// An English briefing with NOTHING translated — exactly what the background
+/// task leaves behind now that it no longer translates.
+OnDeviceBriefing _englishBriefing() => OnDeviceBriefing(
+      generatedAt: DateTime(2026, 7, 22, 8),
+      articles: const [
+        BriefingArticle(
+          sourceName: 'English Source',
+          section: 'Mundo',
+          title: 'The Future of AI',
+          url: 'https://en.com/1',
+          description: 'A look at the future of the world',
+        ),
+      ],
+    );
+
 /// Opens the fold of the theme block titled [section].
 ///
 /// The briefing is read by THEME now, so a test that wants a card first has to
@@ -520,6 +546,63 @@ void main() {
 
       expect(find.textContaining('no tiene texto legible'), findsOneWidget);
       expect(find.text('Ver detalles técnicos'), findsNothing);
+    });
+  });
+
+
+  // ─── TRADUCIR AL ABRIR, SIN TAPAR LA LECTURA ─────────────────────────────
+  //
+  // El boletín automático ya no traduce (traducir a las 08:08 es trabajo que
+  // puede acabar en la basura). Traduce la apertura: el texto original se ve
+  // al instante y las traducciones lo van sustituyendo.
+  group('el boletín se traduce al abrirlo', () {
+    testWidgets('el titular original se lee YA, y la traducción lo sustituye después',
+        (tester) async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: _spanishEcho);
+      await tester.pumpWidget(_app(_englishBriefing(), engine));
+      await tester.pumpAndSettle();
+      await _openSection(tester, 'Mundo');
+
+      // Nada tapa la lectura: el titular está ahí antes que el modelo.
+      expect(find.text('The Future of AI'), findsOneWidget);
+
+      // Y después, sin que el lector haga nada, aparece traducido.
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(find.text('ES The Future of AI'), findsOneWidget);
+      expect(find.text('The Future of AI'), findsNothing);
+      expect(engine.generateCount, greaterThan(0));
+    });
+
+    testWidgets('salir de la pantalla detiene la traducción', (tester) async {
+      final puerta = Completer<void>();
+      addTearDown(() {
+        if (!puerta.isCompleted) puerta.complete();
+      });
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: _spanishEcho,
+        generateGate: puerta,
+      );
+      await tester.pumpWidget(_app(_englishBriefing(), engine));
+      await tester.pumpAndSettle();
+
+      // Fuera de la pantalla antes de que la gracia se cumpla: el modelo no
+      // llega a arrancar.
+      await tester.pumpWidget(_scoped(
+        const MaterialApp(home: Scaffold(body: SizedBox.shrink())),
+        briefing: _englishBriefing(),
+        engine: engine,
+      ));
+      await tester.pump(const Duration(seconds: 3));
+      await tester.pumpAndSettle();
+
+      expect(
+        engine.generateCount,
+        0,
+        reason: 'el lector se fue: no se quema modelo ni batería por él',
+      );
     });
   });
 

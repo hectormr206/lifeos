@@ -3,6 +3,11 @@ import '../../local_model/domain/on_device_translator.dart';
 import '../data/source_content_extractor.dart';
 import 'morning_briefing.dart';
 
+/// Wraps one batched model call so the caller can serialize it (the shared
+/// [LlmRequestQueue] in the app). Defaults to running the job inline.
+typedef BriefingTranslationBatchRunner =
+    Future<List<String?>> Function(Future<List<String?>> Function() job);
+
 /// Eager per-source title/brief translation of an assembled briefing — the
 /// SECOND stage of the pipeline, after fetch+assemble.
 ///
@@ -30,6 +35,10 @@ class BriefingTranslationPipeline {
   static const double translateTemperature = 0.3;
   static const int translateTopK = 20;
   static const double translateTopP = 0.9;
+
+  /// Items published at a time by [translateInReadingOrder] — the translator's
+  /// own batch size, so one published batch is exactly one model call.
+  static const int readingBatchSize = OnDeviceTranslator.maxItemsPerBatch;
 
   /// Translates EVERY source's titles + briefs into [languageCode] up front,
   /// one batched model call per source, with PER-SOURCE isolation. [onSource]
@@ -131,10 +140,31 @@ class BriefingTranslationPipeline {
       onEngineFailure: onEngineFailure,
     );
 
+    return _applyTranslations(
+      briefing,
+      [for (final i in pending) articles[i]],
+      [for (final i in pending) cleaned[i]],
+      translated,
+    );
+  }
+
+  /// Writes one batch of model output back onto [briefing].
+  ///
+  /// [articles], [cleaned] and [translated] are parallel lists: the article the
+  /// line belongs to, the brief that was sent with it, and the model's answer
+  /// (`null` when that slot produced nothing usable — the article then keeps
+  /// its original text, never blank and never dropped). Each article is looked
+  /// up by key in the briefing HANDED IN, so a briefing that changed while the
+  /// batch was running (a summary that landed meanwhile) is respected.
+  OnDeviceBriefing _applyTranslations(
+    OnDeviceBriefing briefing,
+    List<BriefingArticle> articles,
+    List<String> cleaned,
+    List<String?> translated,
+  ) {
     var updated = briefing;
-    for (var slot = 0; slot < pending.length; slot++) {
-      final i = pending[slot];
-      final line = translated[slot];
+    for (var slot = 0; slot < articles.length; slot++) {
+      final line = slot < translated.length ? translated[slot] : null;
       if (line == null) continue; // keep native text for this slot
       final parts = line.split('|||');
       // Model output gets the same invisible-character scrub as feed text: a
@@ -145,20 +175,149 @@ class BriefingTranslationPipeline {
       final d = parts.length > 1
           ? extractor.cleanBrief(parts.sublist(1).join('|||'))
           : '';
-      final current = updated.articleForKey(articles[i].key);
+      final current = updated.articleForKey(articles[slot].key);
       if (current == null) continue;
       updated = updated.replaceArticle(
         current.key,
         current.copyWith(
           translatedTitle: t,
           // Only carry a translated brief when the item actually had one.
-          translatedDescription: cleaned[i].isNotEmpty && d.isNotEmpty
+          translatedDescription: cleaned[slot].isNotEmpty && d.isNotEmpty
               ? d
               : null,
         ),
       );
     }
     return updated;
+  }
+
+  /// Translates the briefing the reader ALREADY HAS OPEN, in reading order, one
+  /// small batch at a time, publishing each batch as it lands.
+  ///
+  /// WHY THIS EXISTS (decisión del 2026-09-06). Translating in the background
+  /// was a bet that the reader would open the briefing, paid in battery and in
+  /// the same eight-minute budget the per-theme digests need — and when the
+  /// budget ran out the translation was the stage that silently lost, which is
+  /// how the Pixel got a briefing whose digests were Spanish and whose
+  /// headlines were English, announced as "listo". Here nothing is speculative:
+  /// the reader is looking at the briefing, so every batch is work he is about
+  /// to read.
+  ///
+  /// Contract:
+  ///   * READING ORDER — [OnDeviceBriefing.articles] is the order the screen
+  ///     renders, so what is nearest the top is translated first. That is the
+  ///     whole prioritization: no viewport tracking, no scroll listeners.
+  ///   * NEVER BLOCKS — the briefing is already on screen; each batch of at
+  ///     most [OnDeviceTranslator.maxItemsPerBatch] items is published through
+  ///     [onBatch] the moment it lands, and [onBatch] returns the briefing the
+  ///     next batch continues from (so a summary that arrived meanwhile is not
+  ///     overwritten).
+  ///   * INTERRUPTIBLE — [shouldContinue] is consulted before every batch and
+  ///     again before publishing it. The reader who leaves the screen stops
+  ///     paying for the model within one batch; the batch already in flight
+  ///     cannot be un-run (there is no cancel at the native session), so it is
+  ///     simply not published.
+  ///   * SKIPS WHAT IS DONE — an article that already carries a translation, or
+  ///     that already looks like the target language, costs no model call. That
+  ///     is what makes opening the briefing twice cheap.
+  ///   * NEVER THROWS — a failed batch leaves its articles in their original
+  ///     language and the next batch is still attempted; [onEngineFailure]
+  ///     fires at most once with the real cause, so untranslated text always
+  ///     has an explanation on screen instead of looking like a lazy
+  ///     translator.
+  ///
+  /// [runBatch] wraps each batch so the caller can put it on the shared model
+  /// queue. Per BATCH, deliberately, not per briefing: a summary the reader
+  /// taps waits at most four items, never a whole translation.
+  Future<OnDeviceBriefing> translateInReadingOrder(
+    OnDeviceBriefing briefing, {
+    required String languageCode,
+    required Future<OnDeviceBriefing> Function(OnDeviceBriefing updated) onBatch,
+    bool Function()? shouldContinue,
+    void Function(EngineFailureDetail detail)? onEngineFailure,
+    BriefingTranslationBatchRunner? runBatch,
+  }) async {
+    var current = briefing;
+    var reported = false;
+    void report(EngineFailureDetail detail) {
+      if (reported) return;
+      reported = true;
+      onEngineFailure?.call(detail);
+    }
+
+    bool keepGoing() => shouldContinue == null || shouldContinue();
+
+    final keys = <String>[
+      for (final a in briefing.articles)
+        if (needsTranslation(a, languageCode, extractor)) a.key,
+    ];
+
+    for (var start = 0; start < keys.length; start += readingBatchSize) {
+      if (!keepGoing()) break;
+      final end = (start + readingBatchSize).clamp(0, keys.length);
+      final articles = <BriefingArticle>[];
+      for (final key in keys.sublist(start, end)) {
+        final a = current.articleForKey(key);
+        // Re-checked against the CURRENT briefing: something may have
+        // translated it in the meantime, and paying twice for the same
+        // headline is exactly what this whole design is avoiding.
+        if (a != null && needsTranslation(a, languageCode, extractor)) {
+          articles.add(a);
+        }
+      }
+      if (articles.isEmpty) continue;
+
+      final cleaned = [
+        for (final a in articles) extractor.cleanBrief(a.description),
+      ];
+      final inputs = [
+        for (var i = 0; i < articles.length; i++)
+          cleaned[i].isNotEmpty
+              ? '${articles[i].title} ||| ${cleaned[i]}'
+              : articles[i].title,
+      ];
+
+      List<String?> translated;
+      Future<List<String?>> job() => translator.translate(
+            inputs,
+            languageCode: languageCode,
+            temperature: translateTemperature,
+            topK: translateTopK,
+            topP: translateTopP,
+            onEngineFailure: report,
+          );
+      try {
+        translated = runBatch == null ? await job() : await runBatch(job);
+      } catch (_) {
+        // The batch could not even run (a queue that refused it). Its articles
+        // keep their original text; the rest of the briefing still gets its
+        // turn.
+        continue;
+      }
+
+      // Asked AGAIN after the model came back: the reader may have left while
+      // this batch was decoding, and publishing then would repaint a screen
+      // nobody is looking at — and persist behind his back.
+      if (!keepGoing()) break;
+
+      final updated = _applyTranslations(current, articles, cleaned, translated);
+      if (identical(updated, current)) continue; // nothing landed; nothing to say
+      current = await onBatch(updated);
+    }
+    return current;
+  }
+
+  /// Whether [article] still needs a model call to be readable in
+  /// [languageCode]: nothing translated yet, and it does not already look like
+  /// the target language.
+  static bool needsTranslation(
+    BriefingArticle article,
+    String languageCode,
+    SourceContentExtractor extractor,
+  ) {
+    if ((article.translatedTitle ?? '').trim().isNotEmpty) return false;
+    final brief = extractor.cleanBrief(article.description);
+    return !looksTargetLanguage('${article.title} $brief', languageCode);
   }
 
   /// Cheap language guess for the PER-ARTICLE same-language skip. Returns true

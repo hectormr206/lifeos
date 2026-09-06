@@ -110,6 +110,33 @@ class _NoDigests implements BriefingSectionDigestWriter {
   dynamic noSuchMethod(Invocation invocation) => throw UnimplementedError();
 }
 
+
+/// Echoes each numbered input line back with an "ES " prefix — a stand-in
+/// translation whose only job is to be recognisably NOT the original.
+String _spanishEcho(String prompt) {
+  final buffer = StringBuffer();
+  for (final m in RegExp(r'^(\d+)\. (.*)$', multiLine: true).allMatches(prompt)) {
+    buffer.writeln('${m.group(1)}. ES ${m.group(2)}');
+  }
+  return buffer.toString();
+}
+
+/// A briefing of [count] English articles, already persisted (what the
+/// background task leaves behind now that it no longer translates).
+OnDeviceBriefing _englishBriefing(DateTime at, {int count = 6}) => OnDeviceBriefing(
+      generatedAt: at,
+      articles: [
+        for (var i = 1; i <= count; i++)
+          BriefingArticle(
+            sourceName: 'English Source',
+            section: 'Mundo',
+            title: 'The story number $i of the day',
+            url: 'https://en.com/$i',
+            description: 'It is a story about the number $i and the world',
+          ),
+      ],
+    );
+
 void main() {
   final now = DateTime(2026, 7, 22, 9);
   final today = DateTime(2026, 7, 22, 6);
@@ -986,6 +1013,227 @@ void main() {
       await notifier.generate();
 
       expect(container.read(morningBriefingNotifierProvider).translationFailure, isNull);
+    });
+  });
+
+
+  // ─── TRADUCIR AL ABRIR, MIENTRAS SE LEE ──────────────────────────────────
+  //
+  // El 2026-09-05 el boletín automático llegó al Pixel con los resúmenes de
+  // tema en español y los titulares en inglés. La traducción vivía en segundo
+  // plano, compartía presupuesto con los resúmenes y perdía en silencio.
+  //
+  // Ahora el fondo no traduce: traduce la APERTURA. El boletín se muestra
+  // entero al instante con lo que haya, y las traducciones lo van sustituyendo
+  // por lotes conforme aterrizan.
+  group('traducir el boletín al abrirlo', () {
+    ProviderContainer openContainer(
+      FakeLocalLlmEngine engine,
+      FakeMorningBriefingPreferences prefs,
+    ) =>
+        _container(
+          engine: engine,
+          fetcher: FakeSourceFetcher(bodies: {hnFrontPageUrl: '{"hits":[]}'}),
+          prefs: prefs,
+          notifications: FakeBriefingNotifications(),
+          now: now,
+          languageCode: 'es',
+        );
+
+    test('traduce las noticias pendientes y las va publicando POR LOTES', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: _spanishEcho);
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: _englishBriefing(today),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      // El boletín YA está en pantalla antes de que el modelo haga nada.
+      expect(
+        container.read(morningBriefingNotifierProvider).briefing!.articles,
+        hasLength(6),
+      );
+
+      final publicaciones = <int>[];
+      container.listen(
+        morningBriefingNotifierProvider,
+        (_, next) => publicaciones.add(
+          next.briefing!.articles
+              .where((a) => (a.translatedTitle ?? '').isNotEmpty)
+              .length,
+        ),
+      );
+
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+
+      final state = container.read(morningBriefingNotifierProvider);
+      expect(
+        state.briefing!.articles.map((a) => a.translatedTitle),
+        everyElement(isNotNull),
+        reason: 'las seis acaban traducidas',
+      );
+      expect(
+        state.briefing!.articles.first.displayTitle,
+        startsWith('ES '),
+      );
+      expect(
+        publicaciones.where((n) => n > 0 && n < 6),
+        isNotEmpty,
+        reason: 'hubo al menos una publicación PARCIAL: el texto se sustituye '
+            'conforme llega, no de golpe al final',
+      );
+      expect(
+        publicaciones.first,
+        lessThan(6),
+        reason: 'el primer lote es el de arriba, no el boletín entero',
+      );
+    });
+
+    test('lo traducido se PERSISTE: abrir dos veces no traduce lo mismo', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: _spanishEcho);
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: _englishBriefing(today),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+      final llamadas = engine.generateCount;
+      expect(llamadas, greaterThan(0));
+      expect(prefs.saveCount, greaterThan(0), reason: 'se guardó lo traducido');
+      final guardado = await prefs.lastBriefing();
+      expect(
+        guardado!.articles.map((a) => a.translatedTitle),
+        everyElement(isNotNull),
+      );
+
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+
+      expect(
+        engine.generateCount,
+        llamadas,
+        reason: 'nada que traducir la segunda vez: ni una llamada más',
+      );
+    });
+
+    test('el español y lo ya traducido no cuestan ni una llamada', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: _spanishEcho);
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: OnDeviceBriefing(
+          generatedAt: today,
+          articles: const [
+            BriefingArticle(
+              sourceName: 'Fuente ES',
+              section: 'Mundo',
+              title: 'La noticia de la mañana en el país',
+              url: 'https://es.com/1',
+              description: 'Lo que ha pasado en el mundo, con sus detalles',
+            ),
+            BriefingArticle(
+              sourceName: 'English Source',
+              section: 'Mundo',
+              title: 'A story that was already translated',
+              url: 'https://en.com/9',
+              description: 'It is about the world',
+              translatedTitle: 'Una historia ya traducida',
+            ),
+          ],
+        ),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+
+      expect(engine.generateCount, 0);
+      expect(prefs.saveCount, 0, reason: 'no hubo nada que guardar');
+    });
+
+    test('salir de la pantalla PARA la traducción dentro del lote en curso',
+        () async {
+      final puerta = Completer<void>();
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: _spanishEcho,
+        generateGate: puerta,
+      );
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: _englishBriefing(today, count: 12),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      final corriendo = notifier.translateOpenBriefing(delay: Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      // El lector se va: el primer lote sigue decodificando (no hay cancelación
+      // en la sesión nativa), pero NADA más se le pide al modelo.
+      notifier.stopTranslating();
+      puerta.complete();
+      await corriendo;
+
+      expect(
+        engine.generateCount,
+        1,
+        reason: 'el lote en vuelo termina; los siguientes no llegan a pedirse',
+      );
+      expect(
+        prefs.saveCount,
+        0,
+        reason: 'ni se publica ni se persiste detrás del lector que se fue',
+      );
+    });
+
+    test('un motor que no carga deja el original y DICE por qué', () async {
+      final engine = FakeLocalLlmEngine(installed: true, loadShouldFail: true);
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: _englishBriefing(today, count: 2),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+
+      final state = container.read(morningBriefingNotifierProvider);
+      expect(state.briefing!.articles.first.translatedTitle, isNull);
+      expect(
+        state.translationFailure,
+        isNotNull,
+        reason: 'titulares en inglés sin explicación es el silencio a evitar',
+      );
+      expect(state.translationFailure!.call, LlmEngineCall.load);
+      expect(state.translationFailure!.message, contains('load boom'));
+    });
+
+    test('una traducción que sí funciona borra el aviso viejo', () async {
+      final engine = FakeLocalLlmEngine(
+        installed: true,
+        reply: _spanishEcho,
+        loadShouldFail: true,
+      );
+      final prefs = FakeMorningBriefingPreferences(
+        initialBriefing: _englishBriefing(today, count: 2),
+      );
+      final container = openContainer(engine, prefs);
+      final notifier = container.read(morningBriefingNotifierProvider.notifier);
+      await notifier.ready;
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+      expect(
+        container.read(morningBriefingNotifierProvider).translationFailure,
+        isNotNull,
+      );
+
+      engine.loadShouldFail = false;
+      await notifier.translateOpenBriefing(delay: Duration.zero);
+
+      expect(
+        container.read(morningBriefingNotifierProvider).translationFailure,
+        isNull,
+      );
     });
   });
 

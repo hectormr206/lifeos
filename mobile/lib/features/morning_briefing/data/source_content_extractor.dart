@@ -433,6 +433,44 @@ class SourceContentExtractor {
   /// collapsing and trimming could then remove.
   static final RegExp _numericEntity = RegExp(r'&#(x[0-9a-fA-F]+|[0-9]+);');
 
+  /// Named entities beyond the handful the escaping/markup rules need.
+  ///
+  /// These are TYPOGRAPHY, and English-language feeds are full of them: the
+  /// Pixel's briefing of 2026-09-05 showed "Autocracy wasn&rsquo;t inevitable"
+  /// verbatim in a card, because the decoder knew `&#8217;` (the numeric form)
+  /// but not `&rsquo;` (the named one the same publisher uses elsewhere).
+  /// Decoded to the real character rather than an ASCII lookalike: the feed
+  /// wrote a curly quote and the card should show one.
+  static const Map<String, String> _namedEntities = {
+    '&rsquo;': '\u2019',
+    '&lsquo;': '\u2018',
+    '&ldquo;': '\u201c',
+    '&rdquo;': '\u201d',
+    '&mdash;': '\u2014',
+    '&ndash;': '\u2013',
+    '&hellip;': '\u2026',
+    '&laquo;': '«',
+    '&raquo;': '»',
+    '&deg;': '°',
+    '&eacute;': 'é',
+    '&egrave;': 'è',
+    '&aacute;': 'á',
+    '&iacute;': 'í',
+    '&oacute;': 'ó',
+    '&uacute;': 'ú',
+    '&uuml;': 'ü',
+    '&ntilde;': 'ñ',
+    '&Ntilde;': 'Ñ',
+    '&ccedil;': 'ç',
+    '&euro;': '€',
+    '&pound;': '£',
+    '&trade;': '\u2122',
+    '&copy;': '©',
+    '&reg;': '®',
+    '&middot;': '·',
+    '&bull;': '•',
+  };
+
   String _decodeEntities(String s) {
     var out = s
         .replaceAll('&amp;', '&')
@@ -445,6 +483,9 @@ class SourceContentExtractor {
         .replaceAll('&#8217;', "'")
         .replaceAll('&#8220;', '"')
         .replaceAll('&#8221;', '"');
+    for (final entry in _namedEntities.entries) {
+      out = out.replaceAll(entry.key, entry.value);
+    }
     out = out.replaceAllMapped(_numericEntity, (m) {
       final raw = m.group(1)!;
       final code = raw.startsWith('x') || raw.startsWith('X')

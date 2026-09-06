@@ -1,7 +1,8 @@
 // Proves the headless WorkManager task body ("Segundo plano") with fakes:
 // the already-generated-today guard skips (that is also the double-generation
 // lock against the in-app path), a missing model file keeps the ORIGINAL text
-// (never a download), a present model translates, a total fetch failure skips
+// (never a download), a PRESENT model writes the digests and briefs but NEVER
+// translates (translating is the reader's-open job now), a total fetch failure skips
 // cleanly without crashing, the "listo" notification posts on success, the
 // fired "toca aquí" reminder is removed, and the next-day chain (reminder +
 // one-off work) is re-armed after EVERY outcome. No plugins, no network.
@@ -75,7 +76,6 @@ String _dated(DateTime now) {
     backgroundWork: work,
     now: () => now,
     overrideLocation: () async => null,
-    languageCode: () async => 'es',
     timeout: timeout,
   );
   return (
@@ -126,23 +126,42 @@ void main() {
         reason: 'the redundant "toca aquí" reminder is removed');
   });
 
-  test('model file PRESENT → translates via the on-device engine, then persists', () async {
+  test('model file PRESENT → escribe resúmenes, pero NO traduce', () async {
+    // DECISIÓN 2026-09-06: el fondo ya no traduce. Traducir a las 8:08 es
+    // trabajo que puede acabar en la basura —el lector no ve nada hasta que
+    // abre— y competía por el mismo presupuesto que los resúmenes, que sí
+    // llegan con la notificación. La traducción se hace al ABRIR el boletín,
+    // mientras se lee (ver MorningBriefingNotifier.translateOpenBriefing).
     final h = _harness(
       now: atSlot,
       modelAvailable: true,
-      reply: (_) => '1. El futuro de la IA ||| Un vistazo a lo nuevo del mundo de la IA',
+      reply: (_) => 'Lo que está pasando en este tema, en una frase.',
     );
 
     await runMorningBriefingBackgroundTask(h.deps);
 
     final saved = await h.prefs.lastBriefing();
-    expect(saved!.articles.first.translatedTitle, 'El futuro de la IA');
-    expect(saved.articles.first.translatedDescription, 'Un vistazo a lo nuevo del mundo de la IA');
+    expect(saved!.articles.first.title, 'The AI Future');
+    expect(
+      saved.articles.first.translatedTitle,
+      isNull,
+      reason: 'el fondo guarda el original; traducir es cosa de la apertura',
+    );
+    expect(
+      saved.sectionDigests,
+      isNotEmpty,
+      reason: 'el resumen de tema SÍ se escribe: llega con la notificación',
+    );
+    expect(
+      h.engine.prompts.any((p) => p.contains('Translate each of the following')),
+      isFalse,
+      reason: 'ni una sola llamada de traducción en segundo plano',
+    );
     expect(h.engine.loadCount, greaterThan(0));
     expect(h.notifications.shown, 1);
   });
 
-  test('translation failure keeps the originals — the fetched news is never lost', () async {
+  test('un modelo que no carga no cuesta las noticias ya descargadas', () async {
     final h = _harness(
       now: atSlot,
       modelAvailable: true,
@@ -241,19 +260,21 @@ void main() {
     );
   });
 
-  test('con tiempo justo, lo que sobrevive es el RESUMEN de cada tema', () async {
-    // El resumen por tema es lo primero que se lee y lo que decide qué abrir.
-    // Escribirlo el último significaba que un corte por tiempo mataba justo eso
-    // y dejaba cien titulares sin nada que ayude a elegir. Va primero: cuesta
-    // siete llamadas al modelo, no cien.
-    var llamadas = 0;
+  test('el presupuesto entero es para cosecha, resúmenes y briefs', () async {
+    // Este test decía antes: "con tiempo justo, lo que sobrevive es el RESUMEN
+    // de cada tema". Codificaba el síntoma como si fuera lo deseado: daba por
+    // bueno que la traducción se quedara fuera cuando el reloj apretaba, y por
+    // eso el 2026-09-05 el usuario recibió en el Pixel un boletín con los
+    // resúmenes en español y los titulares en inglés, sin un solo aviso.
+    //
+    // El reparto ya no existe porque la competencia ya no existe: el fondo NO
+    // traduce. Lo que hay que probar hoy es que los ocho minutos van enteros a
+    // lo que sí se lee al llegar la notificación, y que no se gasta ni una
+    // llamada del modelo en traducir.
     final h = _harness(
       now: atSlot,
       modelAvailable: true,
-      reply: (_) {
-        llamadas++;
-        return 'Lo que está pasando en este tema, en una frase.';
-      },
+      reply: (_) => 'Lo que está pasando en este tema, en una frase.',
     );
 
     await runMorningBriefingBackgroundTask(h.deps);
@@ -264,7 +285,11 @@ void main() {
       isNotEmpty,
       reason: 'el resumen de tema es lo que no puede faltar',
     );
-    expect(llamadas, greaterThan(0));
+    expect(
+      h.engine.prompts.every((p) => !p.contains('Translate each of the following')),
+      isTrue,
+      reason: 'el presupuesto no se gasta en trabajo que el lector no ve',
+    );
   });
 
   test('a HUNG run hits the hard timeout and still completes cleanly', () async {

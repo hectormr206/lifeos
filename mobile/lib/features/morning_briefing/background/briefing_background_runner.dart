@@ -3,7 +3,6 @@ import 'dart:async';
 import 'package:timezone/timezone.dart' as tz;
 
 import '../../local_model/domain/local_llm_engine.dart';
-import '../../local_model/domain/on_device_translator.dart';
 import '../domain/briefing_assembler.dart';
 import '../domain/briefing_background_work.dart';
 import '../domain/briefing_brief_writer.dart';
@@ -12,7 +11,6 @@ import '../domain/briefing_notifications.dart';
 import '../domain/briefing_schedule.dart';
 import '../domain/briefing_scheduler.dart';
 import '../domain/briefing_source.dart';
-import '../domain/briefing_translation.dart';
 import '../domain/morning_briefing.dart';
 import '../domain/morning_briefing_preferences.dart';
 import '../domain/section_digest_writer.dart';
@@ -32,7 +30,6 @@ class BriefingBackgroundDeps {
     required this.backgroundWork,
     required this.now,
     required this.overrideLocation,
-    required this.languageCode,
     this.timeout = defaultTimeout,
   });
 
@@ -50,8 +47,8 @@ class BriefingBackgroundDeps {
   /// task must NEVER trigger the model download.
   final Future<bool> Function() isModelAvailable;
 
-  /// Engine used ONLY when [isModelAvailable] reports true. Null disables
-  /// translation outright (composition roots without an engine).
+  /// Engine used ONLY when [isModelAvailable] reports true. Null disables the
+  /// model stages outright (composition roots without an engine).
   final LocalLlmEngine? engine;
 
   final BriefingNotifications notifications;
@@ -65,9 +62,6 @@ class BriefingBackgroundDeps {
   /// AUTOMATIC mode (device-local). Mirrors the notifier's `_overrideLocation`.
   final Future<tz.Location?> Function() overrideLocation;
 
-  /// The app output language ('es' / 'en') read from persistence.
-  final Future<String> Function() languageCode;
-
   final Duration timeout;
 }
 
@@ -79,8 +73,10 @@ class BriefingBackgroundDeps {
 ///      this is also what prevents DOUBLE generation: if the in-app timer ran
 ///      first this skips, and if this ran first the in-app guard skips);
 ///   2. fetch + assemble (network only, fast);
-///   3. translate ONLY if the model file is already on disk (never download
-///      2.6GB in background; on any model failure keep the originals);
+///   3. write the per-theme digests and the missing briefs ONLY if the model
+///      file is already on disk (never download 2.6GB in background; on any
+///      model failure keep what the earlier stages produced). It does NOT
+///      translate: see the note on the model stages below;
 ///   4. persist + post the "Tu boletín está listo" notification (same
 ///      id/payload as the foreground path, so tapping opens the Boletín) and
 ///      remove the now-redundant "toca aquí" reminder;
@@ -167,6 +163,20 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
       final left = deps.timeout - reloj.elapsed;
       return left.isNegative ? Duration.zero : left;
     }
+    // AQUÍ NO SE TRADUCE (decisión del 2026-09-06). El 2026-09-05 el boletín
+    // de las 08:08 llegó al Pixel con los resúmenes en español y los titulares
+    // en inglés: las etapas compartían el presupuesto, los digests corrían
+    // primero, y a la traducción le llegaba `Duration.zero` — un `catch` vacío
+    // se lo tragaba y la notificación decía "listo" igual. Silencio completo.
+    //
+    // La salida no fue repartir mejor los ocho minutos, sino quitar de aquí el
+    // trabajo que puede acabar en la basura: el lector no ve NADA hasta que
+    // abre, así que traducir a las 08:08 apuesta batería y presupuesto a que
+    // abrirá. Los resúmenes de tema y los briefs sí llegan con la notificación
+    // —son lo que se lee al tocarla—, así que el presupuesto entero es suyo.
+    // Traducir es ahora cosa de la apertura, mientras se lee: ver
+    // [MorningBriefingNotifier.translateOpenBriefing].
+    //
     // HEAVY + INTENTIONAL: loading the ~2.6GB model headless is the cost the
     // user accepted for a ready-made briefing. The pipeline never throws
     // (per-source isolation; catastrophic failure keeps originals), and the
@@ -176,24 +186,13 @@ Future<void> _run(BriefingBackgroundDeps deps) async {
       //
       // Es lo primero que lee y lo que le dice qué abrir, y cuesta siete
       // llamadas al modelo, no cien. Iba el último —cuando ya estaba todo
-      // traducido y con sus briefs— así que un corte por tiempo se llevaba
-      // exactamente lo único que hace legible un boletín de cien titulares.
-      // Escrito desde los titulares en su idioma original sale igual de bien:
-      // el modelo lee inglés y responde en español, que es lo que la traducción
-      // haría de todos modos.
+      // con sus briefs— así que un corte por tiempo se llevaba exactamente lo
+      // único que hace legible un boletín de cien titulares. Escrito desde los
+      // titulares en su idioma original sale igual de bien: el modelo lee
+      // inglés y responde en español.
       briefing = await BriefingSectionDigestWriter(
         engine: engine,
       ).fillDigests(assembled).timeout(restante());
-      final pipeline = BriefingTranslationPipeline(
-        translator: OnDeviceTranslator(engine),
-        extractor: deps.harvester.extractor,
-      );
-      briefing = await pipeline
-          .translateAll(
-            briefing,
-            languageCode: await deps.languageCode(),
-          )
-          .timeout(restante());
       briefing = await BriefingBriefWriter(
         engine: engine,
         fetcher: deps.harvester.fetcher,

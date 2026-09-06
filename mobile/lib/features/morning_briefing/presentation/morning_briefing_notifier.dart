@@ -203,6 +203,33 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// The same, for the comments summary.
   final Map<String, int> _commentAttempts = {};
 
+  /// Bumped by [stopTranslating] (and by every new [translateOpenBriefing]):
+  /// an on-open translation only keeps going while the run it started with is
+  /// still the current one. That is the whole cancellation mechanism — the
+  /// native session has no "stop", so what we control is whether the NEXT batch
+  /// is ever asked for, and whether a batch that came back late is published.
+  int _translationRun = 0;
+
+  /// Guard against two on-open translations of the same briefing overlapping
+  /// (the screen is rebuilt on every state change).
+  bool _translating = false;
+
+  /// The grace before the on-open translation starts, as a CANCELLABLE timer
+  /// rather than a bare `Future.delayed`: the reader who opens the briefing and
+  /// leaves within the second must not leave a timer running behind him — and a
+  /// pending timer that outlives the screen is exactly what a widget test
+  /// refuses to end on.
+  Timer? _graceTimer;
+  Completer<void>? _graceDone;
+
+  void _cancelGrace() {
+    _graceTimer?.cancel();
+    _graceTimer = null;
+    final done = _graceDone;
+    _graceDone = null;
+    if (done != null && !done.isCompleted) done.complete();
+  }
+
   /// Injectable clock for the schedule/auto-run logic (production uses the real
   /// clock). Freshness uses [clockProvider] instead (the device-timezone seam).
   @visibleForTesting
@@ -214,6 +241,16 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   /// LONGSUM tuned sampling for gemma-4-E2B (the summarization role): lower
   /// temperature for factual, non-divergent summaries. Passed as per-call
   /// overrides to [LocalLlmEngine.generate] for the on-demand summaries.
+  /// How long the screen is left alone before the on-open translation starts.
+  ///
+  /// The reader has just arrived: the first frame, the fold he taps, and the
+  /// summary he may ask for all come first. And the model may have been
+  /// released for being idle ([IdleUnloadLlmEngine]), so the first batch can
+  /// mean re-mapping ~2.6 GB of weights — a second of quiet is the difference
+  /// between a screen that opens and a screen that opens while the phone is
+  /// busy. It is a grace, not a throttle: after it, batches run back to back.
+  static const Duration openTranslationGrace = Duration(milliseconds: 1200);
+
   static const double longsumTemperature = 0.2;
   static const int longsumTopK = 20;
   static const double longsumTopP = 0.9;
@@ -223,6 +260,7 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     ref.onDispose(() {
       _disposed = true;
       _autoRunTimer?.cancel();
+      _cancelGrace();
     });
     _bootstrapFuture = _hydrate();
     return const MorningBriefingState();
@@ -519,6 +557,129 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
   // ---------------------------------------------------------------------------
   // On-demand summaries (per item; run the on-device model only when tapped)
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Traducir al ABRIR el boletín (mientras se lee)
+  // ---------------------------------------------------------------------------
+
+  /// Translates whatever the OPEN briefing still shows in another language, in
+  /// reading order, publishing and persisting each small batch as it lands.
+  ///
+  /// WHY HERE AND NO LONGER IN THE BACKGROUND (2026-09-06). The 08:08 run used
+  /// to translate too, sharing its eight-minute budget with the per-theme
+  /// digests; when the budget ran out the translation was the stage that lost,
+  /// silently, and the Pixel got a briefing with Spanish summaries over English
+  /// headlines announced as "listo". Background translation is also a bet: the
+  /// reader sees nothing until he opens, so every headline translated at dawn
+  /// is battery spent on text that may never be read. Here there is no bet —
+  /// he is looking at it.
+  ///
+  /// It never blocks the reading. The briefing is already on screen when this
+  /// starts; each batch replaces the text of at most
+  /// [BriefingTranslationPipeline.readingBatchSize] cards as it arrives, and
+  /// each batch is its own job on the shared model queue, so a summary the
+  /// reader taps waits for four items, never for the whole briefing.
+  ///
+  /// Safe to call on every open: articles already translated (or already in the
+  /// app language) cost no model call, which is what makes the persisted result
+  /// worth writing.
+  Future<void> translateOpenBriefing({
+    Duration delay = openTranslationGrace,
+  }) async {
+    if (_disposed || _translating) return;
+    if (state.briefing == null) return;
+    final run = ++_translationRun;
+    _translating = true;
+    try {
+      if (delay > Duration.zero) {
+        _cancelGrace();
+        final done = Completer<void>();
+        _graceDone = done;
+        _graceTimer = Timer(delay, _cancelGrace);
+        await done.future;
+      }
+      if (_disposed || _translationRun != run) return;
+      final briefing = state.briefing;
+      if (briefing == null) return;
+
+      final engine = ref.read(localLlmEngineProvider);
+      final queue = ref.read(llmRequestQueueProvider);
+      final pipeline = BriefingTranslationPipeline(
+        translator: OnDeviceTranslator(engine),
+        extractor: ref.read(sourceContentExtractorProvider),
+      );
+      EngineFailureDetail? failure;
+      var published = false;
+
+      await pipeline.translateInReadingOrder(
+        briefing,
+        languageCode: _languageCode,
+        shouldContinue: () => !_disposed && _translationRun == run,
+        onEngineFailure: (detail) => failure = detail,
+        // One queue slot per BATCH, not per briefing: the reader's own taps
+        // keep getting through while this runs.
+        runBatch: (job) => queue.add(job, label: 'briefing:translate'),
+        onBatch: (updated) async {
+          if (_disposed || _translationRun != run) return updated;
+          // Merged onto the CURRENT briefing, article by article: a summary
+          // that landed while this batch was decoding must not be overwritten
+          // by the snapshot the batch started from.
+          final merged = _mergeTranslations(updated);
+          published = true;
+          state = state.copyWith(phase: state.phase, briefing: merged);
+          await _persistBriefing(merged);
+          return merged;
+        },
+      );
+
+      if (_disposed || _translationRun != run) return;
+      _noteBackend(engine);
+      // Set OR CLEAR, exactly like the generation path: untranslated items with
+      // no explanation is the silence this reports, and a stale explanation
+      // over text that IS translated is the same lie backwards.
+      if (failure != null || published) {
+        state = state.copyWith(
+          phase: state.phase,
+          briefing: state.briefing,
+          translationFailure: failure,
+          clearTranslationFailure: failure == null,
+        );
+      }
+    } finally {
+      _translating = false;
+    }
+  }
+
+  /// Stops the on-open translation. The batch already inside the model cannot
+  /// be un-run — there is no cancel at the native session — but nothing further
+  /// is asked for, and a late batch is neither published nor persisted.
+  void stopTranslating() {
+    _translationRun++;
+    _cancelGrace();
+  }
+
+  /// Copies the translations carried by [translated] onto the briefing the app
+  /// currently holds, leaving every other field (summaries, briefs) as it is.
+  OnDeviceBriefing _mergeTranslations(OnDeviceBriefing translated) {
+    final held = state.briefing;
+    if (held == null) return translated;
+    var merged = held;
+    for (final a in translated.articles) {
+      final title = a.translatedTitle;
+      if (title == null || title.trim().isEmpty) continue;
+      final current = merged.articleForKey(a.key);
+      if (current == null) continue;
+      if ((current.translatedTitle ?? '').trim().isNotEmpty) continue;
+      merged = merged.replaceArticle(
+        current.key,
+        current.copyWith(
+          translatedTitle: title,
+          translatedDescription: a.translatedDescription,
+        ),
+      );
+    }
+    return merged;
+  }
 
   /// Fetches [article]'s page and summarizes it on-device (LONGSUM sampling),
   /// caching the result on the article. No-op when already cached or in flight.

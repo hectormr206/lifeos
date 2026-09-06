@@ -9,6 +9,7 @@
 // device / no platform channel); that throw is expected and irrelevant here —
 // what matters is that the initializer fired first, once.
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -448,6 +449,112 @@ void main() {
       );
     });
   });
+
+  // ─── SESIONES NATIVAS: UNA POR GENERACIÓN, Y SE CIERRAN ───────────────────
+  //
+  // Reportado el 2026-09-05 en la laptop (release 928): "monta el modelo pero
+  // al terminar no lo desmonta". En /proc del proceso, `grep -c litertlm
+  // maps` = 0 (los pesos SÍ se soltaron: el IdleUnloadLlmEngine funciona), pero
+  // VmRSS 853 MB con RssAnon 633 MB — memoria anónima que no vuelve.
+  //
+  // Cada generación crea su `createChat` (y con él una sesión nativa con su
+  // KV-cache) y ninguna se cerraba: un boletín hace decenas o cientos de
+  // generaciones. `InferenceChat.close()` existe en el plugin (chat.dart:682,
+  // `Future<void> close() => session.close();`); lo que faltaba era llamarlo.
+  group('cada generación cierra su sesión nativa', () {
+    test('camino feliz (texto): el chat se cierra al terminar', () async {
+      final chat = _RecordingChat(response: const TextResponse('hola'));
+      final engine = _engineWithChat(chat);
+
+      await engine.load();
+      final result = await engine.generate('di hola');
+
+      expect(result.text, 'hola');
+      expect(chat.closeCount, 1, reason: 'la sesión nativa no puede quedar viva');
+    });
+
+    test('si la generación LANZA, el chat se cierra y la excepción original sube',
+        () async {
+      final boom = Exception('decode boom');
+      final chat = _RecordingChat(error: boom);
+      final engine = _engineWithChat(chat);
+
+      await engine.load();
+
+      await expectLater(
+        engine.generate('lo que sea'),
+        throwsA(same(boom)),
+        reason: 'cerrar la sesión no puede tapar el fallo real',
+      );
+      expect(chat.closeCount, 1);
+    });
+
+    test('un fallo AL CERRAR no se come el resultado de la generación', () async {
+      final chat = _RecordingChat(
+        response: const TextResponse('texto bueno'),
+        closeError: StateError('native already torn down'),
+      );
+      final engine = _engineWithChat(chat);
+
+      await engine.load();
+      final result = await engine.generate('di algo');
+
+      expect(result.text, 'texto bueno');
+      expect(chat.closeCount, 1);
+    });
+
+    test('un fallo AL CERRAR no tapa la excepción original de la generación',
+        () async {
+      final boom = Exception('decode boom');
+      final chat = _RecordingChat(
+        error: boom,
+        closeError: StateError('native already torn down'),
+      );
+      final engine = _engineWithChat(chat);
+
+      await engine.load();
+
+      await expectLater(engine.generate('x'), throwsA(same(boom)));
+      expect(chat.closeCount, 1);
+    });
+
+    test('cada generación abre UNA sesión y la cierra: nada se acumula', () async {
+      final model = _ChatModel(() => _RecordingChat(response: const TextResponse('ok')));
+      final engine = _engineWithModel(model);
+
+      await engine.load();
+      for (var i = 0; i < 3; i++) {
+        await engine.generate('vuelta $i');
+      }
+
+      expect(model.chats.length, 3);
+      expect(
+        model.chats.map((c) => c.closeCount),
+        everyElement(1),
+        reason: 'ninguna sesión sobrevive a su generación',
+      );
+    });
+
+    test('el camino de visión cierra su chat igual (feliz y con excepción)',
+        () async {
+      final ok = _RecordingChat(response: const TextResponse('una foto'));
+      final engineOk = _engineWithChat(ok);
+      await engineOk.load();
+      await engineOk.generateWithImages('describe', [Uint8List.fromList([1, 2])]);
+      expect(ok.closeCount, 1);
+
+      final boom = Exception('vision boom');
+      final failing = _RecordingChat(error: boom);
+      final engineBad = _engineWithChat(failing);
+      await engineBad.load();
+      await expectLater(
+        engineBad.generateWithImages('describe', [Uint8List.fromList([1, 2])]),
+        throwsA(same(boom)),
+      );
+      expect(failing.closeCount, 1);
+    });
+  });
+
 }
 
 /// The OTA install location every published build writes to
@@ -499,4 +606,103 @@ FlutterGemmaLlmEngine _engineWithActivation(
       activeModelProbe: activation.hasActive,
       weightsLocator: activation.locateWeights,
       modelActivator: activation.activate,
+    );
+
+
+/// An [InferenceChat] double that records its close, answers one scripted
+/// response (or throws), and can also fail while closing.
+class _RecordingChat implements InferenceChat {
+  _RecordingChat({this.response, this.error, this.closeError});
+
+  final ModelResponse? response;
+  final Object? error;
+  final Object? closeError;
+
+  int closeCount = 0;
+  final List<Message> queries = [];
+
+  @override
+  Future<void> addQueryChunk(
+    Message message, [
+    bool noTool = false,
+    bool prefix = false,
+  ]) async =>
+      queries.add(message);
+
+  @override
+  Future<ModelResponse> generateChatResponse() async {
+    if (error != null) throw error!;
+    return response ?? const TextResponse('');
+  }
+
+  @override
+  Future<void> close() async {
+    closeCount++;
+    if (closeError != null) throw closeError!;
+  }
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// An [InferenceModel] double whose `createChat` hands out scripted chats and
+/// remembers every one it created.
+class _ChatModel implements InferenceModel {
+  _ChatModel(this._next);
+
+  final _RecordingChat Function() _next;
+  final List<_RecordingChat> chats = [];
+
+  @override
+  PreferredBackend? get activeBackend => PreferredBackend.cpu;
+
+  @override
+  Future<InferenceChat> createChat({
+    double temperature = .8,
+    int randomSeed = 1,
+    int topK = 1,
+    double? topP,
+    int tokenBuffer = 256,
+    String? loraPath,
+    bool? supportImage,
+    bool? supportAudio,
+    List<Tool> tools = const [],
+    bool? supportsFunctionCalls,
+    bool isThinking = false,
+    ModelType? modelType,
+    ToolChoice toolChoice = ToolChoice.auto,
+    int? maxFunctionBufferLength,
+    String? systemInstruction,
+    int? maxOutputTokens,
+  }) async {
+    final chat = _next();
+    chats.add(chat);
+    return chat;
+  }
+
+  @override
+  Future<void> close() async {}
+
+  @override
+  dynamic noSuchMethod(Invocation invocation) => super.noSuchMethod(invocation);
+}
+
+/// An engine whose loaded model always hands out [chat].
+FlutterGemmaLlmEngine _engineWithChat(_RecordingChat chat) =>
+    _engineWithModel(_ChatModel(() => chat));
+
+FlutterGemmaLlmEngine _engineWithModel(_ChatModel model) => FlutterGemmaLlmEngine(
+      const LocalModelConfig(),
+      initializer: () async {},
+      modelLoader: ({
+        required int maxTokens,
+        required PreferredBackend preferredBackend,
+        required bool supportImage,
+        required int maxNumImages,
+      }) async =>
+          model,
+      installedRecordProbe: (_) async => true,
+      activeModelProbe: () => true,
+      weightsLocator: () async => '/tmp/weights.litertlm',
+      modelActivator: (_) async {},
     );

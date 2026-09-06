@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:flutter/services.dart';
@@ -59,6 +61,49 @@ class _MorningBriefingScreenState extends ConsumerState<MorningBriefingScreen> {
   /// Article keys whose comments panel is open.
   final Set<String> _openComments = <String>{};
 
+  /// The notifier, captured while the widget is still mounted, so [dispose] can
+  /// stop the on-open translation without reaching for `ref` after teardown.
+  MorningBriefingNotifier? _notifier;
+
+  /// Set once the on-open translation has been kicked off for this visit, so a
+  /// rebuild (a fold, a summary, a state change) does not keep re-asking.
+  bool _translationStarted = false;
+
+  /// Opening the briefing is what TRANSLATES it.
+  ///
+  /// The automatic 08:08 run deliberately does not translate any more: nobody
+  /// sees a background briefing until it is opened, so translating at dawn
+  /// spent battery — and the same eight-minute budget the per-theme digests
+  /// need — on text that might never be read. When the budget ran out the
+  /// translation was the stage that lost, silently, which is how a briefing
+  /// arrived with Spanish summaries over English headlines.
+  ///
+  /// Here the reader IS looking. The briefing paints first, complete, in
+  /// whatever language it has; the translation then walks it in reading order
+  /// and swaps the text in small batches as each lands. Leaving the screen
+  /// stops it (see [dispose]).
+  ///
+  /// It starts from [build] rather than `initState` on purpose: the persisted
+  /// briefing arrives asynchronously, so "there is something to translate" is a
+  /// state the screen learns, not a moment it can assume.
+  void _startTranslationOnce(MorningBriefingState state) {
+    if (_translationStarted || state.briefing == null) return;
+    _translationStarted = true;
+    final notifier = ref.read(morningBriefingNotifierProvider.notifier);
+    _notifier = notifier;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      unawaited(notifier.translateOpenBriefing());
+    });
+  }
+
+  @override
+  void dispose() {
+    // The reader left: nothing further is asked of the model.
+    _notifier?.stopTranslating();
+    super.dispose();
+  }
+
   void _toggleSection(String section, bool open) => setState(() {
         if (open) {
           _openSections.add(section);
@@ -116,6 +161,7 @@ class _MorningBriefingScreenState extends ConsumerState<MorningBriefingScreen> {
     final state = ref.watch(morningBriefingNotifierProvider);
     final notifier = ref.read(morningBriefingNotifierProvider.notifier);
     final l10n = AppLocalizations.of(context);
+    _startTranslationOnce(state);
 
     return Scaffold(
       appBar: AppBar(
