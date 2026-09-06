@@ -114,7 +114,12 @@ Future<void> _registerLiteRtLmEngine() => FlutterGemma.initialize(
 /// Callers must not hold an open [InferenceChat] across either sequence;
 /// [InferenceChat] is derived from [_model] and becomes invalid after
 /// [model.close()]. The single-turn design of [generate] / [generateWithImages]
-/// (fresh chat per call, not persisted) ensures no chat leaks across an OTA.
+/// (fresh chat per call, not persisted) ensures no chat leaks across an OTA —
+/// and each of those calls CLOSES its chat in a `finally` (see
+/// [_closeQuietly]), which is what releases the native session and its
+/// KV-cache. Releasing the model is not enough: the weights are mmapped and
+/// come back with [model.close()], but the sessions are anonymous memory that
+/// only their own `close()` returns.
 ///
 /// ─── INFERENCE ENGINE REGISTRATION ────────────────────────────────────────
 ///
@@ -485,23 +490,27 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       topP: topP ?? LocalModelConfig.tunedTopP,
       randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
-    await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
-    final response = await chat.generateChatResponse();
-    stopwatch.stop();
-    final text = switch (response) {
-      // Strip control tokens (e.g. a detokenized "<pad>") from the fragment as
-      // it is accumulated, then trim the final result once below.
-      TextResponse(:final token) => _stripSpecialTokens(token),
-      // Tools are not enabled this slice, so only TextResponse is expected;
-      // anything else degrades to empty rather than crashing the chat.
-      _ => '',
-    };
-    // Final scrub catches any special token that was split across chunks.
-    final cleaned = _stripSpecialTokens(text);
-    return GenerationResult(
-      text: cleaned,
-      metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
-    );
+    try {
+      await chat.addQueryChunk(Message.text(text: prompt, isUser: true));
+      final response = await chat.generateChatResponse();
+      stopwatch.stop();
+      final text = switch (response) {
+        // Strip control tokens (e.g. a detokenized "<pad>") from the fragment as
+        // it is accumulated, then trim the final result once below.
+        TextResponse(:final token) => _stripSpecialTokens(token),
+        // Tools are not enabled this slice, so only TextResponse is expected;
+        // anything else degrades to empty rather than crashing the chat.
+        _ => '',
+      };
+      // Final scrub catches any special token that was split across chunks.
+      final cleaned = _stripSpecialTokens(text);
+      return GenerationResult(
+        text: cleaned,
+        metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
+      );
+    } finally {
+      await _closeQuietly(chat);
+    }
   }
 
   @override
@@ -544,22 +553,52 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
       topP: topP ?? LocalModelConfig.tunedTopP,
       randomSeed: DateTime.now().millisecondsSinceEpoch & 0x7fffffff,
     );
-    await chat.addQueryChunk(
-      Message.withImages(text: prompt, imageBytes: images, isUser: true),
-    );
-    final response = await chat.generateChatResponse();
-    stopwatch.stop();
-    final text = switch (response) {
-      // Same special-token scrub as the text path — this is the SAFETY NET that
-      // catches a detokenized "<pad>" even if sampling still produces one.
-      TextResponse(:final token) => _stripSpecialTokens(token),
-      _ => '',
-    };
-    final cleaned = _stripSpecialTokens(text);
-    return GenerationResult(
-      text: cleaned,
-      metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
-    );
+    try {
+      await chat.addQueryChunk(
+        Message.withImages(text: prompt, imageBytes: images, isUser: true),
+      );
+      final response = await chat.generateChatResponse();
+      stopwatch.stop();
+      final text = switch (response) {
+        // Same special-token scrub as the text path — this is the SAFETY NET that
+        // catches a detokenized "<pad>" even if sampling still produces one.
+        TextResponse(:final token) => _stripSpecialTokens(token),
+        _ => '',
+      };
+      final cleaned = _stripSpecialTokens(text);
+      return GenerationResult(
+        text: cleaned,
+        metrics: _metricsFor(chat, cleaned, stopwatch.elapsedMilliseconds),
+      );
+    } finally {
+      await _closeQuietly(chat);
+    }
+  }
+
+  /// Closes the per-generation chat — and therefore its NATIVE SESSION, with
+  /// the KV-cache that session holds — without ever changing the outcome of the
+  /// generation itself.
+  ///
+  /// WHY THIS EXISTS (laptop, release 928, 2026-09-05): the reader saw the app
+  /// "mount the model and never unmount it". The weights WERE released
+  /// (`grep -c litertlm /proc/<pid>/maps` = 0, so [dispose] and the idle unload
+  /// both work), but VmRSS stayed at 853 MB with 633 MB of it ANONYMOUS. That
+  /// anonymous memory is the sessions: [generate] and [generateWithImages]
+  /// create a fresh `createChat` per call — one native session each — and
+  /// nothing ever closed them. A briefing makes dozens or hundreds of
+  /// generations, so the sessions piled up for the life of the process.
+  ///
+  /// It runs in a `finally`, so a generation that THROWS releases its session
+  /// too. And the close is swallowed on purpose: a runtime already torn down
+  /// throws here, and letting that surface would either replace the real
+  /// generation failure with a bookkeeping one or discard a perfectly good
+  /// answer the model already produced.
+  static Future<void> _closeQuietly(InferenceChat chat) async {
+    try {
+      await chat.close();
+    } catch (_) {
+      // Best-effort release: never let cleanup mask the result or the cause.
+    }
   }
 
   /// Builds [GenerationMetrics] for a completed generation. [totalMs] is the
