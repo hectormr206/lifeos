@@ -109,6 +109,22 @@ void _blankSpaceGuards() {
       expect(extractor.cleanBrief('Caf&#233; y t&#233;'), 'Café y té');
     });
 
+    test('las entidades con NOMBRE de la tipografía inglesa también decodifican', () {
+      // Visto en el boletín del Pixel el 2026-09-05, en crudo dentro de la
+      // entradilla: "Autocracy wasn&rsquo;t inevitable...". La lista de
+      // entidades con nombre cubría comillas rectas y `&nbsp;`, pero no la
+      // apóstrofe tipográfica que publica media prensa anglosajona.
+      expect(
+        extractor.cleanBrief('Autocracy wasn&rsquo;t inevitable'),
+        'Autocracy wasn\u2019t inevitable',
+      );
+      expect(
+        extractor.cleanBrief('&ldquo;Una cita&rdquo; y un guion &mdash; largo'),
+        '\u201cUna cita\u201d y un guion \u2014 largo',
+      );
+      expect(extractor.cleanBrief('Se acab&oacute;&hellip;'), 'Se acabó\u2026');
+    });
+
     test('ordinary text is untouched', () {
       expect(extractor.cleanBrief('Un vistazo al futuro'), 'Un vistazo al futuro');
     });
