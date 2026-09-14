@@ -12,6 +12,8 @@ library;
 
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart' show TargetPlatform, defaultTargetPlatform;
+
 import 'generation_metrics.dart';
 
 export 'generation_metrics.dart';
@@ -21,8 +23,51 @@ export 'generation_metrics.dart';
 /// the domain layer never imports the plugin.
 enum LocalLlmBackend { cpu, gpu, npu }
 
+/// What "Automático" means on [platform] — the backend the app asks for when
+/// the user has not forced one.
+///
+/// IT IS NOT ALWAYS THE GPU, and the split is measured, not a preference:
+///
+///   * PHONE (Android/iOS) → GPU. On a Pixel 7 Pro the GPU wins the PREFILL by
+///     a wide margin (TTFT 2.2s vs 7.2s); decode is a wash (15/12 vs 12/12
+///     tok/s). A phone answer that starts three times sooner is worth it, and
+///     the model lives inside a WorkManager isolate that dies with the job, so
+///     nothing survives it.
+///   * DESKTOP (Linux/Windows/macOS) → CPU, and the GPU is never touched. The
+///     desktop app is ONE long-lived process, and the GPU context it creates
+///     outlives the weights: measured on a release build, `model.close()` had
+///     already unmapped the `.litertlm` (0 mappings) while `nvidia-smi` still
+///     reported 1172 MiB held by the process, 20h in, with nothing running.
+///     Neither flutter_gemma nor litert-lm exposes any way to release that
+///     context short of exiting the process (`FlutterGemma.dispose()` only
+///     closes the RAG vector store; `LiteRtLmFfiClient.shutdown()` only calls
+///     `litert_lm_engine_delete`). So the only cure is not to create it: asking
+///     for CPU makes `ffiBackendFallbackOrder` try CPU and ONLY CPU
+///     (`PreferredBackend.cpu => const [PreferredBackend.cpu]`), and the wire
+///     backend string handed to `litert_lm_engine_settings_create` is 'cpu',
+///     so no accelerator is ever initialized. These are ~2B models chosen
+///     precisely so a CPU can run them; on a desktop CPU that is the deal we
+///     want.
+///
+/// An explicit user choice (the backend selector) still wins over this — it is
+/// resolved BEFORE this function is ever consulted, in [LocalModelConfig].
+LocalLlmBackend automaticBackendFor(TargetPlatform platform) => switch (platform) {
+      TargetPlatform.android || TargetPlatform.iOS => LocalLlmBackend.gpu,
+      TargetPlatform.linux ||
+      TargetPlatform.windows ||
+      TargetPlatform.macOS ||
+      TargetPlatform.fuchsia =>
+        LocalLlmBackend.cpu,
+    };
+
+/// [automaticBackendFor] on the platform this build is running on.
+LocalLlmBackend get defaultAutomaticBackend => automaticBackendFor(defaultTargetPlatform);
+
 /// Immutable config for the on-device model. Defaults to the public,
-/// token-free gemma-4-E2B litert-lm build on the GPU backend.
+/// token-free gemma-4-E2B litert-lm build on the backend
+/// [automaticBackendFor] picks for this platform (GPU on the phone, CPU on the
+/// desktop) — unless a backend is passed, which is how the user's forced choice
+/// gets in.
 ///
 /// SLICE 1 scope: text-only, non-streaming, Android-only. The Pixel
 /// Tensor-G5 NPU build is wired as [pixelNpuModelUrl] + [LocalLlmBackend.npu]
@@ -31,10 +76,10 @@ enum LocalLlmBackend { cpu, gpu, npu }
 class LocalModelConfig {
   const LocalModelConfig({
     this.modelUrl = defaultModelUrl,
-    this.backend = LocalLlmBackend.gpu,
+    LocalLlmBackend? backend,
     this.maxTokens = 4096,
     this.maxOutputTokens = 512,
-  });
+  }) : _backend = backend; // ignore: prefer_initializing_formals
 
   /// BENCHMARK-TUNED sampling for gemma-4-E2B, straight from our `model_audit`
   /// tune-to-peak recipe (the authoritative per-role sweep). These are the tuned
@@ -77,8 +122,13 @@ class LocalModelConfig {
   /// Where the weights are fetched from (network install).
   final String modelUrl;
 
-  /// Preferred hardware backend for inference.
-  final LocalLlmBackend backend;
+  /// The backend the user FORCED, or null for "automatic" — absence, never a
+  /// magic value, exactly like `LocalModelBackendPreference` stores it.
+  final LocalLlmBackend? _backend;
+
+  /// Preferred hardware backend for inference: the forced one when there is
+  /// one, otherwise whatever [automaticBackendFor] decides for this platform.
+  LocalLlmBackend get backend => _backend ?? defaultAutomaticBackend;
 
   /// Max context window handed to the model at load.
   final int maxTokens;

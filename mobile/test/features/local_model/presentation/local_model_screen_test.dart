@@ -174,6 +174,16 @@ void main() {
     expect(engine.disposeCount, 1);
   });
 
+  // El texto mentía: decía que «Automático» pide GPU siempre. Desde que el
+  // automático depende de la plataforma, decirlo así engaña al usuario.
+  testWidgets('la pantalla explica que «Automático» depende del aparato',
+      (tester) async {
+    await _pump(tester, installed: true);
+
+    expect(find.textContaining('en el ordenador la CPU'), findsOneWidget);
+    expect(find.textContaining('«Automático» pide GPU y cae a CPU'), findsNothing);
+  });
+
   testWidgets('a stored forced backend comes back selected', (tester) async {
     await _pump(
       tester,

@@ -120,14 +120,20 @@ class _UpdateAvailableBanner extends ConsumerWidget {
 /// Control de desarrollo: en qué hardware se carga el modelo local.
 ///
 /// POR QUÉ EXISTE. Todas las llamadas piden `engine.load()` sin argumentos, así
-/// que la app siempre pide GPU y el backend que aparece en las métricas sólo
-/// dice "CPU" cuando una carga falló y cayó al plan B. Sin poder forzar CPU no
-/// hay con qué comparar la GPU, y el benchmark no significa nada.
+/// que sin este control no habría forma de cargar el modelo en otro sitio que
+/// el que decide la plataforma, y el backend que aparece en las métricas sólo
+/// diría "CPU" cuando una carga falló y cayó al plan B. Sin poder forzarlo no
+/// hay con qué comparar, y el benchmark no significa nada.
 ///
-/// "Automático" es el comportamiento de siempre (GPU primero, con el respaldo
-/// en CPU del propio motor), y cambiar la opción SUELTA el modelo residente —
-/// si no, la siguiente generación seguiría corriendo en el backend anterior.
-/// NPU queda fuera a propósito: hoy no se usa y no hay pesos para probarla.
+/// "Automático" YA NO ES "GPU siempre": es lo que le conviene a este aparato
+/// (`automaticBackendFor`) — GPU en el móvil, donde gana el prefill; CPU en el
+/// ordenador, donde el contexto de vídeo se queda pegado al proceso y nadie
+/// sabe soltarlo. El texto de la pantalla dice eso porque el anterior, que
+/// prometía GPU siempre, había dejado de ser verdad.
+///
+/// Cambiar la opción SUELTA el modelo residente — si no, la siguiente
+/// generación seguiría corriendo en el backend anterior. NPU queda fuera a
+/// propósito: hoy no se usa y no hay pesos para probarla.
 class _BackendOverrideSection extends ConsumerWidget {
   const _BackendOverrideSection();
 
@@ -147,9 +153,10 @@ class _BackendOverrideSection extends ConsumerWidget {
           ),
           const SizedBox(height: 4),
           Text(
-            'Para medir. «Automático» pide GPU y cae a CPU si hace falta; '
-            'forzar uno hace que el modelo se cargue ahí en la siguiente '
-            'carga (la actual se suelta al cambiar).',
+            '«Automático» pide lo que le conviene a este aparato: en el '
+            'móvil la GPU (y CPU si no puede), en el ordenador la CPU, sin '
+            'tocar la tarjeta gráfica. Forzar uno manda sobre eso a partir de '
+            'la siguiente carga (la actual se suelta al cambiar).',
             style: Theme.of(context)
                 .textTheme
                 .bodySmall
