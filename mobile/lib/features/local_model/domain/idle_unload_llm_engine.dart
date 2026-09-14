@@ -41,7 +41,10 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
     this._inner, {
     this.idleTimeout = defaultIdleTimeout,
     Timer Function(Duration, void Function())? scheduleTimer,
-  }) : _scheduleTimer = scheduleTimer ?? Timer.new;
+    Timer Function(Duration, void Function())? schedulePeriodic,
+  })  : _scheduleTimer = scheduleTimer ?? Timer.new,
+        _schedulePeriodic =
+            schedulePeriodic ?? ((d, cb) => Timer.periodic(d, (_) => cb()));
 
   /// How long the model may sit unused before it is released.
   ///
@@ -53,11 +56,40 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
   final LocalLlmEngine _inner;
   final Duration idleTimeout;
   final Timer Function(Duration, void Function()) _scheduleTimer;
+  final Timer Function(Duration, void Function()) _schedulePeriodic;
 
   final StreamController<LlmResidency> _residency =
       StreamController<LlmResidency>.broadcast();
 
   Timer? _idle;
+
+  /// EL GUARDARRAÍL. Late mientras el modelo está residente y suelta las pesas
+  /// cuando dos pasadas seguidas no ven trabajo nuevo.
+  ///
+  /// POR QUÉ NO BASTA EL TEMPORIZADOR. [_armIdle] sólo se llama desde el
+  /// `finally` de [_use]: si ese `finally` no llega a ejecutarse —o el reloj se
+  /// cancela y nadie lo vuelve a armar— no queda nadie que suelte nada, y el
+  /// modelo se queda residente hasta que muere el proceso. Esto no depende de
+  /// que ese `finally` ocurra: mientras haya modelo residente hay barrido.
+  ///
+  /// POR QUÉ CUENTA TICS Y NO RELOJ. Sin reloj de pared no hay nada que
+  /// falsear en las pruebas ni que se desajuste al suspender el portátil: cada
+  /// operación sube [_workTicks], y el barrido sólo suelta cuando ve el MISMO
+  /// número que la pasada anterior. Dos pasadas iguales significan al menos un
+  /// [idleTimeout] entero sin una sola operación.
+  Timer? _sweep;
+
+  /// Operaciones empezadas desde siempre. Sólo importa que cambie.
+  int _workTicks = 0;
+
+  /// [_workTicks] tal como lo vio el barrido anterior. -1 = "la pasada anterior
+  /// vio trabajo (o no hubo pasada)", que nunca coincide con un contador real.
+  int _seenTicks = -1;
+
+  /// Trabajos por lotes abiertos ahora mismo (ver [runAsBatchJob]). Sólo el más
+  /// externo suelta el modelo, para que el boletín no se quede sin pesas a la
+  /// mitad porque una de sus etapas terminó.
+  int _batchDepth = 0;
 
   /// How many session operations are running right now. The idle timer never
   /// releases while this is above zero.
@@ -84,7 +116,51 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
   void _emit(LlmResidency next) {
     if (_state == next) return;
     _state = next;
+    if (next == LlmResidency.loaded) {
+      _startSweep();
+    } else if (next == LlmResidency.unloaded) {
+      _stopSweep();
+    }
     if (!_residency.isClosed) _residency.add(next);
+  }
+
+  void _startSweep() {
+    if (_sweep != null) return;
+    // La primera pasada sólo toma nota: nunca suelta un modelo recién cargado.
+    _seenTicks = -1;
+    _sweep = _schedulePeriodic(idleTimeout, _sweepOnce);
+  }
+
+  void _stopSweep() {
+    _sweep?.cancel();
+    _sweep = null;
+    _seenTicks = -1;
+  }
+
+  /// Una pasada del guardarraíl.
+  ///
+  /// EL RIESGO QUE EVITA. Soltar por debajo de una generación viva sería peor
+  /// que la fuga: el motor nativo se quedaría con un handle liberado y la app
+  /// se cae. Por eso la condición NO es "lleva mucho rato" sino "no hay ni una
+  /// operación en vuelo Y no ha empezado ninguna desde la pasada anterior", y
+  /// aun así la liberación se envía por la misma cola FIFO que todo lo demás
+  /// (ver [_releaseIfIdle] → `_inner.dispose()`), así que una petición que
+  /// llegue en ese instante se ordena detrás y no se cruza.
+  ///
+  /// LÍMITE HONESTO. Si una llamada nativa NUNCA vuelve, [_inFlight] se queda
+  /// arriba y esto no suelta nada — a propósito. Y tampoco podría: la cola es
+  /// FIFO, así que el `dispose` esperaría detrás de esa misma llamada colgada.
+  /// Una sesión nativa colgada sólo la cura salir del proceso.
+  void _sweepOnce() {
+    if (_state != LlmResidency.loaded || _inFlight > 0) {
+      _seenTicks = -1;
+      return;
+    }
+    if (_seenTicks == _workTicks) {
+      _release = _releaseIfIdle();
+      return;
+    }
+    _seenTicks = _workTicks;
   }
 
   void _cancelIdle() {
@@ -124,10 +200,40 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
     return _release = _releaseIfIdle();
   }
 
+  /// Ejecuta [body] como un TRABAJO POR LOTES: al terminar (bien o mal) suelta
+  /// las pesas en vez de dejarlas esperando los [idleTimeout] del reloj.
+  ///
+  /// PARA QUÉ. Quien carga el modelo es quien debe devolverlo. El boletín, el
+  /// resumen del día o la traducción al abrir cargan ~2.6 GB, hacen su trabajo
+  /// y se van; sin esto, el proceso de escritorio se queda con todo eso (y, en
+  /// una máquina con GPU, con un contexto de vídeo que NADIE sabe soltar)
+  /// durante minutos después de que ya no haga falta.
+  ///
+  /// UN SOLO SITIO. La lógica de soltar vive aquí y en ningún otro lado: cada
+  /// trabajo sólo se envuelve. Y se cuenta la profundidad porque esos trabajos
+  /// se anidan (el boletín traduce, y la traducción es a su vez un trabajo):
+  /// sólo el más externo suelta, así que una etapa que termina nunca le quita
+  /// el modelo a la que sigue.
+  ///
+  /// NO ROMPE EL CHAT. Soltar es [releaseNow], que no hace nada si hay algo en
+  /// vuelo; y si el usuario escribe después, la siguiente generación vuelve a
+  /// cargar sola (ver [_ensureLoaded]). Por eso el chat NO se envuelve: ahí
+  /// cada turno pagaría una recarga.
+  Future<T> runAsBatchJob<T>(Future<T> Function() body) async {
+    _batchDepth++;
+    try {
+      return await body();
+    } finally {
+      _batchDepth--;
+      if (_batchDepth == 0) await releaseNow();
+    }
+  }
+
   /// Runs [body] as a session operation: nothing may be released while it runs,
   /// and the idle clock restarts when it finishes.
   Future<T> _use<T>(Future<T> Function() body) async {
     _cancelIdle();
+    _workTicks++;
     _inFlight++;
     try {
       return await body();
@@ -200,6 +306,7 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
   @override
   Future<void> deleteModel() async {
     _cancelIdle();
+    _stopSweep();
     _emit(LlmResidency.unloaded);
     await _inner.deleteModel();
   }
@@ -207,6 +314,7 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
   @override
   Future<void> dispose() async {
     _cancelIdle();
+    _stopSweep();
     _emit(LlmResidency.unloaded);
     await _inner.dispose();
   }
@@ -221,4 +329,18 @@ class IdleUnloadLlmEngine implements LocalLlmEngine {
 
   @override
   bool get usesFallbackBackend => _inner.usesFallbackBackend;
+}
+
+/// [IdleUnloadLlmEngine.runAsBatchJob] para quien sólo tiene un
+/// [LocalLlmEngine] en la mano.
+///
+/// Los trabajos largos reciben el motor por la interfaz (y en las pruebas es un
+/// falso que no descarga nada), así que sin esto cada uno tendría que hacer su
+/// propio `is IdleUnloadLlmEngine`. Sobre cualquier otro motor simplemente
+/// ejecuta el cuerpo: no hay nada que soltar.
+extension LlmBatchJobScope on LocalLlmEngine {
+  Future<T> runAsBatchJob<T>(Future<T> Function() body) {
+    final engine = this;
+    return engine is IdleUnloadLlmEngine ? engine.runAsBatchJob(body) : body();
+  }
 }

@@ -5,6 +5,7 @@ import '../../domains/data/local_domain_repository.dart';
 import '../../domains/domain/domain_descriptor.dart';
 import '../../domains/domain/local_domain_entry.dart';
 import '../../domains/domain/local_entry_config.dart';
+import '../../local_model/domain/idle_unload_llm_engine.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../memory/domain/person_directory.dart';
 import '../domain/daily_digest.dart';
@@ -130,20 +131,26 @@ class DailyDigestService {
       );
     }
 
+    // ONE BATCH JOB: the narration loads the weights, writes a paragraph and is
+    // done for the day. Wrapping it here is what hands the ~2.6 GB (and, on a
+    // machine with a GPU, the video context nobody knows how to release) back
+    // the moment the digest is written, instead of after the idle clock.
     var wrapUp = '';
-    try {
-      await _engine.load();
-      final result = await _engine.generate(
-        _wrapUpPrompt(facts: facts),
-        temperature: longsumTemperature,
-        topK: longsumTopK,
-        topP: longsumTopP,
-      );
-      wrapUp = result.text.trim();
-    } catch (_) {
-      // Model unavailable / degenerated → the deterministic facts stand alone.
-      wrapUp = '';
-    }
+    await _engine.runAsBatchJob(() async {
+      try {
+        await _engine.load();
+        final result = await _engine.generate(
+          _wrapUpPrompt(facts: facts),
+          temperature: longsumTemperature,
+          topK: longsumTopK,
+          topP: longsumTopP,
+        );
+        wrapUp = result.text.trim();
+      } catch (_) {
+        // Model unavailable / degenerated → the deterministic facts stand alone.
+        wrapUp = '';
+      }
+    });
 
     return DailyDigest(
       generatedAt: now,

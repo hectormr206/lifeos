@@ -1,4 +1,5 @@
 import 'engine_failure_detail.dart';
+import 'idle_unload_llm_engine.dart';
 import 'local_llm_engine.dart';
 
 /// Reusable on-device batch translator: renders a list of short strings into a
@@ -55,6 +56,12 @@ class OnDeviceTranslator {
   /// is a different fact and naming it an engine failure would be a wrong
   /// diagnosis. Reporting never changes the outcome: this method still never
   /// throws, and unknown slots still keep their original text.
+  ///
+  /// IT IS A BATCH JOB. Translating loads the weights, renders the batch and is
+  /// done — so it hands them back when it finishes instead of leaving ~2.6 GB
+  /// resident waiting out the idle clock. Nested runs (the briefing translates
+  /// as part of its own job) only release with the OUTERMOST one; see
+  /// [LlmBatchJobScope].
   Future<List<String?>> translate(
     List<String> inputs, {
     required String languageCode,
@@ -62,8 +69,26 @@ class OnDeviceTranslator {
     int topK = defaultTopK,
     double topP = defaultTopP,
     void Function(EngineFailureDetail detail)? onEngineFailure,
+  }) {
+    if (inputs.isEmpty) return Future.value(const []);
+    return _engine.runAsBatchJob(() => _translate(
+          inputs,
+          languageCode: languageCode,
+          temperature: temperature,
+          topK: topK,
+          topP: topP,
+          onEngineFailure: onEngineFailure,
+        ));
+  }
+
+  Future<List<String?>> _translate(
+    List<String> inputs, {
+    required String languageCode,
+    required double temperature,
+    required int topK,
+    required double topP,
+    required void Function(EngineFailureDetail detail)? onEngineFailure,
   }) async {
-    if (inputs.isEmpty) return const [];
     final out = List<String?>.filled(inputs.length, null);
     var reported = false;
     void report(LlmEngineCall call, Object error) {

@@ -12,6 +12,7 @@
 // settles for the original text.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/local_model/domain/engine_failure_detail.dart';
+import 'package:lifeos/features/local_model/domain/idle_unload_llm_engine.dart';
 import 'package:lifeos/features/local_model/domain/on_device_translator.dart';
 
 import '../support/fake_local_llm_engine.dart';
@@ -196,5 +197,18 @@ void main() {
       expect(out, ['no numbering here']);
       expect(reported, isEmpty);
     });
+  });
+
+  // Traducir al abrir es un TRABAJO: carga el modelo, hace lo suyo y se va. Lo
+  // que cargó tiene que devolverlo, no dejarlo residente esperando el reloj.
+  test('al terminar, la traducción suelta el modelo que cargó', () async {
+    final inner = FakeLocalLlmEngine(installed: true, reply: (_) => '1. Hola mundo');
+    final engine = IdleUnloadLlmEngine(inner);
+
+    final out = await OnDeviceTranslator(engine).translate(['Hello world'], languageCode: 'es');
+
+    expect(out, ['Hola mundo']);
+    expect(inner.disposeCount, 1, reason: 'el trabajo devuelve la memoria al terminar');
+    expect(engine.residency, LlmResidency.unloaded);
   });
 }

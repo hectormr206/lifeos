@@ -32,9 +32,34 @@ class _ManualTimer implements Timer {
   }
 }
 
+/// Un [Timer] periódico que la prueba hace latir a mano, para que el barrido
+/// de seguridad ocurra cuando la prueba quiere y no tres minutos después.
+class _ManualPeriodicTimer implements Timer {
+  _ManualPeriodicTimer(this.duration, this._callback);
+
+  final Duration duration;
+  final void Function() _callback;
+  bool cancelled = false;
+
+  @override
+  void cancel() => cancelled = true;
+
+  @override
+  bool get isActive => !cancelled;
+
+  @override
+  int get tick => 0;
+
+  void fire() {
+    if (cancelled) return;
+    _callback();
+  }
+}
+
 void main() {
   late FakeLocalLlmEngine inner;
   late List<_ManualTimer> timers;
+  late List<_ManualPeriodicTimer> sweeps;
   late IdleUnloadLlmEngine engine;
 
   /// The timer currently armed, or null when none is pending.
@@ -43,15 +68,27 @@ void main() {
     return live.isEmpty ? null : live.last;
   }
 
+  /// El barrido de seguridad armado, o null cuando no hay ninguno vivo.
+  _ManualPeriodicTimer? sweep() {
+    final live = sweeps.where((t) => !t.cancelled);
+    return live.isEmpty ? null : live.last;
+  }
+
   setUp(() {
     inner = FakeLocalLlmEngine(installed: true);
     timers = [];
+    sweeps = [];
     engine = IdleUnloadLlmEngine(
       inner,
       idleTimeout: const Duration(minutes: 3),
       scheduleTimer: (d, cb) {
         final t = _ManualTimer(d, cb);
         timers.add(t);
+        return t;
+      },
+      schedulePeriodic: (d, cb) {
+        final t = _ManualPeriodicTimer(d, cb);
+        sweeps.add(t);
         return t;
       },
     );
@@ -257,5 +294,137 @@ void main() {
     expect(await engine.isModelInstalled(), isTrue);
     expect(engine.residency, LlmResidency.unloaded);
     expect(timers, isEmpty);
+  });
+
+  // ── Cierre explícito al terminar un trabajo por lotes ─────────────────────
+
+  test('un trabajo por lotes suelta el modelo al terminar, sin esperar el reloj',
+      () async {
+    await engine.runAsBatchJob(() async {
+      await engine.load();
+      await engine.generate('el boletín');
+    });
+
+    expect(inner.disposeCount, 1);
+    expect(engine.residency, LlmResidency.unloaded);
+  });
+
+  test('un trabajo por lotes devuelve el valor de su cuerpo', () async {
+    final answer = await engine.runAsBatchJob(() async => 42);
+
+    expect(answer, 42);
+  });
+
+  test('con trabajos anidados sólo suelta el de fuera', () async {
+    await engine.runAsBatchJob(() async {
+      await engine.load();
+      await engine.runAsBatchJob(() async {
+        await engine.generate('la traducción del boletín');
+      });
+      // El trabajo de dentro NO puede quitarle el modelo al de fuera.
+      expect(inner.disposeCount, 0);
+      expect(engine.residency, LlmResidency.loaded);
+      await engine.generate('el siguiente resumen');
+    });
+
+    expect(inner.disposeCount, 1);
+  });
+
+  test('un trabajo que falla suelta el modelo igual', () async {
+    await expectLater(
+      engine.runAsBatchJob(() async {
+        await engine.load();
+        throw StateError('se cayó a la mitad');
+      }),
+      throwsA(isA<StateError>()),
+    );
+
+    expect(inner.disposeCount, 1);
+  });
+
+  test('un motor sin descarga por inactividad ejecuta el trabajo igual', () async {
+    final plain = FakeLocalLlmEngine(installed: true);
+
+    final answer = await plain.runAsBatchJob(() async {
+      await plain.load();
+      return 'listo';
+    });
+
+    expect(answer, 'listo');
+    expect(plain.disposeCount, 0);
+  });
+
+  // ── Guardarraíl: el barrido periódico ─────────────────────────────────────
+
+  test('el barrido suelta el modelo aunque el temporizador se haya perdido',
+      () async {
+    await engine.load();
+    // Simula lo que el temporizador de inactividad no cubre: el reloj nunca
+    // llega a dispararse (se canceló, o jamás se armó porque `_use` no volvió).
+    pending()!.cancel();
+
+    sweep()!.fire(); // primera pasada: sólo toma nota
+    expect(inner.disposeCount, 0);
+    sweep()!.fire(); // segunda pasada sin trabajo: suelta
+    await engine.pendingRelease;
+
+    expect(inner.disposeCount, 1);
+    expect(engine.residency, LlmResidency.unloaded);
+  });
+
+  test('el barrido no suelta si hubo trabajo entre dos pasadas', () async {
+    await engine.load();
+    sweep()!.fire();
+    await engine.generate('hola');
+
+    sweep()!.fire();
+    await engine.pendingRelease;
+
+    expect(inner.disposeCount, 0);
+    expect(engine.residency, LlmResidency.loaded);
+  });
+
+  test('el barrido nunca suelta con una generación en vuelo', () async {
+    final gate = Completer<void>();
+    inner = FakeLocalLlmEngine(installed: true, generateGate: gate);
+    timers = [];
+    sweeps = [];
+    engine = IdleUnloadLlmEngine(
+      inner,
+      idleTimeout: const Duration(minutes: 3),
+      scheduleTimer: (d, cb) {
+        final t = _ManualTimer(d, cb);
+        timers.add(t);
+        return t;
+      },
+      schedulePeriodic: (d, cb) {
+        final t = _ManualPeriodicTimer(d, cb);
+        sweeps.add(t);
+        return t;
+      },
+    );
+
+    await engine.load();
+    final running = engine.generate('una generación larguísima');
+    for (var i = 0; i < 5; i++) {
+      sweep()!.fire();
+    }
+    await engine.pendingRelease;
+    expect(inner.disposeCount, 0);
+
+    gate.complete();
+    await running;
+    expect(inner.disposeCount, 0);
+  });
+
+  test('el barrido se detiene cuando el modelo ya no está residente', () async {
+    await engine.load();
+    final armed = sweep();
+    expect(armed, isNotNull);
+
+    pending()!.fire();
+    await engine.pendingRelease;
+
+    expect(armed!.cancelled, isTrue);
   });
 }

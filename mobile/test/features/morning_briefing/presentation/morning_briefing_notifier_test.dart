@@ -10,6 +10,8 @@ import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/clock/clock.dart';
+import 'package:lifeos/features/local_model/domain/idle_unload_llm_engine.dart';
+import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart';
 import 'package:lifeos/features/morning_briefing/domain/summary_failure.dart';
@@ -69,10 +71,14 @@ ProviderContainer _container({
   required DateTime now,
   String? languageCode,
   BriefingSectionDigestWriter? digests,
+  /// El motor REAL que verá el boletín, cuando la prueba necesita envolverlo
+  /// (p. ej. en [IdleUnloadLlmEngine] para observar la descarga). Por defecto
+  /// es [engine] tal cual.
+  LocalLlmEngine? wrappedEngine,
 }) {
   final container = ProviderContainer(
     overrides: [
-      localLlmEngineProvider.overrideWithValue(engine),
+      localLlmEngineProvider.overrideWithValue(wrappedEngine ?? engine),
       if (digests == null)
         briefingSectionDigestWriterProvider.overrideWithValue(
           const _NoDigests(),
@@ -1368,5 +1374,32 @@ void main() {
       briefing.sectionDigests[kDefaultBriefingSection],
       'Lo que pasó en el tema.',
     );
+  });
+  // El boletín es EL trabajo largo del escritorio: carga el modelo para
+  // traducir y escribir, y luego no vuelve a hacer nada en horas. Quien lo
+  // cargó lo suelta al terminar; esperar el reloj de inactividad deja ~2.6 GB
+  // (y el contexto de vídeo, que nadie sabe soltar) ahí sin motivo.
+  test('al terminar la generación, el boletín suelta el modelo que cargó', () async {
+    final inner = FakeLocalLlmEngine(installed: true, reply: (_) => '1. Noticia traducida');
+    final fetcher = FakeSourceFetcher(bodies: {
+      'https://en.com/rss': _englishRss('English Source', [('The Future of AI', 'A look ahead')], today),
+      hnFrontPageUrl: '{"hits":[]}',
+    });
+    final container = _container(
+      engine: inner,
+      wrappedEngine: IdleUnloadLlmEngine(inner),
+      fetcher: fetcher,
+      prefs: FakeMorningBriefingPreferences(initialSources: ['https://en.com/rss']),
+      notifications: FakeBriefingNotifications(),
+      now: now,
+      languageCode: 'es',
+    );
+    final notifier = container.read(morningBriefingNotifierProvider.notifier);
+    await notifier.ready;
+
+    await notifier.generate();
+
+    expect(inner.loadCount, greaterThan(0), reason: 'la traducción sí usó el modelo');
+    expect(inner.disposeCount, 1, reason: 'el trabajo devuelve la memoria al terminar');
   });
 }

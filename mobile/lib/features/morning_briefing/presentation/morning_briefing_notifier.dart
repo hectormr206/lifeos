@@ -11,6 +11,7 @@ import '../../settings/data/synced_settings_store.dart';
 import '../domain/briefing_source.dart';
 import '../../../core/timezone/timezone_providers.dart';
 import '../../../l10n/locale_providers.dart';
+import '../../local_model/domain/idle_unload_llm_engine.dart';
 import '../../local_model/domain/local_llm_engine.dart';
 import '../../local_model/domain/on_device_translator.dart';
 import '../../local_model/presentation/local_model_providers.dart';
@@ -503,19 +504,28 @@ class MorningBriefingNotifier extends Notifier<MorningBriefingState> {
     // (in the background scheduler / "Generar ahora" wait), so the reader never
     // taps to translate. Best-effort + per-source isolation — a failing source
     // keeps its original text and the briefing still completes with the rest.
-    var briefing = await _translateAll(assembled, extractor);
+    // Las tres etapas que usan el modelo van dentro de UN trabajo por lotes:
+    // cargan las pesas una vez y las devuelven al terminar. El boletín es el
+    // trabajo largo del escritorio — si no las devuelve él, se quedan ~2.6 GB
+    // residentes (y, en una máquina con GPU, un contexto de vídeo que nadie
+    // sabe soltar) hasta que alguien cierre la app. Sólo suelta el de FUERA:
+    // la traducción es a su vez un trabajo y no puede dejar sin modelo a las
+    // etapas que vienen detrás.
+    var briefing = await ref.read(localLlmEngineProvider).runAsBatchJob(() async {
+      var b = await _translateAll(assembled, extractor);
 
-    // THIRD stage: write a short brief for the items whose feed carried none
-    // (Hugging Face ships only a title; Hacker News has no body at all). The
-    // laptop never had this gap because it WRITES summaries instead of reading
-    // them — this is the phone doing the same. Runs BEFORE the notification,
-    // so "tu boletín está listo" is only ever said about a finished briefing.
-    briefing = await _writeMissingBriefs(briefing);
+      // THIRD stage: write a short brief for the items whose feed carried none
+      // (Hugging Face ships only a title; Hacker News has no body at all). The
+      // laptop never had this gap because it WRITES summaries instead of reading
+      // them — this is the phone doing the same. Runs BEFORE the notification,
+      // so "tu boletín está listo" is only ever said about a finished briefing.
+      b = await _writeMissingBriefs(b);
 
-    // FOURTH stage: one paragraph per section — the thing the reader reads to
-    // decide what to open. Last, so it summarizes the FINAL text of each card
-    // (translated, and with the written briefs already in place).
-    briefing = await _writeSectionDigests(briefing);
+      // FOURTH stage: one paragraph per section — the thing the reader reads to
+      // decide what to open. Last, so it summarizes the FINAL text of each card
+      // (translated, and with the written briefs already in place).
+      return _writeSectionDigests(b);
+    });
     // Stamp it now that it IS a briefing: the date on screen is the reader's
     // only evidence of whether the automatic run happened.
     briefing = briefing.stampedAt(clock());

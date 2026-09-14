@@ -18,6 +18,7 @@ import 'package:lifeos/features/daily_digest/presentation/daily_digest_notifier.
 import 'package:lifeos/features/daily_digest/presentation/daily_digest_providers.dart';
 import 'package:lifeos/features/domains/data/local_domain_repository.dart';
 import 'package:lifeos/features/domains/domain/local_entry_config.dart';
+import 'package:lifeos/features/local_model/domain/idle_unload_llm_engine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
@@ -214,4 +215,28 @@ void main() {
       expect(contentStore.digest, isNotNull);
     },
   );
+  // El resumen del día es un TRABAJO nocturno: carga ~2.6 GB para escribir un
+  // párrafo. Si no los devuelve al terminar, el escritorio se queda con ellos
+  // (y con el contexto de vídeo, que nadie sabe soltar) hasta cerrar la app.
+  test('al terminar, el resumen del día suelta el modelo que cargó', () async {
+    final db = await databaseFactoryFfi.openDatabase(inMemoryDatabasePath);
+    addTearDown(db.close);
+    await createLatestGraphSchema(db);
+    final store = SqfliteLocalGraphStore(db, clock: () => now);
+    final repo = LocalDomainRepository(store, now: () => now);
+    final weight = localEntryTypeFor('health', 'weight')!;
+    await repo.create('health', weight, {'value': 80, 'ts': now});
+
+    final inner = FakeLocalLlmEngine(reply: (_) => 'Hoy te cuidaste bien.');
+    final service = DailyDigestService(
+      repository: repo,
+      store: store,
+      engine: IdleUnloadLlmEngine(inner),
+    );
+
+    final digest = await service.generate(now: now);
+
+    expect(digest.wrapUp, 'Hoy te cuidaste bien.');
+    expect(inner.disposeCount, 1, reason: 'el trabajo devuelve la memoria al terminar');
+  });
 }
