@@ -28,9 +28,13 @@ G_DEFINE_TYPE(MyApplication, my_application, GTK_TYPE_APPLICATION)
 // the window before Dart can hide it. If the two ever disagree, the Dart side
 // still corrects the visibility (core/window/launch_visibility.dart), so the
 // worst case is a flash, never an unreachable app.
-// Keep in sync with `runBriefingFlag` in lib/core/launch/launch_options.dart.
+// Keep in sync with `runBriefingFlag` and `benchFlag` in
+// lib/core/launch/launch_options.dart. Both do one job with no window and exit;
+// showing a toplevel for either would put a window in the user's face for work
+// they asked a timer or a script to do.
 static gboolean is_headless_job_flag(const gchar* argument) {
-  return g_strcmp0(argument, "--run-briefing") == 0;
+  return g_strcmp0(argument, "--run-briefing") == 0 ||
+         g_strcmp0(argument, "--bench") == 0;
 }
 
 static gboolean is_hidden_launch_flag(const gchar* argument) {

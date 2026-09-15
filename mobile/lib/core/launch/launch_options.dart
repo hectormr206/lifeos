@@ -35,9 +35,27 @@ const Set<String> _hiddenLaunchAliases = {
 /// this is how something outside the app asks for it.
 const String runBriefingFlag = '--run-briefing';
 
+/// El flag que pide una MEDICIÓN del modelo local y nada más.
+///
+/// En el teléfono se mide por el chat y se automatiza con `adb`; en el
+/// ordenador no hay forma de automatizar la interfaz, así que sin esto no hay
+/// instrumento y sin instrumento no hay decisión. El proceso carga el modelo,
+/// mide un conjunto fijo de prompts, imprime y sale — sin ventana y sin tocar
+/// un solo dato del usuario. Ver `features/local_model/bench/`.
+///
+/// Sus acompañantes (`--bench-backend=…`, `--bench-speculative=…`) NO lo
+/// activan: se comparan exactos, igual que los demás, para que un futuro
+/// `--bench-algo` no convierta un arranque normal en un proceso que se cierra
+/// solo sin que nadie sepa por qué.
+const String benchFlag = '--bench';
+
 @immutable
 class LaunchOptions {
-  const LaunchOptions({required this.startHidden, this.runBriefingAndExit = false});
+  const LaunchOptions({
+    required this.startHidden,
+    this.runBriefingAndExit = false,
+    this.runBenchAndExit = false,
+  });
 
   /// An ordinary, user-initiated launch.
   static const LaunchOptions visible = LaunchOptions(startHidden: false);
@@ -52,6 +70,14 @@ class LaunchOptions {
   /// the user's own copy of the app may also be open.
   final bool runBriefingAndExit;
 
+  /// Medir el modelo local y salir, con la ventana fuera de la ecuación.
+  ///
+  /// Como [runBriefingAndExit], el proceso no llega nunca a `runApp`: hace un
+  /// trabajo y muere. A diferencia del boletín, no escribe NADA — ni grafo, ni
+  /// preferencias, ni notificaciones — así que es seguro lanzarlo mientras la
+  /// copia del usuario está abierta.
+  final bool runBenchAndExit;
+
   /// Reads the entrypoint arguments the desktop runner handed to `main`.
   ///
   /// Unknown arguments are IGNORED rather than fatal. The applications-menu
@@ -61,18 +87,21 @@ class LaunchOptions {
   factory LaunchOptions.parse(List<String> arguments) => LaunchOptions(
         startHidden: arguments.any(_hiddenLaunchAliases.contains),
         runBriefingAndExit: arguments.contains(runBriefingFlag),
+        runBenchAndExit: arguments.contains(benchFlag),
       );
 
   @override
   bool operator ==(Object other) =>
       other is LaunchOptions &&
       other.startHidden == startHidden &&
-      other.runBriefingAndExit == runBriefingAndExit;
+      other.runBriefingAndExit == runBriefingAndExit &&
+      other.runBenchAndExit == runBenchAndExit;
 
   @override
-  int get hashCode => Object.hash(startHidden, runBriefingAndExit);
+  int get hashCode => Object.hash(startHidden, runBriefingAndExit, runBenchAndExit);
 
   @override
   String toString() => 'LaunchOptions(startHidden: $startHidden, '
-      'runBriefingAndExit: $runBriefingAndExit)';
+      'runBriefingAndExit: $runBriefingAndExit, '
+      'runBenchAndExit: $runBenchAndExit)';
 }

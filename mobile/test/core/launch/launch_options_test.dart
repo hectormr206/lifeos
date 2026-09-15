@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/launch/launch_options.dart';
 
@@ -7,6 +9,7 @@ import 'package:lifeos/core/launch/launch_options.dart';
 /// launching a real window.
 void main() {
   _briefingFlag();
+  _benchFlag();
   group('LaunchOptions.parse', () {
     test('a bare launch is a normal, visible launch', () {
       expect(LaunchOptions.parse(const []).startHidden, isFalse);
@@ -117,6 +120,62 @@ void _briefingFlag() {
         LaunchOptions.parse(const ['--run-briefing']).startHidden,
         isFalse,
       );
+    });
+  });
+}
+
+// La medición sin interfaz en el escritorio.
+//
+// En el teléfono se mide por el chat y se automatiza con adb; en la laptop no
+// hay forma de automatizar la interfaz. `--bench` es el instrumento: carga el
+// modelo, mide un conjunto fijo de prompts y sale. Ni ventana, ni bandeja, ni
+// un solo dato del usuario tocado.
+void _benchFlag() {
+  group('--bench', () {
+    test('lo reconoce', () {
+      expect(LaunchOptions.parse(const ['--bench']).runBenchAndExit, isTrue);
+    });
+
+    test('un arranque normal no lo lleva', () {
+      expect(LaunchOptions.parse(const []).runBenchAndExit, isFalse);
+    });
+
+    test('no se confunde con el boletín', () {
+      final o = LaunchOptions.parse(const ['--run-briefing']);
+      expect(o.runBenchAndExit, isFalse);
+      final b = LaunchOptions.parse(const ['--bench']);
+      expect(b.runBriefingAndExit, isFalse);
+    });
+
+    test('sus propios argumentos NO lo activan por sí solos', () {
+      // `--bench-backend=cpu` configura la medición; no la pide. Aceptar
+      // prefijos convertiría cualquier futuro `--bench-algo` en un proceso que
+      // se cierra solo sin que nadie sepa por qué.
+      for (final argument in const [
+        '--bench-backend=cpu',
+        '--bench-speculative=on',
+        '--benchmark',
+      ]) {
+        expect(
+          LaunchOptions.parse([argument]).runBenchAndExit,
+          isFalse,
+          reason: '$argument no es el flag',
+        );
+      }
+    });
+
+    test('se acompaña de sus argumentos sin estorbarse', () {
+      final o = LaunchOptions.parse(
+          const ['--bench', '--bench-backend=cpu', '--bench-speculative=off']);
+      expect(o.runBenchAndExit, isTrue);
+      expect(o.startHidden, isFalse);
+    });
+
+    test('el runner de GTK conoce el flag', () {
+      // Sin esto GTK muestra la ventana antes de que Dart pueda salir, y una
+      // medición nocturna deja una ventana abierta en la cara del usuario.
+      final source = File('linux/runner/my_application.cc').readAsStringSync();
+      expect(source, contains('"$benchFlag"'));
     });
   });
 }

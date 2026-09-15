@@ -8,6 +8,7 @@ import 'app.dart';
 import 'core/background/background_tasks.dart';
 import 'core/launch/launch_options.dart';
 import 'core/launch/launch_providers.dart';
+import 'features/local_model/bench/local_model_bench.dart';
 import 'features/security/domain/app_lock_preferences.dart';
 import 'features/security/presentation/app_lock_providers.dart';
 
@@ -69,6 +70,26 @@ Future<void> main([List<String> arguments = const []]) async {
     final ok = await runBriefingJobAndExit();
     exit(ok ? 0 : 1);
   }
+  // Alguien nos pidió MEDIR el modelo local, y nada más. Mismo trato que el
+  // boletín: sin ventana, sin bandeja y sin biometría. La diferencia es que
+  // esto no escribe nada — ni grafo, ni preferencias, ni notificaciones — así
+  // que se puede lanzar mientras la aplicación del usuario está abierta.
+  //
+  //   lifeos --bench [--bench-backend=auto|cpu|gpu|npu]
+  //                  [--bench-speculative=auto|on|off]
+  //                  [--bench-max-output-tokens=N]
+  //                  [--bench-repeat=N]
+  //
+  // Imprime por stdout una línea `bench clave=valor` por generación y sale con
+  // 0 si midió. El uso completo, los ejemplos y los códigos de salida están en
+  // `features/local_model/bench/local_model_bench.dart`.
+  //
+  // Le pasamos los ARGUMENTOS CRUDOS a propósito: los `--bench-*` son de la
+  // medición y se quedan en ella, en vez de engordar `LaunchOptions`, que
+  // existe para decidir qué hace la ventana.
+  if (launchOptions.runBenchAndExit) {
+    exit(await runLocalModelBenchAndExit(arguments));
+  }
   final appLockEnabled =
       await resolveInitialAppLockEnabled(SharedPrefsAppLockPreferences());
   runApp(
@@ -97,5 +118,20 @@ Future<bool> runBriefingJobAndExit() async {
     stderr.writeln('lifeos --run-briefing falló: $error');
     stderr.writeln(stack);
     return false;
+  }
+}
+
+/// Lo que hace `--bench`: medir el modelo local y decir si pudo.
+///
+/// Devuelve el código de salida en vez de tragarse el fallo, porque quien lo
+/// llama es un script: una medición que siempre termina en 0 es una medición
+/// de la que nadie se entera cuando lleva un mes sin medir nada.
+Future<int> runLocalModelBenchAndExit(List<String> arguments) async {
+  try {
+    return await runLocalModelBench(arguments);
+  } catch (error, stack) {
+    stderr.writeln('lifeos --bench falló: $error');
+    stderr.writeln(stack);
+    return 1;
   }
 }
