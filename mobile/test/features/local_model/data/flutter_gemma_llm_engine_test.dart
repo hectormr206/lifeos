@@ -46,13 +46,20 @@ class _ScriptedLoader {
   final List<Object?> outcomes;
   final List<PreferredBackend> requested = [];
 
+  /// Lo que el motor pidió en decodificación especulativa, por intento. Tres
+  /// valores posibles y los tres significan cosas distintas: `null` es «lo que
+  /// traiga el modelo», `true`/`false` la fuerzan.
+  final List<bool?> speculative = [];
+
   Future<InferenceModel> call({
     required int maxTokens,
     required PreferredBackend preferredBackend,
     required bool supportImage,
     required int maxNumImages,
+    bool? enableSpeculativeDecoding,
   }) async {
     requested.add(preferredBackend);
+    speculative.add(enableSpeculativeDecoding);
     final outcome = outcomes[requested.length - 1];
     if (outcome is Exception || outcome is Error) throw outcome!;
     return _FakeModel(outcome as PreferredBackend?);
@@ -62,15 +69,52 @@ class _ScriptedLoader {
 FlutterGemmaLlmEngine _engineWith(
   _ScriptedLoader loader, {
   LocalLlmBackend backend = LocalLlmBackend.gpu,
+  bool? speculativeDecoding,
 }) =>
     FlutterGemmaLlmEngine(
-      LocalModelConfig(backend: backend),
+      LocalModelConfig(backend: backend, speculativeDecoding: speculativeDecoding),
       initializer: () async {},
       modelLoader: loader.call,
     );
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
+
+  // La decodificación especulativa (MTP) es un ajuste de la CREACIÓN del
+  // motor, no de cada generación: flutter_gemma_litertlm lo aplica sobre los
+  // `litert_lm_engine_settings_*` antes de crear el runtime. Por eso el único
+  // sitio donde puede entrar es el cargador de `_loadOn`, y por eso cambiarlo
+  // obliga a recargar el modelo. Y son TRES estados: `null` (lo que traiga el
+  // modelo) no es `false`, y si aquí se colapsaran nadie podría descubrir cuál
+  // es el valor por defecto midiendo uno contra otro.
+  group('decodificación especulativa', () {
+    test('sin elegir nada no la fuerza: pasa null y decide el modelo', () async {
+      final loader = _ScriptedLoader([PreferredBackend.gpu]);
+      await _engineWith(loader).load();
+      expect(loader.speculative, [isNull]);
+    });
+
+    test('«sí» llega al cargador como true', () async {
+      final loader = _ScriptedLoader([PreferredBackend.gpu]);
+      await _engineWith(loader, speculativeDecoding: true).load();
+      expect(loader.speculative, [isTrue]);
+    });
+
+    test('«no» llega al cargador como false, no como null', () async {
+      final loader = _ScriptedLoader([PreferredBackend.gpu]);
+      await _engineWith(loader, speculativeDecoding: false).load();
+      expect(loader.speculative, [isFalse]);
+    });
+
+    test('la elección sobrevive al plan B de CPU', () async {
+      // El reintento en CPU cambia el backend y NADA más: una medición que
+      // perdiera la especulativa al caer a CPU estaría comparando dos cosas a
+      // la vez.
+      final loader = _ScriptedLoader([Exception('gpu boom'), PreferredBackend.cpu]);
+      await _engineWith(loader, speculativeDecoding: true).load();
+      expect(loader.speculative, [isTrue, isTrue]);
+    });
+  });
 
   // Sampling contract: flutter_gemma's `createChat` defaults to `topK: 1` (pure
   // greedy/argmax), which drives gemma-4 into degenerate "well well well…"
@@ -356,6 +400,7 @@ void main() {
           required PreferredBackend preferredBackend,
           required bool supportImage,
           required int maxNumImages,
+          bool? enableSpeculativeDecoding,
         }) async {
           seenAtLoad.add(activation.hasActive());
           return _FakeModel(preferredBackend);
@@ -699,6 +744,7 @@ FlutterGemmaLlmEngine _engineWithModel(_ChatModel model) => FlutterGemmaLlmEngin
         required PreferredBackend preferredBackend,
         required bool supportImage,
         required int maxNumImages,
+        bool? enableSpeculativeDecoding,
       }) async =>
           model,
       installedRecordProbe: (_) async => true,

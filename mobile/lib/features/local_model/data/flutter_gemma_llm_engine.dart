@@ -19,6 +19,7 @@ typedef ActiveModelLoader = Future<InferenceModel> Function({
   required PreferredBackend preferredBackend,
   required bool supportImage,
   required int maxNumImages,
+  bool? enableSpeculativeDecoding,
 });
 
 /// flutter_gemma's PERSISTED "this model is installed" record (a
@@ -418,11 +419,23 @@ class FlutterGemmaLlmEngine implements LocalLlmEngine {
     // visión". gemma-4-E2B DOES support vision, so we load it vision-capable.
     // Text-only `generate()` still works: it just creates a text-only chat on
     // the same vision-capable model.
+    //
+    // SPECULATIVE DECODING (MTP) rides along here and NOWHERE ELSE, because it
+    // is a property of the ENGINE, not of a generation: flutter_gemma_litertlm
+    // turns it into `litert_lm_engine_settings_set_enable_speculative_decoding`
+    // on the settings handed to `litert_lm_engine_create`. A `null` is passed
+    // through UNCHANGED (never coerced to false) — the plugin only calls that
+    // setter when the value is non-null, so null genuinely means "whatever the
+    // .litertlm file was built to do". It is also why changing the choice has
+    // to release the resident model: `load()` returns early while one is
+    // loaded, so without the unload the next generation would keep running the
+    // OLD setting and the measurement would be a lie.
     final model = await _modelLoader(
       maxTokens: _config.maxTokens,
       preferredBackend: _toPreferredBackend(backend),
       supportImage: true,
       maxNumImages: LocalModelConfig.maxImagesPerMessage,
+      enableSpeculativeDecoding: _config.speculativeDecoding,
     );
     _model = model;
     final actual = _fromPreferredBackend(model.activeBackend) ?? backend;

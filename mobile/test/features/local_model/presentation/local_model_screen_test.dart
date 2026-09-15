@@ -26,6 +26,8 @@ import '../../tts/support/fake_tts.dart';
 import '../support/fake_brain_model_ota.dart';
 import '../support/fake_local_llm_engine.dart';
 import 'local_model_backend_notifier_test.dart' show FakeLocalModelBackendPreference;
+import 'local_model_speculative_decoding_notifier_test.dart'
+    show FakeSpeculativeDecodingPreference;
 
 Future<void> _pump(
   WidgetTester tester, {
@@ -34,6 +36,7 @@ Future<void> _pump(
   FakeBrainModelUpdateGateway? brainGateway,
   FakeBrainModelVersionStore? versionStore,
   FakeLocalModelBackendPreference? backendPreference,
+  FakeSpeculativeDecodingPreference? speculativePreference,
 }) async {
   final router = GoRouter(
     routes: [
@@ -66,6 +69,8 @@ Future<void> _pump(
         // shared_preferences — fake it so no platform channel is touched.
         localModelBackendPreferenceProvider
             .overrideWithValue(backendPreference ?? FakeLocalModelBackendPreference()),
+        localModelSpeculativeDecodingPreferenceProvider.overrideWithValue(
+            speculativePreference ?? FakeSpeculativeDecodingPreference()),
       ],
       child: MaterialApp.router(
         routerConfig: router,
@@ -195,5 +200,38 @@ void main() {
       find.byType(SegmentedButton<LocalLlmBackend?>),
     );
     expect(segmented.selected, {LocalLlmBackend.cpu});
+  });
+
+  // ── Decodificación especulativa (MTP) ────────────────────────────────────
+  // Mismo patrón que el backend, y por el mismo motivo: sin poder forzarla no
+  // hay con qué comparar. Tres opciones, no dos — «Automático» es lo que traiga
+  // el modelo, y sólo distinguiéndolo de un «No» explícito se puede averiguar
+  // cuál es ese valor por defecto.
+  testWidgets('elegir «No» persiste la elección y suelta el modelo cargado',
+      (tester) async {
+    final engine = FakeLocalLlmEngine(installed: true);
+    final prefs = FakeSpeculativeDecodingPreference();
+    await _pump(tester, installed: true, engine: engine, speculativePreference: prefs);
+    await engine.load();
+
+    expect(find.text('Decodificación especulativa'), findsOneWidget);
+    await tester.tap(find.text('No'));
+    await tester.pumpAndSettle();
+
+    expect(prefs.stored, isFalse);
+    expect(engine.disposeCount, 1);
+  });
+
+  testWidgets('una elección guardada vuelve seleccionada', (tester) async {
+    await _pump(
+      tester,
+      installed: true,
+      speculativePreference: FakeSpeculativeDecodingPreference(true),
+    );
+
+    final segmented = tester.widget<SegmentedButton<bool?>>(
+      find.byType(SegmentedButton<bool?>),
+    );
+    expect(segmented.selected, {true});
   });
 }

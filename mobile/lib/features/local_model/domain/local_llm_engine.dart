@@ -77,6 +77,7 @@ class LocalModelConfig {
   const LocalModelConfig({
     this.modelUrl = defaultModelUrl,
     LocalLlmBackend? backend,
+    this.speculativeDecoding,
     this.maxTokens = 4096,
     this.maxOutputTokens = 512,
   }) : _backend = backend; // ignore: prefer_initializing_formals
@@ -129,6 +130,27 @@ class LocalModelConfig {
   /// Preferred hardware backend for inference: the forced one when there is
   /// one, otherwise whatever [automaticBackendFor] decides for this platform.
   LocalLlmBackend get backend => _backend ?? defaultAutomaticBackend;
+
+  /// Whether Multi-Token Prediction (speculative decoding) is FORCED on
+  /// (`true`), forced off (`false`), or left to the model (`null`).
+  ///
+  /// THREE STATES, AND `null` IS NOT `false`. flutter_gemma documents the flag
+  /// as "`null` honors the model's default; `true`/`false` forces on/off", and
+  /// flutter_gemma_litertlm implements exactly that: it only calls
+  /// `litert_lm_engine_settings_set_enable_speculative_decoding` when the value
+  /// is non-null. Collapsing the two would make the model's own default
+  /// unobservable — and measuring "automático" against an explicit "no" is the
+  /// only way to find out what that default IS.
+  ///
+  /// IT IS A LOAD-TIME SETTING, NOT A PER-GENERATION ONE: it rides on the
+  /// engine settings handed to `litert_lm_engine_create`, so changing it only
+  /// takes effect on the NEXT [LocalLlmEngine.load] — which is why the UI
+  /// releases the resident model when the choice changes.
+  ///
+  /// Whether it is worth it DEPENDS ON THE TASK. The model's own README
+  /// measures decode going UP summarizing text (40.7 → 47.5 tok/s) and DOWN
+  /// writing code (→ 36.3). That is what the `--bench` harness is for.
+  final bool? speculativeDecoding;
 
   /// Max context window handed to the model at load.
   final int maxTokens;

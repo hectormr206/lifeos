@@ -10,9 +10,11 @@ import '../domain/llm_request_queue.dart';
 import '../domain/local_llm_engine.dart';
 import '../domain/local_model_backend_preference.dart';
 import '../domain/local_model_preferences.dart';
+import '../domain/local_model_speculative_decoding_preference.dart';
 import '../domain/notification_permission.dart';
 import '../domain/serial_llm_engine.dart';
 import 'local_model_backend_notifier.dart';
+import 'local_model_speculative_decoding_notifier.dart';
 
 /// Persistence for the developer "forzar backend" choice (shared_preferences).
 /// Overridden with a fake in tests.
@@ -27,17 +29,38 @@ final forcedLocalModelBackendProvider =
   ForcedLocalModelBackendNotifier.new,
 );
 
-/// Immutable config for the on-device model (model URL + backend). Overridable
-/// in tests / to try the Pixel Tensor-G5 NPU build.
+/// Persistence for the developer "decodificación especulativa" choice
+/// (shared_preferences). Overridden with a fake in tests.
+final localModelSpeculativeDecodingPreferenceProvider =
+    Provider<LocalModelSpeculativeDecodingPreference>(
+  (ref) => SharedPrefsLocalModelSpeculativeDecodingPreference(),
+);
+
+/// Forced Multi-Token-Prediction (speculative decoding), or `null` for
+/// automatic — the model's own default. See
+/// [LocalModelSpeculativeDecodingNotifier].
+final localModelSpeculativeDecodingProvider =
+    NotifierProvider<LocalModelSpeculativeDecodingNotifier, bool?>(
+  LocalModelSpeculativeDecodingNotifier.new,
+);
+
+/// Immutable config for the on-device model (model URL + backend + speculative
+/// decoding). Overridable in tests / to try the Pixel Tensor-G5 NPU build.
 ///
-/// THE ONE SEAM for the forced backend: `FlutterGemmaLlmEngine.load()` resolves
-/// `backend ?? _config.backend`, and every one of the ~11 call sites calls
-/// `load()` with no argument — so putting the choice here reaches all of them
-/// without touching any. Watching the notifier also means a change rebuilds
+/// THE ONE SEAM for both developer overrides: `FlutterGemmaLlmEngine.load()`
+/// resolves `backend ?? _config.backend` and reads `_config.speculativeDecoding`
+/// straight into the model loader, and every one of the ~11 call sites calls
+/// `load()` with no argument — so putting the choices here reaches all of them
+/// without touching any. Watching the notifiers also means a change rebuilds
 /// [localLlmEngineProvider], whose `onDispose` releases the previous engine.
+///
+/// The speculative value is passed THROUGH, `null` included: null means "honor
+/// the model's default" at the plugin level, which is a different instruction
+/// from an explicit `false`.
 final localModelConfigProvider = Provider<LocalModelConfig>((ref) {
   final forced = ref.watch(forcedLocalModelBackendProvider);
-  return forced == null ? const LocalModelConfig() : LocalModelConfig(backend: forced);
+  final speculative = ref.watch(localModelSpeculativeDecodingProvider);
+  return LocalModelConfig(backend: forced, speculativeDecoding: speculative);
 });
 
 /// The ONE FIFO queue every piece of on-device model work goes through.

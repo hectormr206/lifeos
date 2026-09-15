@@ -39,6 +39,9 @@ class LocalModelScreen extends ConsumerWidget {
           // Herramienta de desarrollo, no una función de producto: fuerza el
           // backend para poder medir GPU contra CPU en el mismo teléfono.
           const _BackendOverrideSection(),
+          // Misma herramienta, otra perilla: la decodificación especulativa
+          // (MTP) del modelo, para poder medir si conviene en cada tarea.
+          const _SpeculativeDecodingSection(),
         ],
       ),
     );
@@ -174,6 +177,71 @@ class _BackendOverrideSection extends ConsumerWidget {
             onSelectionChanged: (selection) => ref
                 .read(forcedLocalModelBackendProvider.notifier)
                 .setForcedBackend(selection.first),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Control de desarrollo: si el modelo local usa decodificación especulativa
+/// (Multi-Token Prediction).
+///
+/// POR QUÉ EXISTE. El motor nunca le pasaba nada al plugin, así que la opción
+/// iba en `null` — «lo que traiga el modelo» — y nadie sabía si eso era que sí
+/// o que no. Aquí hay TRES opciones y no dos precisamente por eso: comparar
+/// «Automático» contra un «No» explícito es lo único que revela cuál era el
+/// valor por defecto.
+///
+/// NO ES GRATIS, Y POR ESO ES UNA MEDIDA Y NO UNA RECOMENDACIÓN. El README del
+/// propio modelo mide la ganancia POR TAREA: resumiendo texto el decode sube
+/// (40,7 → 47,5 tok/s) y escribiendo código BAJA (→ 36,3). Cuál conviene
+/// depende de para qué se use, y eso hay que medirlo en cada aparato.
+///
+/// Cambiar la opción SUELTA el modelo residente. La especulativa se fija al
+/// CREAR el motor nativo, no en cada generación, así que sin soltarlo la
+/// siguiente generación seguiría con el ajuste anterior — y la medición
+/// mentiría.
+class _SpeculativeDecodingSection extends ConsumerWidget {
+  const _SpeculativeDecodingSection();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final choice = ref.watch(localModelSpeculativeDecodingProvider);
+    final scheme = Theme.of(context).colorScheme;
+
+    return Padding(
+      padding: const EdgeInsets.only(top: 24),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Decodificación especulativa',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            '«Automático» deja decidir al propio modelo. Forzarla no siempre '
+            'acelera: según el fabricante gana resumiendo texto y pierde '
+            'escribiendo código, así que hay que medirlo. Manda a partir de la '
+            'siguiente carga (la actual se suelta al cambiar).',
+            style: Theme.of(context)
+                .textTheme
+                .bodySmall
+                ?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<bool?>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment<bool?>(value: null, label: Text('Automático')),
+              ButtonSegment<bool?>(value: true, label: Text('Sí')),
+              ButtonSegment<bool?>(value: false, label: Text('No')),
+            ],
+            selected: {choice},
+            onSelectionChanged: (selection) => ref
+                .read(localModelSpeculativeDecodingProvider.notifier)
+                .setSpeculativeDecoding(selection.first),
           ),
         ],
       ),
