@@ -89,6 +89,11 @@ class RemindersNotifier extends Notifier<RemindersUiState> {
     try {
       await ref.read(remindersRepositoryProvider).cancel(id);
       await _load();
+    } on OutboxStorageException {
+      state = state.copyWith(
+        error:
+            'No se pudo guardar el cambio. Inténtalo de nuevo cuando el almacenamiento esté disponible.',
+      );
     } on RemindersException catch (error) {
       state = state.copyWith(error: error.message);
     }

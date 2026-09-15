@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
 import '../../../core/outbox/outbox.dart';
+import '../../../core/outbox/pending_sync_reporting.dart';
 import '../domain/domain_descriptor.dart';
 import '../domain/domain_entry.dart';
 
@@ -135,9 +136,8 @@ class HttpDomainRepository implements DomainRepository {
     }
   }
 
-  Future<void> _reportPendingCount() async {
-    _pendingSync.reportPendingCount((await _outbox.list()).length);
-  }
+  Future<void> _reportPendingCount() =>
+      reportPendingCountIfAvailable(_outbox, _pendingSync);
 
   /// Best-effort optimistic entry built from the form [body] itself, used
   /// when a create is offline-enqueued rather than confirmed by the engine.

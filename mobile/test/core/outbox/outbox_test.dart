@@ -8,6 +8,7 @@
 // to decide "queue this" (network-class error) vs "surface this as a real
 // failure" (a definite 4xx/5xx server response — the request DID reach the
 // engine).
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:dio/dio.dart';
@@ -122,6 +123,93 @@ void main() {
       }
     });
 
+    for (final damage in ['authentication', 'truncated', 'object', 'row']) {
+      for (final operation in ['list', 'enqueue', 'remove']) {
+        test('$operation preserves $damage outbox and fails', () async {
+          final cipher = _testCipher();
+          final outbox = FileOutbox(
+            directoryProvider: () async => tempDir,
+            cipher: cipher,
+          );
+          final entry = await outbox.enqueue(httpMethod: 'POST', path: '/a');
+          final file = File('${tempDir.path}/outbox/outbox.json');
+          var bytes = await file.readAsBytes();
+          if (damage == 'authentication') {
+            bytes[bytes.length - 1] ^= 1;
+          } else if (damage == 'truncated') {
+            bytes = bytes.sublist(0, 8);
+          } else {
+            bytes = await cipher.seal(
+              utf8.encode(damage == 'object' ? '{}' : '[42]'),
+            );
+          }
+          await file.writeAsBytes(bytes);
+          final Future<Object?> result = switch (operation) {
+            'list' => outbox.list(),
+            'enqueue' => outbox.enqueue(httpMethod: 'POST', path: '/b'),
+            _ => outbox.remove(entry.id),
+          };
+          await expectLater(result, throwsA(isA<OutboxStorageException>()));
+          expect(await file.readAsBytes(), bytes);
+        });
+      }
+    }
+
+    for (final failure in ['none', 'key', 'write']) {
+      test(
+        'plaintext migration with $failure failure preserves data',
+        () async {
+          final file = File('${tempDir.path}/outbox/outbox.json');
+          await file.parent.create(recursive: true);
+          final original = utf8.encode(
+            jsonEncode([
+              OutboxEntry(
+                id: 'saved',
+                httpMethod: 'POST',
+                path: '/saved',
+                createdAt: DateTime.utc(2026),
+              ).toJson(),
+            ]),
+          );
+          await file.writeAsBytes(original);
+          if (failure == 'write') await Directory('${file.path}.tmp').create();
+          final cipher = failure == 'key'
+              ? EncryptedFileCipher(
+                  keyProvider: () async => throw StateError('locked'),
+                )
+              : _testCipher();
+          final outbox = FileOutbox(
+            directoryProvider: () async => tempDir,
+            cipher: cipher,
+          );
+          if (failure == 'none') {
+            expect((await outbox.list()).single.id, 'saved');
+            expect(cipher.isEncrypted(await file.readAsBytes()), isTrue);
+            expect((await outbox.list()).single.id, 'saved');
+          } else {
+            await expectLater(
+              outbox.list(),
+              throwsA(isA<OutboxStorageException>()),
+            );
+            expect(await file.readAsBytes(), original);
+          }
+        },
+      );
+    }
+
+    test('encrypted empty array is an empty queue without rewriting', () async {
+      final file = File('${tempDir.path}/outbox/outbox.json');
+      final cipher = _testCipher();
+      await cipher.writeSealed(file, utf8.encode('[]'));
+      final original = await file.readAsBytes();
+      final outbox = FileOutbox(
+        directoryProvider: () async => tempDir,
+        cipher: cipher,
+      );
+      expect(await outbox.list(), isEmpty);
+      expect(await file.readAsBytes(), original);
+    });
+
     test('is empty before anything is enqueued', () async {
       final outbox = FileOutbox(
         directoryProvider: () async => tempDir,
@@ -205,7 +293,7 @@ void main() {
     });
 
     test(
-      'a corrupt outbox file degrades to an empty list instead of throwing',
+      'invalid JSON fails explicitly without changing the file',
       () async {
         final outbox = FileOutbox(
           directoryProvider: () async => tempDir,
@@ -214,8 +302,10 @@ void main() {
         await outbox.enqueue(httpMethod: 'POST', path: '/a');
         final file = File('${tempDir.path}/outbox/outbox.json');
         await file.writeAsString('{not valid json');
+        final original = await file.readAsBytes();
 
-        expect(await outbox.list(), isEmpty);
+        await expectLater(outbox.list(), throwsA(isA<OutboxStorageException>()));
+        expect(await file.readAsBytes(), original);
       },
     );
   });

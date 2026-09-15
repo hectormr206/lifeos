@@ -1,0 +1,51 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- This build type has its own UID/package. No production permissions or
+         package visibility are needed for an internal secure-storage probe. -->
+    <uses-permission tools:node="removeAll" />
+    <uses-permission-sdk-23 tools:node="removeAll" />
+    <queries tools:node="removeAll" />
+
+    <application
+        android:name="android.app.Application"
+        android:label="LifeOS Security Probe"
+        android:allowBackup="false"
+        android:fullBackupContent="false"
+        tools:replace="android:name,android:label">
+        <uses-native-library tools:node="removeAll" />
+
+        <!-- Strip production and library entry points, including MainActivity,
+             AxiImeService, scheduled-notification receivers, WorkManager services
+             and receivers, and the AndroidX Startup/WorkManager providers.
+             No provider authority (including a production-package authority) is
+             intentionally retained. Audit the final merged manifest before install:
+             source markers alone are not proof of third-party isolation. -->
+        <activity tools:node="removeAll" />
+        <activity-alias tools:node="removeAll" />
+        <service tools:node="removeAll" />
+        <receiver tools:node="removeAll" />
+        <provider tools:node="removeAll" />
+
+        <!-- Probe-only embedding registers only storage, path and package-info
+             plugins: no production MainActivity channels or background plugins.
+             Relative class resolves against the namespace, not the suffixed ID.
+             A separate synthetic Dart target is required before any execution. -->
+        <activity
+            android:name=".SecurityProbeActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <meta-data
+                android:name="io.flutter.embedding.android.NormalTheme"
+                android:resource="@style/NormalTheme" />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <meta-data android:name="flutterEmbedding" android:value="2" />
+    </application>
+</manifest>

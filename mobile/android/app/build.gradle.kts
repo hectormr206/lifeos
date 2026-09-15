@@ -1,5 +1,6 @@
 import java.util.Properties
 import java.io.FileInputStream
+import org.gradle.api.artifacts.component.ModuleComponentSelector
 
 plugins {
     id("com.android.application")
@@ -7,10 +8,48 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// Only exact, app-qualified probe targets may configure without release secrets.
+// Abbreviations, aggregate tasks, empty selections and mixed requests fail closed
+// through the historical release-signing configuration below.
+val isolatedProbeTasks = setOf(
+    ":app:assembleSecurityProbe",
+    ":app:processSecurityProbeMainManifest",
+    ":app:compileSecurityProbeKotlin",
+)
+val requestedTasks = gradle.startParameter.taskNames
+val isPureSecurityProbe = requestedTasks.isNotEmpty() &&
+    requestedTasks.all { it in isolatedProbeTasks }
 val keystoreProperties = Properties()
-val keystorePropertiesFile = rootProject.file("key.properties")
-if (keystorePropertiesFile.exists()) {
-    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+if (!isPureSecurityProbe) {
+    val keystorePropertiesFile = rootProject.file("key.properties")
+    if (keystorePropertiesFile.exists()) {
+        FileInputStream(keystorePropertiesFile).use { keystoreProperties.load(it) }
+    }
+}
+
+// Flutter's eager buildTypes callback can select a release engine before the
+// custom type's debug flags are set; later Dart compilation still emits a debug
+// kernel. Guard the mode at resolution, including transitive engine requests,
+// without changing engine revisions or any production variant's classpath.
+val probeEngineModules = setOf("flutter_embedding", "armeabi_v7a", "arm64_v8a", "x86_64")
+configurations.configureEach {
+    if (name == "securityProbeCompileClasspath" || name == "securityProbeRuntimeClasspath") {
+        resolutionStrategy.dependencySubstitution {
+            all {
+                val engine = requested as? ModuleComponentSelector
+                if (engine != null && engine.group == "io.flutter") {
+                    val mode = engine.module.substringAfterLast('_')
+                    val artifact = engine.module.substringBeforeLast('_')
+                    if (artifact in probeEngineModules && mode in setOf("release", "profile")) {
+                        check(engine.version.isNotBlank()) {
+                            "securityProbe requires an explicit Flutter engine version"
+                        }
+                        useTarget("io.flutter:${artifact}_debug:${engine.version}")
+                    }
+                }
+            }
+        }
+    }
 }
 
 android {
@@ -46,17 +85,38 @@ android {
     }
 
     signingConfigs {
-        create("release") {
-            keyAlias = keystoreProperties["keyAlias"] as String
-            keyPassword = keystoreProperties["keyPassword"] as String
-            storeFile = keystoreProperties["storeFile"]?.let { file(it) }
-            storePassword = keystoreProperties["storePassword"] as String
+        if (!isPureSecurityProbe) {
+            create("release") {
+                keyAlias = keystoreProperties["keyAlias"] as String
+                keyPassword = keystoreProperties["keyPassword"] as String
+                storeFile = keystoreProperties["storeFile"]?.let { file(it) }
+                storePassword = keystoreProperties["storePassword"] as String
+            }
         }
     }
 
     buildTypes {
         release {
-            signingConfig = signingConfigs.getByName("release")
+            if (!isPureSecurityProbe) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+        create("securityProbe") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".securityprobe"
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+            matchingFallbacks += "debug"
+        }
+    }
+}
+
+// No unsigned release variant can exist in the secret-free configuration,
+// even if a plugin later adds an aggregate dependency to a selected probe task.
+androidComponents {
+    beforeVariants(selector().all()) { variant ->
+        if (isPureSecurityProbe && variant.buildType != "securityProbe") {
+            variant.enable = false
         }
     }
 }
@@ -99,7 +159,60 @@ val downloadSherpaOnnxAar = tasks.register("downloadSherpaOnnxAar") {
         }
     }
 }
-tasks.named("preBuild") { dependsOn(downloadSherpaOnnxAar) }
+val requireProbeSherpaOnnxAar = tasks.register("requireProbeSherpaOnnxAar") {
+    doLast {
+        check(sherpaOnnxAar.isFile && sherpaOnnxAar.length() > 10_000_000L) {
+            "securityProbe requires an existing Sherpa AAR at $sherpaOnnxAar; " +
+                "no download is permitted. Provision it separately with approval."
+        }
+    }
+}
+
+// Keep the shared IME sources compilable, but never package their AAR in the
+// probe. Production variants retain their download and runtime dependency.
+android.buildTypes.configureEach {
+    val probe = name == "securityProbe"
+    dependencies.add(
+        "${name}${if (probe) "CompileOnly" else "Implementation"}",
+        files(sherpaOnnxAar),
+    )
+    val variantPreBuild = "pre${name.replaceFirstChar { it.uppercaseChar() }}Build"
+    tasks.matching { it.name == variantPreBuild }.configureEach {
+        dependsOn(if (probe) requireProbeSherpaOnnxAar else downloadSherpaOnnxAar)
+    }
+}
+
+// A mixed/aggregate graph must not fetch Sherpa on behalf of the probe either.
+// Reject before any task action, rather than silently skipping production work.
+gradle.taskGraph.whenReady {
+    val hasProbe = allTasks.any {
+        it.project == project && it.name.contains("SecurityProbe")
+    }
+    // Validate the original selection, not just the graph: -x can remove the
+    // downloader but must never turn a mixed/aggregate request into a pure probe.
+    check(!hasProbe || isPureSecurityProbe) {
+        "securityProbe requires only exact app-qualified isolated probe tasks."
+    }
+    val compilesProbe = allTasks.any {
+        it.project == project && it.name.contains("SecurityProbe") &&
+            (it.name.startsWith("assemble") || it.name.contains("Flutter"))
+    }
+    if (compilesProbe) {
+        val expectedTarget = "tool/device_security_probe.dart"
+        check(project.findProperty("target") == expectedTarget) {
+            "securityProbe compilation requires -Ptarget=$expectedTarget; " +
+                "the production entrypoint and alternate targets are forbidden."
+        }
+        // Flutter's task runs from mobile, not from android/app or android.
+        check(rootProject.file("../$expectedTarget").isFile) {
+            "securityProbe entrypoint is missing at mobile/$expectedTarget."
+        }
+    }
+    check(!hasProbe || !hasTask(downloadSherpaOnnxAar.get())) {
+        "securityProbe cannot share a task graph with the Sherpa download; " +
+            "run an isolated :app:assembleSecurityProbe invocation."
+    }
+}
 
 // ANDROID MUST GET ZETETIC'S libsqlcipher.so, NOT THE DESKTOP ONE.
 //
@@ -155,6 +268,5 @@ dependencies {
     // Backports java.time (and friends) for flutter_local_notifications when
     // core library desugaring is enabled above.
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // AXI KEYBOARD (IME): sherpa-onnx Kotlin API (see the download task above).
-    implementation(files(sherpaOnnxAar))
+    // Sherpa is wired per build type above; never add it to shared implementation.
 }

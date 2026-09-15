@@ -26,6 +26,9 @@ import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/domains/data/domain_repository.dart';
 import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
+import 'package:lifeos/features/domains/domain/domain_entry.dart';
+
+import '../../../support/outbox_test_doubles.dart';
 
 class _FixedResponseAdapter implements HttpClientAdapter {
   _FixedResponseAdapter(this.statusCode, this.body);
@@ -102,6 +105,30 @@ void main() {
   final spirituality = domainDescriptors.firstWhere((d) => d.key == 'spirituality');
   final learning = domainDescriptors.firstWhere((d) => d.key == 'learning');
   final calendar = domainDescriptors.firstWhere((d) => d.key == 'calendar');
+
+  final queuedBody = {
+    'kind': 'vital',
+    'title': 'Test pulse',
+    'ts': '2026-01-01T10:00:00.000Z',
+  };
+  pendingCountFailureTests<DomainEntry>(
+    operation: 'createEntry',
+    mutate: (outbox, reporter) => HttpDomainRepository(
+      _unreachableDio(),
+      outbox: outbox,
+      pendingSync: reporter,
+    ).createEntry(health, queuedBody),
+    expectSuccess: (entry) {
+      expect(entry.id, startsWith('local-'));
+      expect(entry.title, 'Test pulse');
+      expect(entry.timestamp, DateTime.parse(queuedBody['ts']!));
+      expect(entry.raw, queuedBody);
+    },
+    httpMethod: 'POST',
+    path: '/api/v1/health/entries',
+    kind: 'health_create',
+    jsonBody: queuedBody,
+  );
 
   group('HttpDomainRepository.list', () {
     test('parses the real health entries shape (subject absent today)', () async {

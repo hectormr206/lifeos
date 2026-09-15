@@ -4,8 +4,11 @@ import 'dart:typed_data';
 
 import 'package:cryptography/cryptography.dart';
 
-/// Argon2id cost. Stored inside every envelope so raising the shipped defaults
-/// never strands archives sealed under the old ones.
+/// Argon2id cost stored inside every envelope.
+///
+/// V1 accepts one lane, 1–3 iterations and 8–65536 KiB of memory. These bounds
+/// limit work on unauthenticated headers before the MAC can be checked. Future
+/// cost changes must explicitly evolve the version policy and compatibility.
 class BackupKdfParameters {
   const BackupKdfParameters({
     required this.memoryKiB,
@@ -16,6 +19,13 @@ class BackupKdfParameters {
   final int memoryKiB;
   final int iterations;
   final int parallelism;
+
+  bool get isValidForV1 =>
+      parallelism == 1 &&
+      iterations >= 1 &&
+      iterations <= 3 &&
+      memoryKiB >= 8 * parallelism &&
+      memoryKiB <= 65536;
 
   @override
   bool operator ==(Object other) =>
@@ -58,10 +68,8 @@ class BackupKdfParameters {
 /// stored cost to make an offline guess cheap invalidates the MAC instead of
 /// yielding a decryptable archive.
 class PassphraseBackupSealer {
-  PassphraseBackupSealer({
-    this._kdf = defaultKdf,
-    Random? random,
-  }) : _random = random ?? Random.secure();
+  PassphraseBackupSealer({this._kdf = defaultKdf, Random? random})
+    : _random = random ?? Random.secure();
 
   final BackupKdfParameters _kdf;
   final Random _random;
@@ -102,6 +110,9 @@ class PassphraseBackupSealer {
     List<int> archive, {
     required String passphrase,
   }) async {
+    if (!_kdf.isValidForV1) {
+      throw ArgumentError.value(_kdf, 'kdf', 'unsupported v1 KDF parameters');
+    }
     if (passphrase.isEmpty) {
       throw ArgumentError.value(
         passphrase,
@@ -129,15 +140,15 @@ class PassphraseBackupSealer {
   /// Returns the archive, or null when the passphrase is wrong, the bytes were
   /// tampered with, or they are not a sealed envelope at all. Never throws for
   /// untrusted input and never returns partially-decrypted output.
-  Future<Uint8List?> open(
-    List<int> bytes, {
-    required String passphrase,
-  }) async {
+  Future<Uint8List?> open(List<int> bytes, {required String passphrase}) async {
     if (!isSealed(bytes) || passphrase.isEmpty) return null;
     try {
       final header = bytes.sublist(0, headerLength);
       final kdf = _readKdf(header);
-      final salt = Uint8List.fromList(header.sublist(headerLength - _saltLength));
+      if (!kdf.isValidForV1) return null;
+      final salt = Uint8List.fromList(
+        header.sublist(headerLength - _saltLength),
+      );
 
       final key = await _deriveKey(passphrase, salt: salt, kdf: kdf);
       final box = SecretBox.fromConcatenation(

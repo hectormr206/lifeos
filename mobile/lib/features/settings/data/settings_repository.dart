@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
 import '../../../core/outbox/outbox.dart';
+import '../../../core/outbox/pending_sync_reporting.dart';
 import '../domain/config_field_descriptor.dart';
 
 /// Raised when a settings/config call fails (non-2xx, network error).
@@ -134,9 +135,8 @@ class HttpSettingsRepository implements SettingsRepository {
     }
   }
 
-  Future<void> _reportPendingCount() async {
-    _pendingSync.reportPendingCount((await _outbox.list()).length);
-  }
+  Future<void> _reportPendingCount() =>
+      reportPendingCountIfAvailable(_outbox, _pendingSync);
 
   /// Builds descriptors from the last cached values with [changes] applied
   /// optimistically on top, write-through-updating the values cache so a

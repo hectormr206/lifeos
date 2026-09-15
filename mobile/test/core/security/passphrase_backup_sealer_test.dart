@@ -3,6 +3,8 @@
 // VPS, a USB stick, a cloud drive — and still only open for whoever knows the
 // phrase. The device Keystore key protects the live database; it dies with the
 // device, which is exactly why a recovery copy must not depend on it.
+import 'dart:collection';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -16,6 +18,15 @@ const _fastKdf = BackupKdfParameters(
   parallelism: 1,
 );
 
+final _invalidKdfs = <BackupKdfParameters>[
+  for (final memory in [-1, 0, 7, 65537, 0xffffffff, 0x100000000])
+    BackupKdfParameters(memoryKiB: memory, iterations: 1, parallelism: 1),
+  for (final iterations in [-1, 0, 4, 0xffffffff, 0x100000000])
+    BackupKdfParameters(memoryKiB: 8, iterations: iterations, parallelism: 1),
+  for (final parallelism in [-1, 0, 2, 255, 256])
+    BackupKdfParameters(memoryKiB: 16, iterations: 1, parallelism: parallelism),
+];
+
 Uint8List _archive([int size = 4096]) =>
     Uint8List.fromList(List<int>.generate(size, (i) => (i * 31 + 7) % 256));
 
@@ -24,6 +35,74 @@ void main() {
 
   setUp(() {
     sealer = PassphraseBackupSealer(kdf: _fastKdf);
+  });
+
+  group('v1 KDF policy', () {
+    test('accepts defaults, fast costs and inclusive boundaries', () {
+      for (final kdf in [
+        PassphraseBackupSealer.defaultKdf,
+        _fastKdf,
+        const BackupKdfParameters(memoryKiB: 8, iterations: 1, parallelism: 1),
+        const BackupKdfParameters(
+          memoryKiB: 65536,
+          iterations: 3,
+          parallelism: 1,
+        ),
+      ]) {
+        expect(kdf.isValidForV1, isTrue);
+      }
+    });
+
+    test('rejects out-of-policy costs without deriving a key', () {
+      for (final kdf in _invalidKdfs) {
+        expect(kdf.isValidForV1, isFalse);
+      }
+    });
+
+    test('seal rejects invalid costs before requesting randomness', () async {
+      for (final kdf in _invalidKdfs) {
+        final random = _RandomProbe();
+        final invalid = PassphraseBackupSealer(kdf: kdf, random: random);
+        await expectLater(
+          invalid.seal(_archive(1), passphrase: 'x'),
+          throwsArgumentError,
+        );
+        expect(random.requested, isFalse);
+      }
+    });
+
+    test('open rejects forged costs before reading salt for the KDF', () async {
+      for (final kdf in _invalidKdfs.where(
+        (kdf) =>
+            kdf.memoryKiB >= 0 &&
+            kdf.memoryKiB <= 0xffffffff &&
+            kdf.iterations >= 0 &&
+            kdf.iterations <= 0xffffffff &&
+            kdf.parallelism >= 0 &&
+            kdf.parallelism <= 255,
+      )) {
+        final header = _HeaderProbe(kdf);
+        expect(await sealer.open(header, passphrase: 'x'), isNull);
+        expect(header.saltRead, isFalse);
+      }
+    });
+
+    test(
+      'valid minimum header reaches salt and minimum cost round-trips',
+      () async {
+        const minimum = BackupKdfParameters(
+          memoryKiB: 8,
+          iterations: 1,
+          parallelism: 1,
+        );
+        final header = _HeaderProbe(minimum);
+        expect(await sealer.open(header, passphrase: 'x'), isNull);
+        expect(header.saltRead, isTrue);
+        final minimal = PassphraseBackupSealer(kdf: minimum);
+        final sealed = await minimal.seal(_archive(1), passphrase: 'x');
+        expect(await sealer.open(sealed, passphrase: 'x'), _archive(1));
+      },
+    );
   });
 
   group('round-trip', () {
@@ -43,7 +122,10 @@ void main() {
 
     test('a unicode passphrase round-trips', () async {
       final plain = _archive(256);
-      final sealed = await sealer.seal(plain, passphrase: 'contraseñá ñandú 🔐');
+      final sealed = await sealer.seal(
+        plain,
+        passphrase: 'contraseñá ñandú 🔐',
+      );
       expect(
         await sealer.open(sealed, passphrase: 'contraseñá ñandú 🔐'),
         plain,
@@ -93,18 +175,20 @@ void main() {
       expect(_contains(sealed, plain), isFalse);
     });
 
-    test('sealing twice yields different bytes (fresh salt and nonce)',
-        () async {
-      final plain = _archive(128);
+    test(
+      'sealing twice yields different bytes (fresh salt and nonce)',
+      () async {
+        final plain = _archive(128);
 
-      final a = await sealer.seal(plain, passphrase: 'misma frase');
-      final b = await sealer.seal(plain, passphrase: 'misma frase');
+        final a = await sealer.seal(plain, passphrase: 'misma frase');
+        final b = await sealer.seal(plain, passphrase: 'misma frase');
 
-      expect(a, isNot(b));
-      // Both still open — the difference is randomness, not corruption.
-      expect(await sealer.open(a, passphrase: 'misma frase'), plain);
-      expect(await sealer.open(b, passphrase: 'misma frase'), plain);
-    });
+        expect(a, isNot(b));
+        // Both still open — the difference is randomness, not corruption.
+        expect(await sealer.open(a, passphrase: 'misma frase'), plain);
+        expect(await sealer.open(b, passphrase: 'misma frase'), plain);
+      },
+    );
 
     test('carries its own KDF cost so old backups keep opening', () async {
       // Sealed cheaply, then read by a sealer configured expensively: the
@@ -150,6 +234,56 @@ void main() {
       );
     });
   });
+}
+
+// Observes the boundary before salt extraction, which precedes key derivation.
+// A null result alone could otherwise just be a late MAC failure.
+class _HeaderProbe extends ListBase<int> {
+  _HeaderProbe(BackupKdfParameters kdf) {
+    _bytes.setRange(0, 8, 'LOSBKUP1'.codeUnits);
+    final view = ByteData.sublistView(_bytes);
+    view.setUint32(8, kdf.memoryKiB);
+    view.setUint32(12, kdf.iterations);
+    view.setUint8(16, kdf.parallelism);
+  }
+
+  final _bytes = Uint8List(PassphraseBackupSealer.headerLength);
+  bool saltRead = false;
+
+  @override
+  int get length => _bytes.length;
+  @override
+  set length(int value) => throw UnsupportedError('fixed header');
+  @override
+  int operator [](int index) => _bytes[index];
+  @override
+  void operator []=(int index, int value) => _bytes[index] = value;
+
+  @override
+  List<int> sublist(int start, [int? end]) {
+    if (start == 0 && end == length) return this;
+    if (start == length - 16) {
+      saltRead = true;
+      // Keep guard regressions bounded: never run Argon2 on forged costs.
+      throw StateError('salt extraction reached');
+    }
+    return _bytes.sublist(start, end);
+  }
+}
+
+class _RandomProbe implements Random {
+  bool requested = false;
+
+  @override
+  int nextInt(int max) {
+    requested = true;
+    throw StateError('randomness must not be requested');
+  }
+
+  @override
+  bool nextBool() => throw StateError('unexpected randomness');
+  @override
+  double nextDouble() => throw StateError('unexpected randomness');
 }
 
 bool _contains(List<int> haystack, List<int> needle) {

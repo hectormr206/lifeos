@@ -21,6 +21,8 @@ import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 
+import '../../../support/outbox_test_doubles.dart';
+
 class _FixedResponseAdapter implements HttpClientAdapter {
   _FixedResponseAdapter(this.statusCode, this.body);
 
@@ -70,6 +72,42 @@ class _UnreachableAdapter implements HttpClientAdapter {
 Dio _unreachableDio() => Dio(BaseOptions(baseUrl: 'https://engine.local'))..httpClientAdapter = _UnreachableAdapter();
 
 void main() {
+  for (final withImages in [false, true]) {
+    pendingCountFailureTests<ChatMessage>(
+      operation: withImages ? 'sendImages' : 'sendMessage',
+      mutate: (outbox, reporter) {
+        final repository = HttpChatRepository(
+          _unreachableDio(),
+          outbox: outbox,
+          pendingSync: reporter,
+        );
+        return withImages
+            ? repository.sendImages('test message', [
+                Uint8List.fromList([1, 2, 3]),
+                Uint8List.fromList([4, 5, 6]),
+              ])
+            : repository.sendMessage('test message');
+      },
+      expectSuccess: (reply) {
+        expect(reply.id, startsWith('queued-'));
+        expect(reply.role, ChatRole.axi);
+        expect(
+          reply.text,
+          'Sin conexión: tu mensaje quedó en cola y se enviará automáticamente.',
+        );
+      },
+      httpMethod: 'POST',
+      path: '/api/v1/chat/ask',
+      kind: 'chat_ask',
+      jsonBody: {
+        'text': 'test message',
+        'image_b64': withImages ? 'AQID' : null,
+        'speak': false,
+        'logging_mode': false,
+      },
+    );
+  }
+
   group('HttpChatRepository.sendMessage', () {
     test('POSTs the exact engine request body and parses a successful reply', () async {
       final fixture = jsonEncode({
