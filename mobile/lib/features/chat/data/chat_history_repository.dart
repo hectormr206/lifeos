@@ -171,7 +171,10 @@ class ChatHistoryRepository {
       return node;
     }
     final migratedPath = await _voiceNotes.migrateLegacy(path);
-    if (migratedPath == path) return node;
+    // `null` = the legacy source is gone (already lost to a temp purge). The
+    // note is unrecoverable from the graph: leave the node untouched rather
+    // than rewrite it to a location that would not exist either.
+    if (migratedPath == null || migratedPath == path) return node;
     final data = Map<String, Object?>.from(node.data)
       ..['audioPath'] = migratedPath;
     final updated = await _store.upsertNode(node.copyWith(data: data));

@@ -3,13 +3,21 @@
 // append order, images/voice persist by REFERENCE (never bytes), metrics
 // round-trip, and clearing a conversation empties it.
 //
+// Legacy plaintext voice paths are MIGRATED on load into the durable voice-note
+// directory; a dangling legacy path (source already gone) is left untouched.
+//
 // Runs against a REAL in-memory sqlite (`sqflite_common_ffi`) — the same SQL
 // the encrypted SQLCipher backend runs on-device.
+import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/local_graph_schema.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
+import 'package:lifeos/core/security/encrypted_file_cipher.dart';
+import 'package:lifeos/core/security/voice_note_directory.dart';
+import 'package:lifeos/core/security/voice_note_file_store.dart';
 import 'package:lifeos/features/chat/data/chat_history_repository.dart';
 import 'package:lifeos/features/chat/domain/chat_message.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
@@ -133,6 +141,83 @@ void main() {
     expect(loaded.transcriptionPending, isFalse);
     // The transcript stays OFF the bubble label — presentation-only.
     expect(loaded.text, '');
+  });
+
+  test('legacy voice paths migrate INTO the durable directory on load', () async {
+    final root = await Directory.systemTemp.createTemp('lifeos-history-');
+    addTearDown(() => root.delete(recursive: true));
+    final supportDir = Directory('${root.path}/support')..createSync();
+    const wavBytes = [82, 73, 70, 70, 9, 8, 7, 6]; // RIFF + fixture payload
+    final legacyWav = File('${root.path}/voice-4242.wav')
+      ..writeAsBytesSync(wavBytes);
+
+    final migratingRepo = ChatHistoryRepository(
+      SqfliteLocalGraphStore(db),
+      voiceNotes: VoiceNoteFileStore(
+        cipher: EncryptedFileCipher(
+          keyProvider: () async => SecretKey(List<int>.filled(32, 7)),
+        ),
+        durableDirectory: VoiceNoteDirectory(
+          directoryProvider: () async => supportDir,
+        ),
+        scratchDirectoryProvider: () async => root,
+      ),
+    );
+    await migratingRepo.appendMessage(
+      ChatMessage(
+        id: 'v9',
+        role: ChatRole.user,
+        text: '',
+        timestamp: DateTime.utc(2026, 1, 1),
+        kind: ChatMessageKind.voice,
+        audioPath: legacyWav.path,
+        transcriptionPending: true,
+      ),
+    );
+
+    final loaded = await migratingRepo.loadMessages();
+
+    // LOCATION: the persisted path now points INTO the durable directory,
+    // not beside the legacy temp file it came from.
+    expect(
+      loaded.single.audioPath,
+      '${supportDir.path}/voice_notes/voice-4242.wav.lifeos',
+    );
+    final sealed = File(loaded.single.audioPath!);
+    expect(sealed.existsSync(), isTrue);
+    // The sealed copy decrypts back to the original bytes.
+    final store = VoiceNoteFileStore(
+      cipher: EncryptedFileCipher(
+        keyProvider: () async => SecretKey(List<int>.filled(32, 7)),
+      ),
+      scratchDirectoryProvider: () async => root,
+    );
+    await store.withWav(loaded.single.audioPath!, (temporaryPath) async {
+      expect(await File(temporaryPath).readAsBytes(), wavBytes);
+    });
+    // The legacy file was deleted only AFTER the graph committed to the new
+    // path — the migration's safety property.
+    expect(legacyWav.existsSync(), isFalse);
+  });
+
+  test('a dangling legacy voice path is left untouched, not re-pointed', () async {
+    const gonePath = '/tmp/lifeos-dangling/voice-9000.wav';
+    await repo.appendMessage(
+      ChatMessage(
+        id: 'v10',
+        role: ChatRole.user,
+        text: '',
+        timestamp: DateTime.utc(2026, 1, 1),
+        kind: ChatMessageKind.voice,
+        audioPath: gonePath,
+      ),
+    );
+
+    // The source is gone (lost to a temp purge): there is nothing to move,
+    // so the graph keeps the original reference instead of fabricating a
+    // location that would not exist either.
+    final loaded = await repo.loadMessages();
+    expect(loaded.single.audioPath, gonePath);
   });
 
   test('generation metrics round-trip on an Axi reply', () async {

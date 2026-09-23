@@ -22,33 +22,177 @@ import 'dart:io';
 import 'package:cryptography/cryptography.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/security/encrypted_file_cipher.dart';
+import 'package:lifeos/core/security/voice_note_directory.dart';
 import 'package:lifeos/core/security/voice_note_file_store.dart';
 
 void main() {
+  // The durable notes directory is injectable: tests point it at a temp
+  // `support` dir, mirroring the production
+  // `<applicationSupportDirectory>/voice_notes/` layout.
+  late Directory root;
+  late Directory supportDir;
+  late VoiceNoteFileStore store;
+
+  setUp(() async {
+    root = await Directory.systemTemp.createTemp('lifeos-voice-security-');
+    addTearDown(() => root.delete(recursive: true));
+    supportDir = Directory('${root.path}/support')..createSync();
+    store = VoiceNoteFileStore(
+      cipher: _testCipher(),
+      durableDirectory: VoiceNoteDirectory(
+        directoryProvider: () async => supportDir,
+      ),
+      // Working copies use `root` as the OS temp dir, so the scratch dir is
+      // `<root>/voice_notes_scratch/` — injectable, like production.
+      scratchDirectoryProvider: () async => root,
+    );
+  });
+
+  const bytes = [82, 73, 70, 70, 1, 2, 3, 4]; // RIFF + tiny fixture payload
+
   test(
-    'seals completed WAV recordings and only exposes a temporary working copy',
+    'sealRecording seals INTO the durable directory, never beside the temp recording',
     () async {
-      final dir = await Directory.systemTemp.createTemp(
-        'lifeos-voice-security-',
-      );
-      addTearDown(() => dir.delete(recursive: true));
-      final wav = File('${dir.path}/voice-1.wav');
-      const bytes = [82, 73, 70, 70, 1, 2, 3, 4]; // RIFF + tiny fixture payload
-      await wav.writeAsBytes(bytes);
-      final store = VoiceNoteFileStore(cipher: _testCipher());
+      final wav = File('${root.path}/voice-1000.wav')..writeAsBytesSync(bytes);
 
-      final encryptedPath = await store.sealRecording(wav.path);
+      final sealedPath = await store.sealRecording(wav.path);
 
+      // LOCATION: the sealed blob is in <appSupport>/voice_notes/, not in the
+      // recording's temp directory.
+      expect(sealedPath, '${supportDir.path}/voice_notes/voice-1000.wav.lifeos');
+      final sealed = File(sealedPath);
+      expect(await sealed.exists(), isTrue);
+      // The plaintext recording is gone, and its bytes are not in the blob.
       expect(await wav.exists(), isFalse);
-      final encrypted = File(encryptedPath);
-      expect(_containsBytes(await encrypted.readAsBytes(), bytes), isFalse);
-      await store.withWav(encryptedPath, (temporaryPath) async {
-        expect(await File(temporaryPath).readAsBytes(), bytes);
-        expect(await File(temporaryPath).exists(), isTrue);
-      });
-      expect(await File('$encryptedPath.working.wav').exists(), isFalse);
+      expect(
+        _containsBytes(await sealed.readAsBytes(), bytes),
+        isFalse,
+        reason: 'the sealed blob must be ciphertext',
+      );
     },
   );
+
+  test(
+    'withWav working copies live in the temp scratch dir, NEVER in durable storage',
+    () async {
+      final wav = File('${root.path}/voice-1000.wav')..writeAsBytesSync(bytes);
+      final sealedPath = await store.sealRecording(wav.path);
+
+      String? workingPath;
+      await store.withWav(sealedPath, (temporaryPath) async {
+        workingPath = temporaryPath;
+        expect(await File(temporaryPath).readAsBytes(), bytes);
+        // LOCATION: the scratch subdirectory of the injected temp dir…
+        expect(workingPath, startsWith('${root.path}/voice_notes_scratch/'));
+        // …never anywhere under the durable app-support directory.
+        expect(workingPath!.startsWith(supportDir.path), isFalse);
+      });
+      // Guaranteed deletion after use.
+      expect(await File(workingPath!).exists(), isFalse);
+
+      // The durable directory holds ONLY the sealed blob: scan every file
+      // byte-for-byte so a plaintext leak could never hide here.
+      for (final entry in await Directory(
+        '${supportDir.path}/voice_notes',
+      ).list().toList()) {
+        expect(
+          entry.path.endsWith('.lifeos') && entry is File,
+          isTrue,
+          reason: 'unexpected file in durable storage: ${entry.path}',
+        );
+        expect(
+          _containsBytes(await (entry as File).readAsBytes(), bytes),
+          isFalse,
+          reason: 'plaintext audio leaked into durable storage: ${entry.path}',
+        );
+      }
+    },
+  );
+
+  test(
+    'decryptToTemporaryWav materializes in the temp scratch dir, not durable',
+    () async {
+      final wav = File('${root.path}/voice-1000.wav')..writeAsBytesSync(bytes);
+      final sealedPath = await store.sealRecording(wav.path);
+
+      final temporaryPath = await store.decryptToTemporaryWav(sealedPath);
+
+      // LOCATION: the scratch subdirectory of the injected temp dir, never
+      // the durable directory.
+      expect(temporaryPath, startsWith('${root.path}/voice_notes_scratch/'));
+      expect(temporaryPath.startsWith(supportDir.path), isFalse);
+      expect(await File(temporaryPath).readAsBytes(), bytes);
+
+      await store.deleteTemporaryWav(temporaryPath);
+      expect(await File(temporaryPath).exists(), isFalse);
+    },
+  );
+
+  test(
+    'migrateLegacy moves the legacy note INTO the durable directory',
+    () async {
+      final legacy = File('${root.path}/legacy/voice-2000.wav')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(bytes);
+
+      final migratedPath = await store.migrateLegacy(legacy.path);
+
+      // LOCATION: the sealed copy is durable; the source stays put until the
+      // graph has committed to the new path (deleteLegacy happens after).
+      expect(
+        migratedPath,
+        '${supportDir.path}/voice_notes/voice-2000.wav.lifeos',
+      );
+      final durablePath = migratedPath!;
+      final sealed = File(durablePath);
+      expect(await sealed.exists(), isTrue);
+      expect(await legacy.exists(), isTrue);
+      // The sealed copy decrypts back to the original bytes.
+      await store.withWav(durablePath, (temporaryPath) async {
+        expect(await File(temporaryPath).readAsBytes(), bytes);
+      });
+    },
+  );
+
+  test(
+    'migrateLegacy surfaces a MISSING legacy source instead of keeping it',
+    () async {
+      final gone = '${root.path}/nowhere/voice-3000.wav';
+
+      // `null` = dangling reference: the caller decides, the store does not
+      // pretend the note is intact.
+      expect(await store.migrateLegacy(gone), isNull);
+    },
+  );
+
+  test(
+    'a failed migration keeps the original path and never destroys the file',
+    () async {
+      final legacy = File('${root.path}/legacy/voice-4000.wav')
+        ..createSync(recursive: true)
+        ..writeAsBytesSync(bytes);
+      final unavailable = VoiceNoteDirectory(
+        directoryProvider: () async =>
+            throw const FileSystemException('durable storage unavailable'),
+      );
+      final failingStore = VoiceNoteFileStore(
+        cipher: _testCipher(),
+        durableDirectory: unavailable,
+        scratchDirectoryProvider: () async => root,
+      );
+
+      final result = await failingStore.migrateLegacy(legacy.path);
+
+      // The legacy path is still genuinely usable — nothing was lost.
+      expect(result, legacy.path);
+      expect(await legacy.exists(), isTrue);
+    },
+  );
+
+  test('migrateLegacy passes already-encrypted paths through unchanged', () async {
+    const encrypted = '/somewhere/voice-5000.wav.lifeos';
+    expect(await store.migrateLegacy(encrypted), encrypted);
+  });
 }
 
 EncryptedFileCipher _testCipher() => EncryptedFileCipher(

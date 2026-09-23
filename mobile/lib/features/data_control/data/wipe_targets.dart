@@ -8,6 +8,7 @@ library;
 
 import 'dart:io';
 
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../daily_digest/domain/daily_digest_preferences.dart';
@@ -48,17 +49,27 @@ class GraphDatabaseWipeTarget implements WipeTarget {
   }
 }
 
-/// Deletes every recorded voice-note clip (`voice-*.wav` legacy and
-/// `voice-*.wav.lifeos` encrypted) from the directory
-/// the recorder writes to. Other files there (e.g. downloaded model blobs,
-/// caches) are NOT touched — models always survive a wipe.
+/// Deletes every voice-note clip from BOTH on-disk homes: the DURABLE
+/// voice-note directory (`<appSupport>/voice_notes/`, where sealed
+/// `voice-*.wav.lifeos` blobs now live) and the legacy OS temp directory the
+/// old recorder wrote to, so orphaned pre-migration temp blobs and crashed
+/// plaintext working copies are still wiped during the transition. Other
+/// files there (e.g. downloaded model blobs, caches) are NOT touched —
+/// models always survive a wipe.
 class VoiceNotesWipeTarget implements WipeTarget {
-  VoiceNotesWipeTarget({required this._directory});
+  VoiceNotesWipeTarget({
+    required this._directory,
+    Future<Directory> Function()? legacyDirectory,
+  }) : _legacyDirectory = legacyDirectory ?? getTemporaryDirectory;
 
   final Future<Directory> Function() _directory;
+  final Future<Directory> Function() _legacyDirectory;
 
+  /// Voice notes in every on-disk shape: legacy plaintext, sealed blob, and
+  /// the short-lived plaintext working copy a crashed playback can leave in
+  /// the temp scratch dir.
   static final RegExp _voiceFilePattern = RegExp(
-    r'^voice-\d+\.wav(?:\.lifeos)?$',
+    r'^voice-\d+\.wav(?:\.(?:lifeos|working\.wav))?$',
   );
 
   @override
@@ -66,7 +77,11 @@ class VoiceNotesWipeTarget implements WipeTarget {
 
   @override
   Future<void> purge() async {
-    final dir = await _directory();
+    await _purgeDirectory(await _directory());
+    await _purgeDirectory(await _legacyDirectory());
+  }
+
+  Future<void> _purgeDirectory(Directory dir) async {
     if (!await dir.exists()) return;
     await for (final entry in dir.list()) {
       if (entry is! File) continue;

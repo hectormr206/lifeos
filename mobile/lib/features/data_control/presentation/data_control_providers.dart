@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../../../core/graph/graph_providers.dart';
 import '../../../core/notifications/app_notifications.dart';
+import '../../../core/security/voice_note_directory.dart';
 import '../../chat/presentation/chat_notifier.dart';
 import '../../morning_briefing/presentation/morning_briefing_notifier.dart';
 import '../data/graph_backup_service.dart';
@@ -47,6 +48,13 @@ final backupsListProvider = FutureProvider.autoDispose<List<BackupInfo>>(
   (ref) => ref.watch(graphBackupServiceProvider).list(),
 );
 
+/// The durable voice-note directory. Sealed notes land here (see
+/// [VoiceNoteFileStore]); the wipe target purges it together with the legacy
+/// temp directory.
+final voiceNoteDirectoryProvider = Provider<VoiceNoteDirectory>(
+  (ref) => VoiceNoteDirectory(),
+);
+
 /// The full-wipe inventory (DataInventory/WipeRegistry pattern — see
 /// `wipe_registry.dart`). EVERY store holding user content registers its
 /// purge hook here; future features add theirs to this assembly.
@@ -60,9 +68,15 @@ final wipeRegistryProvider = Provider<WipeRegistry>((ref) {
         resumeDatabase: () => ref.invalidate(graphDatabaseHandleProvider),
       ),
     )
-    // Voice notes are recorded into the temp directory (see
-    // RecordAudioRecorderGateway) as `voice-<micros>.wav`.
-    ..register(VoiceNotesWipeTarget(directory: getTemporaryDirectory))
+    // Sealed voice notes live DURABLY in <appSupport>/voice_notes/ (see
+    // VoiceNoteDirectory); the legacy temp directory stays in the wipe so
+    // orphaned pre-migration blobs and temp working copies still die.
+    ..register(
+      VoiceNotesWipeTarget(
+        directory: () => ref.read(voiceNoteDirectoryProvider).resolve(),
+        legacyDirectory: getTemporaryDirectory,
+      ),
+    )
     ..register(BriefingDataWipeTarget())
     // The last daily digest now lives ENCRYPTED in the graph DB (covered by
     // the graph-db target above); this target defensively purges the LEGACY

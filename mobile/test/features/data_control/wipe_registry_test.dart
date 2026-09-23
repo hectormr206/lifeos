@@ -158,32 +158,48 @@ void main() {
 
   group('VoiceNotesWipeTarget', () {
     test(
-      'deletes legacy and encrypted voice notes only; other files (models) survive',
+      'wipes the DURABLE directory AND the legacy temp directory; other files survive',
       () async {
-        final tempDir = await Directory.systemTemp.createTemp('lifeos-voice-');
-        addTearDown(() => tempDir.delete(recursive: true));
-        final voice1 = File('${tempDir.path}/voice-1234.wav')..createSync();
-        final voice2 = File('${tempDir.path}/voice-99999999.wav')..createSync();
-        final encryptedVoice = File('${tempDir.path}/voice-555.wav.lifeos')
-          ..createSync();
-        final model = File('${tempDir.path}/whisper-small.bin')..createSync();
-        final other = File('${tempDir.path}/notes.txt')..createSync();
+        final root = await Directory.systemTemp.createTemp('lifeos-voice-');
+        addTearDown(() => root.delete(recursive: true));
+        final durable = Directory('${root.path}/support/voice_notes')
+          ..createSync(recursive: true);
+        final legacyTemp = Directory('${root.path}/tmp')..createSync();
 
-        final target = VoiceNotesWipeTarget(directory: () async => tempDir);
+        // Durable home: sealed blobs + an unrelated model blob.
+        final durableSealed = File('${durable.path}/voice-555.wav.lifeos')
+          ..createSync();
+        final durableModel = File('${durable.path}/whisper-small.bin')
+          ..createSync();
+        // Legacy temp home: plaintext, sealed, and a crashed working copy.
+        final legacyWav = File('${legacyTemp.path}/voice-1234.wav')..createSync();
+        final legacySealed = File('${legacyTemp.path}/voice-99999999.wav.lifeos')
+          ..createSync();
+        final workingCopy = File('${legacyTemp.path}/voice-77.wav.working.wav')
+          ..createSync();
+        final legacyOther = File('${legacyTemp.path}/notes.txt')..createSync();
+
+        final target = VoiceNotesWipeTarget(
+          directory: () async => durable,
+          legacyDirectory: () async => legacyTemp,
+        );
         await target.purge();
 
         expect(target.id, 'voice-notes');
-        expect(voice1.existsSync(), isFalse);
-        expect(voice2.existsSync(), isFalse);
-        expect(encryptedVoice.existsSync(), isFalse);
-        expect(model.existsSync(), isTrue);
-        expect(other.existsSync(), isTrue);
+        expect(durableSealed.existsSync(), isFalse);
+        expect(legacyWav.existsSync(), isFalse);
+        expect(legacySealed.existsSync(), isFalse);
+        expect(workingCopy.existsSync(), isFalse);
+        // Models and unrelated files survive in BOTH homes.
+        expect(durableModel.existsSync(), isTrue);
+        expect(legacyOther.existsSync(), isTrue);
       },
     );
 
-    test('is a no-op when the directory does not exist', () async {
+    test('is a no-op when neither directory exists', () async {
       final target = VoiceNotesWipeTarget(
         directory: () async => Directory('/nonexistent/lifeos-voice'),
+        legacyDirectory: () async => Directory('/nonexistent/lifeos-tmp'),
       );
       await expectLater(target.purge(), completes);
     });
