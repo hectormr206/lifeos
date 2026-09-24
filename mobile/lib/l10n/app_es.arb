@@ -449,5 +449,24 @@
     }
   },
   "chatDayToday": "Hoy",
-  "chatDayYesterday": "Ayer"
+  "chatDayYesterday": "Ayer",
+  "homeSectionLearn": "Aprender",
+  "homeEnglish": "Inglés",
+  "englishPlacementTitle": "Vocabulario en inglés",
+  "englishPlacementIntro": "Verás palabras en inglés, una por una. Marca solo las que conoces, es decir, las que sabes qué significan.",
+  "englishPlacementWarning": "Algunas palabras son inventadas. Si dices que las conoces, el resultado lo nota.",
+  "englishPlacementLength": "Tarda unos minutos y se detiene sola cuando más palabras ya no aportarían nada.",
+  "englishPlacementStart": "Empezar",
+  "englishPlacementLast": "Tu último resultado: {level} · unas {words} palabras",
+  "englishPlacementKnow": "La conozco",
+  "englishPlacementDontKnow": "No la conozco",
+  "englishPlacementProgress": "Palabra {count}",
+  "englishPlacementWords": "Unas {words} palabras",
+  "englishPlacementLevel": "Nivel de vocabulario estimado: {level}",
+  "englishPlacementScope": "Mide el vocabulario que reconoces al leer. No mide cómo hablas ni cuánto entiendes al escuchar.",
+  "englishPlacementUnreliable": "Marcaste como conocidas varias palabras inventadas, así que este resultado no es fiable. Repite la prueba marcando solo las que sabes qué significan.",
+  "englishPlacementRetake": "Repetir la prueba",
+  "englishPlacementDone": "Listo",
+  "englishPlacementSaveFailed": "No se pudo guardar el resultado. Lo ves aquí, pero no aparecerá la próxima vez.",
+  "englishPlacementLoadError": "No se pudo cargar la lista de palabras."
 }

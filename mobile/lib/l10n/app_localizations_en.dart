@@ -1154,4 +1154,75 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get chatDayYesterday => 'Yesterday';
+
+  @override
+  String get homeSectionLearn => 'Learn';
+
+  @override
+  String get homeEnglish => 'English';
+
+  @override
+  String get englishPlacementTitle => 'English vocabulary';
+
+  @override
+  String get englishPlacementIntro =>
+      'You will see English words one at a time. Mark only the ones you know, meaning you know what they mean.';
+
+  @override
+  String get englishPlacementWarning =>
+      'Some words are invented. If you say you know them, the result will notice.';
+
+  @override
+  String get englishPlacementLength =>
+      'It takes a few minutes and stops by itself once more words would tell nothing new.';
+
+  @override
+  String get englishPlacementStart => 'Start';
+
+  @override
+  String englishPlacementLast(String level, int words) {
+    return 'Your last result: $level · about $words words';
+  }
+
+  @override
+  String get englishPlacementKnow => 'I know it';
+
+  @override
+  String get englishPlacementDontKnow => 'I don\'t know it';
+
+  @override
+  String englishPlacementProgress(int count) {
+    return 'Word $count';
+  }
+
+  @override
+  String englishPlacementWords(int words) {
+    return 'About $words words';
+  }
+
+  @override
+  String englishPlacementLevel(String level) {
+    return 'Estimated vocabulary level: $level';
+  }
+
+  @override
+  String get englishPlacementScope =>
+      'This measures the vocabulary you recognize when reading. It does not measure how you speak or how you understand spoken English.';
+
+  @override
+  String get englishPlacementUnreliable =>
+      'You marked several invented words as known, so this result is not reliable. Take it again, marking only the words whose meaning you know.';
+
+  @override
+  String get englishPlacementRetake => 'Take it again';
+
+  @override
+  String get englishPlacementDone => 'Done';
+
+  @override
+  String get englishPlacementSaveFailed =>
+      'Your result could not be saved. It is still shown here, but it will not appear next time.';
+
+  @override
+  String get englishPlacementLoadError => 'The word list could not be loaded.';
 }

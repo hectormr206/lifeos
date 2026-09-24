@@ -32,11 +32,20 @@ class PlacementRecord {
   final VocabPlacementResult result;
 }
 
-class EnglishPlacementRepository {
+/// What the placement screen needs from storage, and nothing more, so the
+/// screen can be tested without opening the encrypted database.
+abstract interface class PlacementHistory {
+  Future<void> save(VocabPlacementResult result, {required DateTime takenAt});
+
+  Future<PlacementRecord?> latestReliable();
+}
+
+class EnglishPlacementRepository implements PlacementHistory {
   EnglishPlacementRepository(this._store);
 
   final LocalGraphStore _store;
 
+  @override
   Future<void> save(
     VocabPlacementResult result, {
     required DateTime takenAt,
@@ -72,6 +81,7 @@ class EnglishPlacementRepository {
 
   /// The learner's current level, or null before any reliable placement.
   /// Never a default: "no data" must not read as "A1".
+  @override
   Future<PlacementRecord?> latestReliable() async {
     for (final record in await history()) {
       if (record.result.reliable) return record;

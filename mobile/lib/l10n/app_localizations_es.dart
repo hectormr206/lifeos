@@ -1160,4 +1160,76 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get chatDayYesterday => 'Ayer';
+
+  @override
+  String get homeSectionLearn => 'Aprender';
+
+  @override
+  String get homeEnglish => 'Inglés';
+
+  @override
+  String get englishPlacementTitle => 'Vocabulario en inglés';
+
+  @override
+  String get englishPlacementIntro =>
+      'Verás palabras en inglés, una por una. Marca solo las que conoces, es decir, las que sabes qué significan.';
+
+  @override
+  String get englishPlacementWarning =>
+      'Algunas palabras son inventadas. Si dices que las conoces, el resultado lo nota.';
+
+  @override
+  String get englishPlacementLength =>
+      'Tarda unos minutos y se detiene sola cuando más palabras ya no aportarían nada.';
+
+  @override
+  String get englishPlacementStart => 'Empezar';
+
+  @override
+  String englishPlacementLast(String level, int words) {
+    return 'Tu último resultado: $level · unas $words palabras';
+  }
+
+  @override
+  String get englishPlacementKnow => 'La conozco';
+
+  @override
+  String get englishPlacementDontKnow => 'No la conozco';
+
+  @override
+  String englishPlacementProgress(int count) {
+    return 'Palabra $count';
+  }
+
+  @override
+  String englishPlacementWords(int words) {
+    return 'Unas $words palabras';
+  }
+
+  @override
+  String englishPlacementLevel(String level) {
+    return 'Nivel de vocabulario estimado: $level';
+  }
+
+  @override
+  String get englishPlacementScope =>
+      'Mide el vocabulario que reconoces al leer. No mide cómo hablas ni cuánto entiendes al escuchar.';
+
+  @override
+  String get englishPlacementUnreliable =>
+      'Marcaste como conocidas varias palabras inventadas, así que este resultado no es fiable. Repite la prueba marcando solo las que sabes qué significan.';
+
+  @override
+  String get englishPlacementRetake => 'Repetir la prueba';
+
+  @override
+  String get englishPlacementDone => 'Listo';
+
+  @override
+  String get englishPlacementSaveFailed =>
+      'No se pudo guardar el resultado. Lo ves aquí, pero no aparecerá la próxima vez.';
+
+  @override
+  String get englishPlacementLoadError =>
+      'No se pudo cargar la lista de palabras.';
 }

@@ -2137,6 +2137,120 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Yesterday'**
   String get chatDayYesterday;
+
+  /// No description provided for @homeSectionLearn.
+  ///
+  /// In en, this message translates to:
+  /// **'Learn'**
+  String get homeSectionLearn;
+
+  /// No description provided for @homeEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get homeEnglish;
+
+  /// No description provided for @englishPlacementTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'English vocabulary'**
+  String get englishPlacementTitle;
+
+  /// No description provided for @englishPlacementIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'You will see English words one at a time. Mark only the ones you know, meaning you know what they mean.'**
+  String get englishPlacementIntro;
+
+  /// Shown BEFORE the first word. A trap nobody was told about feels like a trick.
+  ///
+  /// In en, this message translates to:
+  /// **'Some words are invented. If you say you know them, the result will notice.'**
+  String get englishPlacementWarning;
+
+  /// No description provided for @englishPlacementLength.
+  ///
+  /// In en, this message translates to:
+  /// **'It takes a few minutes and stops by itself once more words would tell nothing new.'**
+  String get englishPlacementLength;
+
+  /// No description provided for @englishPlacementStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start'**
+  String get englishPlacementStart;
+
+  /// No description provided for @englishPlacementLast.
+  ///
+  /// In en, this message translates to:
+  /// **'Your last result: {level} · about {words} words'**
+  String englishPlacementLast(String level, int words);
+
+  /// No description provided for @englishPlacementKnow.
+  ///
+  /// In en, this message translates to:
+  /// **'I know it'**
+  String get englishPlacementKnow;
+
+  /// No description provided for @englishPlacementDontKnow.
+  ///
+  /// In en, this message translates to:
+  /// **'I don\'t know it'**
+  String get englishPlacementDontKnow;
+
+  /// No description provided for @englishPlacementProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Word {count}'**
+  String englishPlacementProgress(int count);
+
+  /// No description provided for @englishPlacementWords.
+  ///
+  /// In en, this message translates to:
+  /// **'About {words} words'**
+  String englishPlacementWords(int words);
+
+  /// No description provided for @englishPlacementLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Estimated vocabulary level: {level}'**
+  String englishPlacementLevel(String level);
+
+  /// No description provided for @englishPlacementScope.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures the vocabulary you recognize when reading. It does not measure how you speak or how you understand spoken English.'**
+  String get englishPlacementScope;
+
+  /// No description provided for @englishPlacementUnreliable.
+  ///
+  /// In en, this message translates to:
+  /// **'You marked several invented words as known, so this result is not reliable. Take it again, marking only the words whose meaning you know.'**
+  String get englishPlacementUnreliable;
+
+  /// No description provided for @englishPlacementRetake.
+  ///
+  /// In en, this message translates to:
+  /// **'Take it again'**
+  String get englishPlacementRetake;
+
+  /// No description provided for @englishPlacementDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get englishPlacementDone;
+
+  /// No description provided for @englishPlacementSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Your result could not be saved. It is still shown here, but it will not appear next time.'**
+  String get englishPlacementSaveFailed;
+
+  /// No description provided for @englishPlacementLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'The word list could not be loaded.'**
+  String get englishPlacementLoadError;
 }
 
 class _AppLocalizationsDelegate

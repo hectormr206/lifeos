@@ -523,5 +523,48 @@
     }
   },
   "chatDayToday": "Today",
-  "chatDayYesterday": "Yesterday"
+  "chatDayYesterday": "Yesterday",
+  "homeSectionLearn": "Learn",
+  "homeEnglish": "English",
+  "englishPlacementTitle": "English vocabulary",
+  "englishPlacementIntro": "You will see English words one at a time. Mark only the ones you know, meaning you know what they mean.",
+  "englishPlacementWarning": "Some words are invented. If you say you know them, the result will notice.",
+  "@englishPlacementWarning": {
+    "description": "Shown BEFORE the first word. A trap nobody was told about feels like a trick."
+  },
+  "englishPlacementLength": "It takes a few minutes and stops by itself once more words would tell nothing new.",
+  "englishPlacementStart": "Start",
+  "englishPlacementLast": "Your last result: {level} · about {words} words",
+  "@englishPlacementLast": {
+    "placeholders": {
+      "level": { "type": "String" },
+      "words": { "type": "int" }
+    }
+  },
+  "englishPlacementKnow": "I know it",
+  "englishPlacementDontKnow": "I don't know it",
+  "englishPlacementProgress": "Word {count}",
+  "@englishPlacementProgress": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "englishPlacementWords": "About {words} words",
+  "@englishPlacementWords": {
+    "placeholders": {
+      "words": { "type": "int" }
+    }
+  },
+  "englishPlacementLevel": "Estimated vocabulary level: {level}",
+  "@englishPlacementLevel": {
+    "placeholders": {
+      "level": { "type": "String" }
+    }
+  },
+  "englishPlacementScope": "This measures the vocabulary you recognize when reading. It does not measure how you speak or how you understand spoken English.",
+  "englishPlacementUnreliable": "You marked several invented words as known, so this result is not reliable. Take it again, marking only the words whose meaning you know.",
+  "englishPlacementRetake": "Take it again",
+  "englishPlacementDone": "Done",
+  "englishPlacementSaveFailed": "Your result could not be saved. It is still shown here, but it will not appear next time.",
+  "englishPlacementLoadError": "The word list could not be loaded."
 }
