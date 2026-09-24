@@ -157,8 +157,15 @@ class _EnglishPlacementScreenState
     return ListView(
       children: [
         if (result.reliable) ...[
-          Text(l10n.englishPlacementWords(result.estimatedWords),
-              style: headline),
+          // The test measures in bands of a thousand, so below one full band a
+          // count is noise, and "about 0 words" is the worst first message for
+          // someone starting from scratch. Seen on the real Pixel.
+          Text(
+            result.estimatedWords < kBandSize
+                ? l10n.englishPlacementFewWords(kBandSize)
+                : l10n.englishPlacementWords(result.estimatedWords),
+            style: headline,
+          ),
           const SizedBox(height: 8),
           Text(l10n.englishPlacementLevel(result.cefr.name.toUpperCase())),
           const SizedBox(height: 16),

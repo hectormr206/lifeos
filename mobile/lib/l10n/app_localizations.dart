@@ -2210,6 +2210,12 @@ abstract class AppLocalizations {
   /// **'About {words} words'**
   String englishPlacementWords(int words);
 
+  /// Below one full frequency band the count is noise, and "about 0 words" is a discouraging first message.
+  ///
+  /// In en, this message translates to:
+  /// **'Fewer than {words} words'**
+  String englishPlacementFewWords(int words);
+
   /// No description provided for @englishPlacementLevel.
   ///
   /// In en, this message translates to:

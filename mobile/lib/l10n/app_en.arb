@@ -555,6 +555,13 @@
       "words": { "type": "int" }
     }
   },
+  "englishPlacementFewWords": "Fewer than {words} words",
+  "@englishPlacementFewWords": {
+    "description": "Below one full frequency band the count is noise, and \"about 0 words\" is a discouraging first message.",
+    "placeholders": {
+      "words": { "type": "int" }
+    }
+  },
   "englishPlacementLevel": "Estimated vocabulary level: {level}",
   "@englishPlacementLevel": {
     "placeholders": {

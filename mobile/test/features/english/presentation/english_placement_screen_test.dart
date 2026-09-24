@@ -130,6 +130,23 @@ void main() {
     expect(history.saved.single.reliable, isFalse);
   });
 
+  testWidgets('a beginner is never told "about 0 words"', (tester) async {
+    // Found on the real Pixel: answering "no" to everything read "Unas 0
+    // palabras". Below one full band the count is noise, and a zero is the
+    // worst possible first message for someone starting from scratch.
+    await tester.pumpWidget(_app(_FakeHistory()));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Empezar'));
+    await tester.pump();
+    await _answerAll(tester, (word) => false);
+    await tester.pumpAndSettle();
+
+    expect(find.text('Menos de 1000 palabras'), findsOneWidget);
+    expect(find.textContaining('Unas 0'), findsNothing);
+    expect(find.textContaining('A1'), findsOneWidget);
+  });
+
   testWidgets('the test can be taken again from the result', (tester) async {
     await tester.pumpWidget(_app(_FakeHistory()));
     await tester.pumpAndSettle();

@@ -1201,6 +1201,11 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String englishPlacementFewWords(int words) {
+    return 'Fewer than $words words';
+  }
+
+  @override
   String englishPlacementLevel(String level) {
     return 'Estimated vocabulary level: $level';
   }

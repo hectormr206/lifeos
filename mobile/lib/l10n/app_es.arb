@@ -462,6 +462,7 @@
   "englishPlacementDontKnow": "No la conozco",
   "englishPlacementProgress": "Palabra {count}",
   "englishPlacementWords": "Unas {words} palabras",
+  "englishPlacementFewWords": "Menos de {words} palabras",
   "englishPlacementLevel": "Nivel de vocabulario estimado: {level}",
   "englishPlacementScope": "Mide el vocabulario que reconoces al leer. No mide cómo hablas ni cuánto entiendes al escuchar.",
   "englishPlacementUnreliable": "Marcaste como conocidas varias palabras inventadas, así que este resultado no es fiable. Repite la prueba marcando solo las que sabes qué significan.",
