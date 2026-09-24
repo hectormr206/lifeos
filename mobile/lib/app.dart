@@ -64,6 +64,7 @@ import 'theme/theme_providers.dart';
 import 'package:lifeos/core/graph/graph_providers.dart';
 import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
+import 'package:lifeos/features/english/presentation/english_placement_screen.dart';
 import 'package:lifeos/features/memory/data/birthday_notifications.dart';
 import 'package:lifeos/features/memory/data/birthday_scheduling.dart';
 import 'package:lifeos/features/settings/data/settings_sync.dart';
@@ -174,6 +175,9 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Desahogo: say it, be heard, let it go. Nothing it receives is stored
       // anywhere — see features/confession.
       GoRoute(path: '/desahogo', builder: (context, state) => const ConfessionScreen()),
+      // English: the vocabulary placement. Word bank bundled, results in the
+      // local graph, so NOT pairing-gated.
+      GoRoute(path: '/english', builder: (context, state) => const EnglishPlacementScreen()),
       // App-shell slice: `/settings` is now the offline-reachable Settings hub
       // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
       // exact-match `loc == '/settings'` was removed from the gate above) so the
@@ -729,6 +733,7 @@ const List<String> kLifeosRoutePaths = [
   '/mi-vida',
   '/reminders',
   '/desahogo',
+  '/english',
   '/settings',
   '/settings/local-model',
   '/settings/dictation',

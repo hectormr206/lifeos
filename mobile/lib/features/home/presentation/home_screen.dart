@@ -272,6 +272,16 @@ class _HomeSections extends ConsumerWidget {
           ),
           const SizedBox(height: 12),
 
+          // Learning. English lives on home and not in Settings because it is
+          // meant to be a daily habit, and a habit needs a door you see.
+          _SectionHeader(label: l10n.homeSectionLearn),
+          _NavButton(
+            icon: Icons.translate,
+            label: l10n.homeEnglish,
+            onPressed: () => context.push('/english'),
+          ),
+          const SizedBox(height: 12),
+
           // 3) Notices & summaries.
           _SectionHeader(label: l10n.homeSectionNotices),
           _NavButton(
