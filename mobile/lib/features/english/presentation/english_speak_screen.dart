@@ -9,7 +9,11 @@
 // next to month three.
 //
 // The screen says plainly what the score is NOT: a pronunciation grade.
-// Whisper leans towards the right words when the text is known.
+// Whisper leans towards the right words when the text is known. The sounds
+// themselves come from a second, optional listener: the phone model (ZIPA)
+// hears the same recording and at most two "sounds to practise" show up
+// under the score. Without the model the screen offers it; downloading it
+// analyses the recording just made.
 library;
 
 import 'package:flutter/material.dart';
@@ -20,11 +24,13 @@ import '../../chat/presentation/chat_providers.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../data/passage_speaker.dart';
 import '../data/recordings_repository.dart';
+import '../domain/pron_feedback.dart';
 import '../domain/read_aloud_score.dart';
 import '../domain/reader_tokens.dart';
 import '../data/activity_log.dart';
 import '../domain/daily_plan.dart';
 import 'english_providers.dart';
+import 'english_sound_tips.dart';
 
 /// Sentences worth reading aloud: long enough to say something, short enough
 /// to hold in the ear after one listen (and well inside Whisper's 30-second
@@ -67,6 +73,11 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
   String? _problem;
   ReadAloudScore? _score;
   String _heard = '';
+
+  /// The last recording, kept so a model downloaded afterwards can hear it.
+  String? _recording;
+  List<SoundTip>? _tips;
+  bool _listeningSounds = false;
 
   String get _sentence => _sentences[_index];
 
@@ -135,7 +146,10 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
           _phase = _Phase.scored;
           _score = score;
           _heard = heard;
+          _recording = path;
+          _tips = null;
         });
+        await _listenToSounds();
       }
     } catch (_) {
       if (mounted) {
@@ -147,11 +161,33 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
     }
   }
 
+  /// Runs the phone model over the last recording, when it is installed.
+  Future<void> _listenToSounds() async {
+    final recording = _recording;
+    if (recording == null ||
+        ref.read(pronModelStatusProvider).state != PronModelState.ready) {
+      return;
+    }
+    final sentence = _sentence;
+    setState(() => _listeningSounds = true);
+    final tips =
+        await ref.read(pronunciationCoachProvider).tips(recording, sentence);
+    if (mounted && _recording == recording) {
+      setState(() {
+        _tips = tips;
+        _listeningSounds = false;
+      });
+    }
+  }
+
   void _next() => setState(() {
         _index = (_index + 1) % _sentences.length;
         _phase = _Phase.idle;
         _score = null;
         _problem = null;
+        _recording = null;
+        _tips = null;
+        _listeningSounds = false;
       });
 
   @override
@@ -160,6 +196,14 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
     final theme = Theme.of(context);
     final score = _score;
     final error = theme.colorScheme.error;
+    final soundModel = ref.watch(pronModelStatusProvider);
+    ref.listen(pronModelStatusProvider, (previous, next) {
+      if (previous?.state != PronModelState.ready &&
+          next.state == PronModelState.ready &&
+          _tips == null) {
+        _listenToSounds();
+      }
+    });
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishSpeakTitle)),
@@ -210,6 +254,14 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
                   Text(l10n.englishSpeakHeard(_heard)),
                   const SizedBox(height: 4),
                   Text(l10n.englishSpeakCaveat, style: theme.textTheme.bodySmall),
+                  const SizedBox(height: 16),
+                  SoundTipsSection(
+                    status: soundModel,
+                    tips: _tips,
+                    working: _listeningSounds,
+                    onDownload: () =>
+                        ref.read(pronModelStatusProvider.notifier).download(),
+                  ),
                 ],
                 if (_problem != null) ...[
                   const SizedBox(height: 16),
