@@ -69,6 +69,17 @@ class EnglishHubScreen extends ConsumerWidget {
             onPressed: () => context.push('/english/read'),
             child: Text(l10n.englishReadTitle),
           ),
+          const SizedBox(height: 8),
+          // The count is what is waiting TODAY (due words plus the day's new
+          // ones), so a 0 is an honest "nothing to do", not a broken button.
+          OutlinedButton(
+            onPressed: () async {
+              await context.push('/english/review');
+              if (context.mounted) ref.invalidate(reviewDueCountProvider);
+            },
+            child: Text(l10n.englishReviewButton(
+                ref.watch(reviewDueCountProvider).value ?? 0)),
+          ),
           const SizedBox(height: 32),
           Text(l10n.englishGoalQuestion, style: title),
           const SizedBox(height: 4),

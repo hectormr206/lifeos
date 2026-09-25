@@ -43,7 +43,7 @@ PlacementRecord _placement(int words, CefrLevel cefr) => PlacementRecord(
       ),
     );
 
-Widget _app({PlacementRecord? placement, _FakeGoals? goals}) {
+Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
   final router = GoRouter(
     initialLocation: '/english',
     routes: [
@@ -56,12 +56,17 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals}) {
         path: '/english/read',
         builder: (_, _) => const Scaffold(body: Text('READ')),
       ),
+      GoRoute(
+        path: '/english/review',
+        builder: (_, _) => const Scaffold(body: Text('REVIEW')),
+      ),
     ],
   );
   return ProviderScope(
     overrides: [
       latestPlacementProvider.overrideWith((ref) async => placement),
       englishGoalStoreProvider.overrideWith((ref) async => goals ?? _FakeGoals()),
+      reviewDueCountProvider.overrideWith((ref) async => dueWords),
     ],
     child: MaterialApp.router(
       routerConfig: router,
@@ -150,5 +155,18 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('READ'), findsOneWidget);
+  });
+
+  testWidgets('the review says how many words are waiting today',
+      (tester) async {
+    await tester.pumpWidget(_app(dueWords: 7));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.textContaining('Repasar palabras'));
+    expect(find.textContaining('7'), findsOneWidget);
+    await tester.tap(find.textContaining('Repasar palabras'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('REVIEW'), findsOneWidget);
   });
 }

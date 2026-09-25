@@ -15,6 +15,7 @@ import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/fsrs.dart';
+import '../domain/review_queue.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
 import '../../local_model/presentation/local_model_providers.dart';
@@ -125,3 +126,9 @@ final reviewStoreProvider = FutureProvider<ReviewStore>(
 final fsrsSchedulerProvider = Provider<FsrsScheduler>(
   (ref) => FsrsScheduler.fuzzed(),
 );
+
+/// Words waiting for review right now: the number the English home shows.
+final reviewDueCountProvider = FutureProvider.autoDispose<int>((ref) async {
+  final store = await ref.watch(reviewStoreProvider.future);
+  return buildReviewQueue(await store.all(), DateTime.now()).length;
+});

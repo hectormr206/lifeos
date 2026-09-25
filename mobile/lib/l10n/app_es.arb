@@ -527,5 +527,6 @@
   "englishIntervalYears": "{count, plural, =1{1 año} other{{count} años}}",
   "englishReviewDone": "{count, plural, =1{Listo por hoy. Repasaste 1 palabra.} other{Listo por hoy. Repasaste {count} palabras.}}",
   "englishReviewSaveFailed": "No se pudo guardar este repaso. Inténtalo otra vez.",
-  "englishReviewBack": "Volver"
+  "englishReviewBack": "Volver",
+  "englishReviewButton": "Repasar palabras ({count})"
 }

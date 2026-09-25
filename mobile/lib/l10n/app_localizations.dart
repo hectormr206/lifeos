@@ -2605,6 +2605,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Back'**
   String get englishReviewBack;
+
+  /// No description provided for @englishReviewButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words ({count})'**
+  String englishReviewButton(int count);
 }
 
 class _AppLocalizationsDelegate

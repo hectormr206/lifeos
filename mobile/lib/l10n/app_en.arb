@@ -648,5 +648,7 @@
   "englishReviewDone": "{count, plural, =1{Done for today. You reviewed 1 word.} other{Done for today. You reviewed {count} words.}}",
   "@englishReviewDone": {"placeholders": {"count": {"type": "int"}}},
   "englishReviewSaveFailed": "This review could not be saved. Try again.",
-  "englishReviewBack": "Back"
+  "englishReviewBack": "Back",
+  "englishReviewButton": "Review words ({count})",
+  "@englishReviewButton": {"placeholders": {"count": {"type": "int"}}}
 }

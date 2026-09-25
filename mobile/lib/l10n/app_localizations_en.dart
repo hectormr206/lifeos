@@ -1473,4 +1473,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishReviewBack => 'Back';
+
+  @override
+  String englishReviewButton(int count) {
+    return 'Review words ($count)';
+  }
 }
