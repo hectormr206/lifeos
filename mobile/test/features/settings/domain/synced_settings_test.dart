@@ -36,6 +36,7 @@ void main() {
         // Para qué quiere el inglés: una decisión sobre su vida, no sobre el
         // aparato. Elegida en el teléfono, vale en la laptop.
         'english.goal',
+        'english.phase',
       ]) {
         expect(isSyncedSetting(key), isTrue, reason: '$key debería viajar');
       }
