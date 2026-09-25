@@ -19,6 +19,8 @@ import '../data/english_reminder.dart';
 import '../data/listening_result_repository.dart';
 import '../data/audio_importer.dart';
 import '../data/platform_audio_import.dart';
+import '../data/pron_model.dart';
+import '../data/pronunciation_coach.dart';
 import '../data/sherpa_long_audio_recognizer.dart';
 import '../../stt/presentation/stt_providers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -314,4 +316,71 @@ const String kPronLexiconAsset = 'assets/english/pron_lexicon.txt';
 /// as ARPAbet text and converted per lookup, which keeps the map small.
 final pronLexiconProvider = FutureProvider<PronLexicon>(
   (ref) async => PronLexicon.parse(await rootBundle.loadString(kPronLexiconAsset)),
+);
+
+enum PronModelState { checking, absent, downloading, ready, failed }
+
+class PronModelStatus {
+  const PronModelStatus(this.state, [this.progress = 0]);
+  final PronModelState state;
+
+  /// 0..1 while downloading.
+  final double progress;
+}
+
+/// The phone model files (ZIPA), fetched on first use.
+final pronModelGatewayProvider = Provider<PronModelGateway>(
+  (ref) => BackgroundDownloaderPronModelGateway(),
+);
+
+/// Whether sound tips can be given, and the download that enables them.
+/// Never throws: a failed download lands in [PronModelState.failed].
+final pronModelStatusProvider =
+    NotifierProvider<PronModelNotifier, PronModelStatus>(PronModelNotifier.new);
+
+class PronModelNotifier extends Notifier<PronModelStatus> {
+  Future<void>? _hydration;
+  bool _downloading = false;
+
+  /// Lets tests await the initial probe.
+  Future<void> get ready => _hydration ?? Future<void>.value();
+
+  @override
+  PronModelStatus build() {
+    _hydration = _hydrate();
+    return const PronModelStatus(PronModelState.checking);
+  }
+
+  Future<void> _hydrate() async {
+    final installed = await ref.read(pronModelGatewayProvider).installedModel();
+    if (!_downloading) {
+      state = PronModelStatus(
+          installed == null ? PronModelState.absent : PronModelState.ready);
+    }
+  }
+
+  Future<void> download() async {
+    if (_downloading || state.state == PronModelState.ready) return;
+    _downloading = true;
+    state = const PronModelStatus(PronModelState.downloading);
+    try {
+      await ref.read(pronModelGatewayProvider).download(
+            onProgress: (p) =>
+                state = PronModelStatus(PronModelState.downloading, p),
+          );
+      state = const PronModelStatus(PronModelState.ready);
+    } catch (_) {
+      state = const PronModelStatus(PronModelState.failed);
+    } finally {
+      _downloading = false;
+    }
+  }
+}
+
+/// Recording of a known sentence → sound tips.
+final pronunciationCoachProvider = Provider<PronunciationCoach>(
+  (ref) => PronunciationCoach(
+    ZipaPhoneRecognizer(ref.watch(pronModelGatewayProvider)),
+    () => ref.read(pronLexiconProvider.future),
+  ),
 );
