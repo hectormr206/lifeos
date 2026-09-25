@@ -105,6 +105,10 @@ Map<DateTime, int> _minutesByDay(List<StudyActivity> history) {
 bool _practised(Map<DateTime, int> byDay, DateTime day) =>
     (byDay[day] ?? 0) >= kFloorMinutes;
 
+/// Calendar days with at least [kFloorMinutes] of practice, ever.
+int practisedDays(List<StudyActivity> history) =>
+    _minutesByDay(history).values.where((m) => m >= kFloorMinutes).length;
+
 DayStatus todayStatus(List<StudyActivity> history, {required DateTime now}) {
   final byDay = _minutesByDay(history);
   final today = _day(now);
