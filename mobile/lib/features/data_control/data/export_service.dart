@@ -40,7 +40,19 @@ class ExportService {
     // and leaving them out would make the file disagree with what syncs
     // between the user's own devices.
     final nodes = <GraphNodeRecord>[];
-    for (final kind in const ['fact', 'person', 'conversation', 'reminder']) {
+    for (final kind in const [
+      'fact',
+      'person',
+      'conversation',
+      'reminder',
+      // English learning: levels, saved words, read-aloud attempts and
+      // practice time are the learner's data like any other. (The recordings'
+      // audio stays sealed on its device; this exports the attempts' facts.)
+      'english_placement',
+      'english_word',
+      'english_recording',
+      'english_activity',
+    ]) {
       nodes.addAll(await _store.listNodesByKind(kind, includeDeleted: true));
     }
 

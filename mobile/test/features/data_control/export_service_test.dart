@@ -74,12 +74,21 @@ void main() {
       node('p1', 'person', 'Juan'),
       node('c1', 'conversation', 'hola'),
       node('r1', 'reminder', 'comprar pan'),
+      // The English learning data is the learner's too: levels, saved words,
+      // read-aloud attempts and practice time.
+      node('e1', 'english_placement', 'Vocabulario en inglés: B1'),
+      node('e2', 'english_word', 'sniff'),
+      node('e3', 'english_recording', 'Dogs sniff the ground.'),
+      node('e4', 'english_activity', 'review'),
     ]);
 
     final file = await service(store).writeExport(ExportFormat.json);
     final text = await file.readAsString();
 
-    for (final expected in ['peso 82 kg', 'Juan', 'hola', 'comprar pan']) {
+    for (final expected in [
+      'peso 82 kg', 'Juan', 'hola', 'comprar pan',
+      'Vocabulario en inglés: B1', 'sniff', 'Dogs sniff the ground.', 'review',
+    ]) {
       expect(text, contains(expected), reason: '$expected quedó fuera');
     }
   });
