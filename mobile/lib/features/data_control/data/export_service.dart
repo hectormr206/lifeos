@@ -52,6 +52,7 @@ class ExportService {
       'english_word',
       'english_recording',
       'english_activity',
+      'english_listening',
     ]) {
       nodes.addAll(await _store.listNodesByKind(kind, includeDeleted: true));
     }
