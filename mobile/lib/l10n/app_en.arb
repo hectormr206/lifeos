@@ -591,5 +591,18 @@
   "englishGoalEveryday": "Everyday life",
   "englishGoalEverydayDesc": "Shopping, health, school, conversations.",
   "englishGoalTravel": "Travel",
-  "englishGoalTravelDesc": "Transport, hotels, places, asking for help."
+  "englishGoalTravelDesc": "Transport, hotels, places, asking for help.",
+  "englishFitEasy": "Easy",
+  "englishFitAtLevel": "At your level",
+  "englishFitHard": "Hard",
+  "englishFitLine": "{fit} · you know {percent}% of the words",
+  "@englishFitLine": {"placeholders": {"fit": {"type": "String"}, "percent": {"type": "int"}}},
+  "englishReaderHint": "Tap any word to see what it means here. Underlined words are probably new.",
+  "englishReaderCredit": "Text: {title} ({site}), {license}",
+  "@englishReaderCredit": {"description": "CC BY-SA requires crediting the source with the text.", "placeholders": {"title": {"type": "String"}, "site": {"type": "String"}, "license": {"type": "String"}}},
+  "englishReaderLooking": "Looking up what it means here…",
+  "englishReaderNoGloss": "I couldn't get the meaning. Is the local model downloaded?",
+  "englishReaderSave": "Save for review",
+  "englishReaderSaved": "Saved for review",
+  "englishReaderSaveFailed": "The word could not be saved."
 }

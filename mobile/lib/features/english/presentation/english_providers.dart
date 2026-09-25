@@ -8,6 +8,9 @@ import '../../settings/data/synced_settings_store.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
+import '../data/word_gloss.dart';
+import '../domain/lexical_coverage.dart';
+import '../../local_model/presentation/local_model_providers.dart';
 import '../domain/english_goal.dart';
 import '../domain/vocab_placement_session.dart';
 
@@ -38,4 +41,20 @@ final latestPlacementProvider = FutureProvider<PlacementRecord?>(
 /// The goal as read from storage, refreshed after every choice.
 final englishGoalProvider = FutureProvider<EnglishGoal?>(
   (ref) async => (await ref.watch(englishGoalStoreProvider.future)).read(),
+);
+
+/// The word bank, searchable by any form of a word.
+final wordIndexProvider = FutureProvider<WordIndex>(
+  (ref) async => WordIndex(await ref.watch(vocabBankProvider.future)),
+);
+
+/// Glosses come from the same on-device model as everything else.
+final wordGlosserProvider = Provider<WordGlosser>(
+  (ref) => WordGlosser(ref.watch(localLlmEngineProvider)),
+);
+
+/// Saved words live in the encrypted graph, like placements.
+final wordSaverProvider = FutureProvider<WordSaver>(
+  (ref) async =>
+      SavedWordsRepository(await ref.watch(localGraphStoreProvider.future)),
 );

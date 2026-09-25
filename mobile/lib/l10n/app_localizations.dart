@@ -2335,6 +2335,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Transport, hotels, places, asking for help.'**
   String get englishGoalTravelDesc;
+
+  /// No description provided for @englishFitEasy.
+  ///
+  /// In en, this message translates to:
+  /// **'Easy'**
+  String get englishFitEasy;
+
+  /// No description provided for @englishFitAtLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'At your level'**
+  String get englishFitAtLevel;
+
+  /// No description provided for @englishFitHard.
+  ///
+  /// In en, this message translates to:
+  /// **'Hard'**
+  String get englishFitHard;
+
+  /// No description provided for @englishFitLine.
+  ///
+  /// In en, this message translates to:
+  /// **'{fit} · you know {percent}% of the words'**
+  String englishFitLine(String fit, int percent);
+
+  /// No description provided for @englishReaderHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap any word to see what it means here. Underlined words are probably new.'**
+  String get englishReaderHint;
+
+  /// CC BY-SA requires crediting the source with the text.
+  ///
+  /// In en, this message translates to:
+  /// **'Text: {title} ({site}), {license}'**
+  String englishReaderCredit(String title, String site, String license);
+
+  /// No description provided for @englishReaderLooking.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking up what it means here…'**
+  String get englishReaderLooking;
+
+  /// No description provided for @englishReaderNoGloss.
+  ///
+  /// In en, this message translates to:
+  /// **'I couldn\'t get the meaning. Is the local model downloaded?'**
+  String get englishReaderNoGloss;
+
+  /// No description provided for @englishReaderSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save for review'**
+  String get englishReaderSave;
+
+  /// No description provided for @englishReaderSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved for review'**
+  String get englishReaderSaved;
+
+  /// No description provided for @englishReaderSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The word could not be saved.'**
+  String get englishReaderSaveFailed;
 }
 
 class _AppLocalizationsDelegate

@@ -98,13 +98,24 @@ class SavedWord {
   final List<SavedContext> contexts;
 }
 
-class SavedWordsRepository {
+/// What the reader needs to keep a word. An interface so the screen can be
+/// tested without the encrypted database.
+abstract interface class WordSaver {
+  Future<void> save({
+    required String lemma,
+    required String? gloss,
+    required SavedContext context,
+  });
+}
+
+class SavedWordsRepository implements WordSaver {
   SavedWordsRepository(this._store);
 
   final LocalGraphStore _store;
 
   /// Saves [lemma], or adds [context] to it when it is already saved. A known
   /// gloss is never replaced by a missing one.
+  @override
   Future<void> save({
     required String lemma,
     required String? gloss,

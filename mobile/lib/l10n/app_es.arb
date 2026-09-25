@@ -482,5 +482,16 @@
   "englishGoalEveryday": "Vida diaria",
   "englishGoalEverydayDesc": "Compras, salud, escuela, conversaciones.",
   "englishGoalTravel": "Viajes",
-  "englishGoalTravelDesc": "Transporte, hoteles, lugares, pedir ayuda."
+  "englishGoalTravelDesc": "Transporte, hoteles, lugares, pedir ayuda.",
+  "englishFitEasy": "Fácil",
+  "englishFitAtLevel": "A tu nivel",
+  "englishFitHard": "Difícil",
+  "englishFitLine": "{fit} · conoces el {percent}% de las palabras",
+  "englishReaderHint": "Toca cualquier palabra para ver qué significa aquí. Las subrayadas probablemente son nuevas.",
+  "englishReaderCredit": "Texto: {title} ({site}), {license}",
+  "englishReaderLooking": "Buscando qué significa aquí…",
+  "englishReaderNoGloss": "No pude obtener el significado. ¿Está descargado el modelo local?",
+  "englishReaderSave": "Guardar para repasar",
+  "englishReaderSaved": "Guardada para repasar",
+  "englishReaderSaveFailed": "No se pudo guardar la palabra."
 }

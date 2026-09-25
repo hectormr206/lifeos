@@ -1276,4 +1276,43 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get englishGoalTravelDesc =>
       'Transport, hotels, places, asking for help.';
+
+  @override
+  String get englishFitEasy => 'Easy';
+
+  @override
+  String get englishFitAtLevel => 'At your level';
+
+  @override
+  String get englishFitHard => 'Hard';
+
+  @override
+  String englishFitLine(String fit, int percent) {
+    return '$fit · you know $percent% of the words';
+  }
+
+  @override
+  String get englishReaderHint =>
+      'Tap any word to see what it means here. Underlined words are probably new.';
+
+  @override
+  String englishReaderCredit(String title, String site, String license) {
+    return 'Text: $title ($site), $license';
+  }
+
+  @override
+  String get englishReaderLooking => 'Looking up what it means here…';
+
+  @override
+  String get englishReaderNoGloss =>
+      'I couldn\'t get the meaning. Is the local model downloaded?';
+
+  @override
+  String get englishReaderSave => 'Save for review';
+
+  @override
+  String get englishReaderSaved => 'Saved for review';
+
+  @override
+  String get englishReaderSaveFailed => 'The word could not be saved.';
 }
