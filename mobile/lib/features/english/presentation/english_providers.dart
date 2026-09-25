@@ -3,7 +3,7 @@ library;
 import 'dart:io';
 
 import 'package:flutter/services.dart';
-import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
@@ -15,6 +15,10 @@ import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
+import '../data/english_reminder.dart';
+import '../../reminders/presentation/local_reminders_providers.dart';
+import '../../../l10n/app_localizations.dart';
+import '../../../l10n/locale_providers.dart';
 import '../data/english_phase_store.dart';
 import '../data/passage_speaker.dart';
 import '../data/practice_service.dart';
@@ -24,6 +28,7 @@ import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/daily_plan.dart';
 import '../domain/fsrs.dart';
+import '../domain/milestones.dart';
 import '../domain/review_queue.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
@@ -198,3 +203,40 @@ Future<void> openEnglishScreen(
     ..invalidate(reviewDueCountProvider)
     ..invalidate(latestPlacementProvider);
 }
+
+/// The milestones reached, all measured (see domain/milestones.dart).
+final milestonesProvider = FutureProvider.autoDispose<Set<Milestone>>((ref) async {
+  final activities = await ref.watch(studyActivitiesProvider.future);
+  final words = await (await ref.watch(reviewStoreProvider.future)).all();
+  final recordings = await (await ref.watch(recordingArchiveProvider.future)).all();
+  final placement = await ref.watch(latestPlacementProvider.future);
+  return reachedMilestones(
+    activities: activities,
+    savedWords: words.length,
+    bestIntelligibility: recordings.fold(
+        0.0, (best, r) => r.intelligibility > best ? r.intelligibility : best),
+    placed: placement != null,
+  );
+});
+
+/// The daily English reminder, an ordinary LifeOS reminder.
+final englishReminderProvider = FutureProvider<EnglishReminder>((ref) async {
+  final service = await ref.watch(localRemindersServiceProvider.future);
+  return LocalEnglishReminder(
+    service,
+    text: lookupAppLocalizations(ref.watch(localeProvider)).englishReminderText,
+    knownTexts: {
+      for (final locale in AppLocalizations.supportedLocales)
+        lookupAppLocalizations(locale).englishReminderText,
+    },
+  );
+});
+
+/// Asks for a time; a seam so tests need no dialog.
+final reminderTimePickerProvider =
+    Provider<Future<TimeOfDay?> Function(BuildContext context)>(
+  (ref) => (context) => showTimePicker(
+        context: context,
+        initialTime: const TimeOfDay(hour: 20, minute: 0),
+      ),
+);

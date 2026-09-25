@@ -15,6 +15,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/english_goal.dart';
 import 'english_providers.dart';
+import 'english_milestones_view.dart';
+import 'english_reminder_tile.dart';
 import 'english_today_card.dart';
 import 'english_words_label.dart';
 
@@ -43,7 +45,10 @@ class EnglishHubScreen extends ConsumerWidget {
           // Today's plan first: the habit is the point.
           if (placement != null) ...[
             const EnglishTodayCard(),
-            const SizedBox(height: 24),
+            const SizedBox(height: 8),
+            const EnglishReminderTile(),
+            const EnglishMilestonesView(),
+            const SizedBox(height: 16),
           ],
           Text(l10n.englishHubLevelTitle, style: title),
           const SizedBox(height: 8),

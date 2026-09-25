@@ -575,5 +575,21 @@
   "englishProposeCruise": "Ya es un hábito (día 66). ¿Subimos a 45 minutos al día?",
   "englishProposeYes": "Sí, subir",
   "englishStepBack": "Bajar el ritmo",
-  "englishReassess": "Pasó un mes desde tu última prueba: repítela para ver tu avance."
+  "englishReassess": "Pasó un mes desde tu última prueba: repítela para ver tu avance.",
+  "englishMilestonesTitle": "Logros: {reached} de {total}",
+  "englishMilestonePlaced": "Hiciste tu prueba de nivel",
+  "englishMilestoneFirstReading": "Leíste tu primer pasaje",
+  "englishMilestoneFirstRecording": "Te grabaste leyendo en voz alta",
+  "englishMilestoneFirstConversation": "Tuviste tu primera conversación",
+  "englishMilestoneFirstWriting": "Escribiste y revisaste tu primer texto",
+  "englishMilestoneWords25": "Guardaste 25 palabras",
+  "englishMilestoneUnderstood90": "Se te entendió el 90% al leer en voz alta",
+  "englishMilestoneDays7": "Practicaste 7 días",
+  "englishMilestoneWords100": "Guardaste 100 palabras",
+  "englishMilestoneDays30": "Practicaste 30 días",
+  "englishMilestoneDays66": "Día 66: ya es un hábito",
+  "englishReminderButton": "Recordarme cada día",
+  "englishReminderSet": "Te lo recuerdo cada día a las {time}.",
+  "englishReminderText": "Inglés: tu práctica de hoy",
+  "englishReminderFailed": "No se pudo crear el recordatorio."
 }

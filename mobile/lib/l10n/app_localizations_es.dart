@@ -1656,4 +1656,60 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get englishReassess =>
       'Pasó un mes desde tu última prueba: repítela para ver tu avance.';
+
+  @override
+  String englishMilestonesTitle(int reached, int total) {
+    return 'Logros: $reached de $total';
+  }
+
+  @override
+  String get englishMilestonePlaced => 'Hiciste tu prueba de nivel';
+
+  @override
+  String get englishMilestoneFirstReading => 'Leíste tu primer pasaje';
+
+  @override
+  String get englishMilestoneFirstRecording =>
+      'Te grabaste leyendo en voz alta';
+
+  @override
+  String get englishMilestoneFirstConversation =>
+      'Tuviste tu primera conversación';
+
+  @override
+  String get englishMilestoneFirstWriting =>
+      'Escribiste y revisaste tu primer texto';
+
+  @override
+  String get englishMilestoneWords25 => 'Guardaste 25 palabras';
+
+  @override
+  String get englishMilestoneUnderstood90 =>
+      'Se te entendió el 90% al leer en voz alta';
+
+  @override
+  String get englishMilestoneDays7 => 'Practicaste 7 días';
+
+  @override
+  String get englishMilestoneWords100 => 'Guardaste 100 palabras';
+
+  @override
+  String get englishMilestoneDays30 => 'Practicaste 30 días';
+
+  @override
+  String get englishMilestoneDays66 => 'Día 66: ya es un hábito';
+
+  @override
+  String get englishReminderButton => 'Recordarme cada día';
+
+  @override
+  String englishReminderSet(String time) {
+    return 'Te lo recuerdo cada día a las $time.';
+  }
+
+  @override
+  String get englishReminderText => 'Inglés: tu práctica de hoy';
+
+  @override
+  String get englishReminderFailed => 'No se pudo crear el recordatorio.';
 }

@@ -2893,6 +2893,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'A month since your last test: take it again to see your progress.'**
   String get englishReassess;
+
+  /// No description provided for @englishMilestonesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Milestones: {reached} of {total}'**
+  String englishMilestonesTitle(int reached, int total);
+
+  /// No description provided for @englishMilestonePlaced.
+  ///
+  /// In en, this message translates to:
+  /// **'You took your level test'**
+  String get englishMilestonePlaced;
+
+  /// No description provided for @englishMilestoneFirstReading.
+  ///
+  /// In en, this message translates to:
+  /// **'You read your first passage'**
+  String get englishMilestoneFirstReading;
+
+  /// No description provided for @englishMilestoneFirstRecording.
+  ///
+  /// In en, this message translates to:
+  /// **'You recorded yourself reading aloud'**
+  String get englishMilestoneFirstRecording;
+
+  /// No description provided for @englishMilestoneFirstConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'You had your first conversation'**
+  String get englishMilestoneFirstConversation;
+
+  /// No description provided for @englishMilestoneFirstWriting.
+  ///
+  /// In en, this message translates to:
+  /// **'You wrote and reviewed your first text'**
+  String get englishMilestoneFirstWriting;
+
+  /// No description provided for @englishMilestoneWords25.
+  ///
+  /// In en, this message translates to:
+  /// **'You saved 25 words'**
+  String get englishMilestoneWords25;
+
+  /// No description provided for @englishMilestoneUnderstood90.
+  ///
+  /// In en, this message translates to:
+  /// **'90% understood when reading aloud'**
+  String get englishMilestoneUnderstood90;
+
+  /// No description provided for @englishMilestoneDays7.
+  ///
+  /// In en, this message translates to:
+  /// **'You practised on 7 days'**
+  String get englishMilestoneDays7;
+
+  /// No description provided for @englishMilestoneWords100.
+  ///
+  /// In en, this message translates to:
+  /// **'You saved 100 words'**
+  String get englishMilestoneWords100;
+
+  /// No description provided for @englishMilestoneDays30.
+  ///
+  /// In en, this message translates to:
+  /// **'You practised on 30 days'**
+  String get englishMilestoneDays30;
+
+  /// No description provided for @englishMilestoneDays66.
+  ///
+  /// In en, this message translates to:
+  /// **'Day 66: it is a habit now'**
+  String get englishMilestoneDays66;
+
+  /// No description provided for @englishReminderButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Remind me every day'**
+  String get englishReminderButton;
+
+  /// No description provided for @englishReminderSet.
+  ///
+  /// In en, this message translates to:
+  /// **'I remind you every day at {time}.'**
+  String englishReminderSet(String time);
+
+  /// Also how an existing English reminder is recognised: keep it stable.
+  ///
+  /// In en, this message translates to:
+  /// **'English: today\'s practice'**
+  String get englishReminderText;
+
+  /// No description provided for @englishReminderFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The reminder could not be created.'**
+  String get englishReminderFailed;
 }
 
 class _AppLocalizationsDelegate
