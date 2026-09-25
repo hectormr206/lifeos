@@ -19,6 +19,8 @@ import '../data/passage_speaker.dart';
 import '../domain/practice.dart';
 import '../domain/vocab_placement_scoring.dart';
 import 'english_feedback_view.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 
 /// The level used before any placement: simpler rather than lost.
@@ -46,8 +48,19 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
   bool _reviewed = false;
   PracticeFeedback? _feedback;
 
+  late final ActivityTimer _timer =
+      ActivityTimer(ActivityKind.talk, ref.read(activityLogProvider.future));
+
+  @override
+  void initState() {
+    super.initState();
+    _timer; // starts the clock when the conversation opens
+  }
+
   @override
   void dispose() {
+    // Leaving without the review still counts a conversation that happened.
+    if (_turns.any((t) => t.fromLearner)) _timer.finish();
     _input.dispose();
     super.dispose();
   }
@@ -120,6 +133,7 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
       _reviewed = true;
       _feedback = feedback;
     });
+    _timer.finish();
   }
 
   @override

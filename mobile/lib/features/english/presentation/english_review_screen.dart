@@ -16,6 +16,8 @@ import '../../../l10n/app_localizations.dart';
 import '../domain/fsrs.dart';
 import '../domain/reader_tokens.dart';
 import '../domain/review_queue.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 
 enum IntervalUnit { minutes, hours, days, months, years }
@@ -61,10 +63,21 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
   bool _revealed = false;
   bool _saveFailed = false;
 
+  late final ActivityTimer _timer =
+      ActivityTimer(ActivityKind.review, ref.read(activityLogProvider.future));
+
   @override
   void initState() {
     super.initState();
+    _timer; // starts the clock when the screen opens
     _load();
+  }
+
+  @override
+  void dispose() {
+    // Leaving mid-session still counts what was reviewed.
+    if (_answered > 0) _timer.finish();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -94,6 +107,7 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
       _revealed = false;
       _saveFailed = false;
     });
+    if (_index >= _queue!.length) _timer.finish();
   }
 
   @override

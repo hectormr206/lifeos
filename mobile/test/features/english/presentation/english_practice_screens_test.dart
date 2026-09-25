@@ -2,7 +2,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/english/data/activity_log.dart';
 import 'package:lifeos/features/english/data/practice_service.dart';
+import 'package:lifeos/features/english/domain/daily_plan.dart';
 import 'package:lifeos/features/english/domain/english_goal.dart';
 import 'package:lifeos/features/english/presentation/english_practice_screen.dart';
 import 'package:lifeos/features/english/presentation/english_providers.dart';
@@ -10,9 +12,18 @@ import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
 
-Widget _app({EnglishGoal? goal, String Function(String)? reply}) =>
+class _MemoryLog implements ActivityLog {
+  final List<StudyActivity> recorded = [];
+  @override
+  Future<void> record(StudyActivity activity) async => recorded.add(activity);
+  @override
+  Future<List<StudyActivity>> all() async => recorded;
+}
+
+Widget _app({EnglishGoal? goal, String Function(String)? reply, _MemoryLog? log}) =>
     ProviderScope(
       overrides: [
+        if (log != null) activityLogProvider.overrideWith((ref) async => log),
         englishGoalProvider.overrideWith((ref) async => goal),
         practiceServiceProvider.overrideWithValue(PracticeService(
             FakeLocalLlmEngine(reply: reply ?? (_) => 'NO MISTAKES'))),
@@ -104,5 +115,17 @@ void main() {
     final button = tester.widget<FilledButton>(
         find.ancestor(of: find.text('Revisar'), matching: find.byType(FilledButton)));
     expect(button.onPressed, isNull);
+  });
+
+  testWidgets('a reviewed text counts as writing practice today',
+      (tester) async {
+    final log = _MemoryLog();
+    await tester.pumpWidget(_app(goal: EnglishGoal.work, log: log));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can build it.');
+
+    expect(log.recorded.single.kind, ActivityKind.write);
+    expect(log.recorded.single.minutes, greaterThanOrEqualTo(1));
   });
 }

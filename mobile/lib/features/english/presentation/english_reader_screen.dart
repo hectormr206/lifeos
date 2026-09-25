@@ -29,6 +29,8 @@ import '../data/wikimedia_reading.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
 import '../domain/reader_tokens.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 import 'english_speak_screen.dart';
 
@@ -62,8 +64,19 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
   bool _slow = false;
   StreamSubscription<int>? _speech;
 
+  late final ActivityTimer _timer =
+      ActivityTimer(ActivityKind.read, ref.read(activityLogProvider.future));
+
+  @override
+  void initState() {
+    super.initState();
+    _timer; // starts the clock when the passage opens
+  }
+
   @override
   void dispose() {
+    // Opening and closing at once is not a reading.
+    _timer.finish(atLeast: const Duration(seconds: 30));
     for (final tap in _taps.values) {
       tap.dispose();
     }

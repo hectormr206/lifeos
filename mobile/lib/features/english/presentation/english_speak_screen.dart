@@ -22,6 +22,8 @@ import '../data/passage_speaker.dart';
 import '../data/recordings_repository.dart';
 import '../domain/read_aloud_score.dart';
 import '../domain/reader_tokens.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 
 /// Sentences worth reading aloud: long enough to say something, short enough
@@ -68,6 +70,22 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
 
   String get _sentence => _sentences[_index];
 
+  late final ActivityTimer _timer =
+      ActivityTimer(ActivityKind.speak, ref.read(activityLogProvider.future));
+  bool _recordedAny = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _timer; // starts the clock when the screen opens
+  }
+
+  @override
+  void dispose() {
+    if (_recordedAny) _timer.finish();
+    super.dispose();
+  }
+
   Future<void> _listen() async {
     final voices = await ref.read(installedEnglishVoicesProvider.future);
     final id = pickEnglishVoice(voices.keys.toList(), seed: _index);
@@ -111,6 +129,7 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
         audioPath: path,
         recordedAt: DateTime.now(),
       ));
+      _recordedAny = true;
       if (mounted) {
         setState(() {
           _phase = _Phase.scored;

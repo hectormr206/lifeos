@@ -12,6 +12,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/practice.dart';
 import 'english_feedback_view.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 import 'english_roleplay_screen.dart';
 
@@ -82,6 +84,15 @@ class _EnglishWritingScreenState extends ConsumerState<EnglishWritingScreen> {
   bool _reviewed = false;
   PracticeFeedback? _feedback;
 
+  late final ActivityTimer _timer =
+      ActivityTimer(ActivityKind.write, ref.read(activityLogProvider.future));
+
+  @override
+  void initState() {
+    super.initState();
+    _timer; // starts the clock when the task opens
+  }
+
   @override
   void dispose() {
     _text.dispose();
@@ -98,6 +109,7 @@ class _EnglishWritingScreenState extends ConsumerState<EnglishWritingScreen> {
       _reviewed = true;
       _feedback = feedback;
     });
+    _timer.finish();
   }
 
   @override

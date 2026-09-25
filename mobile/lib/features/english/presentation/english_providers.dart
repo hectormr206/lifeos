@@ -11,6 +11,7 @@ import '../../tts/data/audioplayers_tts_playback.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
+import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
 import '../data/passage_speaker.dart';
 import '../data/practice_service.dart';
@@ -152,4 +153,10 @@ final recordingAudioExistsProvider = Provider<bool Function(String path)>(
 /// Role-plays and reviews run on the same on-device model as everything else.
 final practiceServiceProvider = Provider<PracticeService>(
   (ref) => PracticeService(ref.watch(localLlmEngineProvider)),
+);
+
+/// What the learner did and for how long: the plan and milestones read it.
+final activityLogProvider = FutureProvider<ActivityLog>(
+  (ref) async =>
+      ActivityLogRepository(await ref.watch(localGraphStoreProvider.future)),
 );

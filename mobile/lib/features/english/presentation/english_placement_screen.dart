@@ -16,6 +16,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../../l10n/app_localizations.dart';
 import '../domain/vocab_placement_scoring.dart';
 import '../domain/vocab_placement_session.dart';
+import '../data/activity_log.dart';
+import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 import 'english_words_label.dart';
 
@@ -33,6 +35,14 @@ class _EnglishPlacementScreenState
   VocabPlacementResult? _result;
   int _answered = 0;
   bool _saveFailed = false;
+  late final ActivityTimer _timer = ActivityTimer(
+      ActivityKind.placement, ref.read(activityLogProvider.future));
+
+  @override
+  void initState() {
+    super.initState();
+    _timer; // starts the clock when the screen opens
+  }
 
   void _start(VocabBank bank) => setState(() {
         _session = VocabPlacementSession(bank);
@@ -57,6 +67,7 @@ class _EnglishPlacementScreenState
       final history = await ref.read(placementHistoryProvider.future);
       await history.save(result, takenAt: DateTime.now());
       ref.invalidate(latestPlacementProvider);
+      _timer.finish();
     } catch (_) {
       if (mounted) setState(() => _saveFailed = true);
     }
