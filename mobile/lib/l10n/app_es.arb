@@ -604,5 +604,16 @@
   "englishRealWanted": "¿Qué quisiste decir y no pudiste? Una cosa por línea.",
   "englishRealHowToSay": "¿Cómo lo digo?",
   "englishRealFailed": "No se pudo esta vez. ¿Está descargado el modelo local?",
-  "englishRealEntry": "Preparar o repasar una conversación real"
+  "englishRealEntry": "Preparar o repasar una conversación real",
+  "englishListeningTitle": "Prueba de escucha",
+  "englishListeningIntro": "Escucharás oraciones en inglés, cada vez más difíciles. Escribe lo que entiendas; puedes oír cada una dos veces.",
+  "englishListeningSentence": "Oración {number}",
+  "englishListeningCheck": "Comprobar",
+  "englishListeningNext": "Siguiente",
+  "englishListeningScore": "Llegó el {percent}% de las palabras.",
+  "englishListeningResult": "Tu nivel de escucha estimado: {level}",
+  "englishListeningBeforeA1": "Aún no llegas a A1 de escucha. Es el punto de partida perfecto: con práctica diaria se nota rápido.",
+  "englishListeningCaveat": "Mide una voz sintética clara; con personas reales suele costar un poco más.",
+  "englishListeningMeasure": "Medir tu escucha",
+  "englishListeningLevel": "Escucha: {level}"
 }

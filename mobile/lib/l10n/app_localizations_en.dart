@@ -1749,4 +1749,48 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishRealEntry => 'Prepare or review a real conversation';
+
+  @override
+  String get englishListeningTitle => 'Listening test';
+
+  @override
+  String get englishListeningIntro =>
+      'You will hear sentences in English, harder and harder. Write what you understand; you can hear each one twice.';
+
+  @override
+  String englishListeningSentence(int number) {
+    return 'Sentence $number';
+  }
+
+  @override
+  String get englishListeningCheck => 'Check';
+
+  @override
+  String get englishListeningNext => 'Next';
+
+  @override
+  String englishListeningScore(int percent) {
+    return '$percent% of the words came through.';
+  }
+
+  @override
+  String englishListeningResult(String level) {
+    return 'Your estimated listening level: $level';
+  }
+
+  @override
+  String get englishListeningBeforeA1 =>
+      'You are not at A1 listening yet. It is the perfect starting point: with daily practice it improves fast.';
+
+  @override
+  String get englishListeningCaveat =>
+      'This measures a clear synthetic voice; real people are usually a little harder.';
+
+  @override
+  String get englishListeningMeasure => 'Measure your listening';
+
+  @override
+  String englishListeningLevel(String level) {
+    return 'Listening: $level';
+  }
 }

@@ -36,6 +36,7 @@ class EnglishHubScreen extends ConsumerWidget {
     final title = Theme.of(context).textTheme.titleMedium;
     final placement = ref.watch(latestPlacementProvider).value;
     final goal = ref.watch(englishGoalProvider).value;
+    final listening = ref.watch(latestListeningProvider).value;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishHubTitle)),
@@ -75,6 +76,16 @@ class EnglishHubScreen extends ConsumerWidget {
               child: Text(l10n.englishPlacementRetake),
             ),
           ],
+          const SizedBox(height: 8),
+          // Listening is measured on its own: what is read and what is heard
+          // are often far apart.
+          if (listening != null)
+            Text(l10n.englishListeningLevel(
+                listening.level?.name.toUpperCase() ?? '< A1')),
+          TextButton(
+            onPressed: () => openEnglishScreen(context, ref, '/english/listening'),
+            child: Text(l10n.englishListeningMeasure),
+          ),
           const SizedBox(height: 16),
           // Always offered: the reading list itself says what is missing
           // (level or goal), which is clearer than a button that is greyed out.

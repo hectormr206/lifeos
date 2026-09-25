@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:lifeos/features/english/data/english_goal_store.dart';
 import 'package:lifeos/features/english/data/english_placement_repository.dart';
+import 'package:lifeos/features/english/data/listening_result_repository.dart';
 import 'package:lifeos/features/english/domain/english_goal.dart';
 import 'package:lifeos/features/english/domain/vocab_placement_scoring.dart';
 import 'package:lifeos/features/english/presentation/english_hub_screen.dart';
@@ -43,7 +44,12 @@ PlacementRecord _placement(int words, CefrLevel cefr) => PlacementRecord(
       ),
     );
 
-Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
+Widget _app({
+  PlacementRecord? placement,
+  _FakeGoals? goals,
+  int dueWords = 0,
+  ListeningResult? listening,
+}) {
   final router = GoRouter(
     initialLocation: '/english',
     routes: [
@@ -68,6 +74,10 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
         path: '/english/practice',
         builder: (_, _) => const Scaffold(body: Text('PRACTICE')),
       ),
+      GoRoute(
+        path: '/english/listening',
+        builder: (_, _) => const Scaffold(body: Text('LISTENING')),
+      ),
     ],
   );
   return ProviderScope(
@@ -75,6 +85,7 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
       latestPlacementProvider.overrideWith((ref) async => placement),
       englishGoalStoreProvider.overrideWith((ref) async => goals ?? _FakeGoals()),
       reviewDueCountProvider.overrideWith((ref) async => dueWords),
+      latestListeningProvider.overrideWith((ref) async => listening),
     ],
     child: MaterialApp.router(
       routerConfig: router,
@@ -83,6 +94,13 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
       supportedLocales: AppLocalizations.supportedLocales,
     ),
   );
+}
+
+/// Scrolls the English home down to the goal choice: it sits below the level,
+/// and a list does not build what is off screen.
+Future<void> _showGoals(WidgetTester tester) async {
+  await tester.scrollUntilVisible(find.text('Viajes'), 200);
+  await tester.pumpAndSettle();
 }
 
 /// The goal the radio group shows as chosen. Read from the group, because
@@ -125,6 +143,7 @@ void main() {
     await tester.pumpWidget(_app());
     await tester.pumpAndSettle();
 
+    await _showGoals(tester);
     expect(find.text('¿Para qué quieres el inglés?'), findsOneWidget);
     expect(find.text('Trabajo y clientes'), findsOneWidget);
     expect(find.text('Viajes'), findsOneWidget);
@@ -136,6 +155,7 @@ void main() {
     await tester.pumpWidget(_app(goals: goals));
     await tester.pumpAndSettle();
 
+    await _showGoals(tester);
     await tester.ensureVisible(find.text('Vida diaria'));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Vida diaria'));
@@ -149,6 +169,7 @@ void main() {
       (tester) async {
     await tester.pumpWidget(_app(goals: _FakeGoals(EnglishGoal.travel)));
     await tester.pumpAndSettle();
+    await _showGoals(tester);
 
     expect(_chosen(tester), EnglishGoal.travel);
   });
@@ -203,5 +224,28 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('PRACTICE'), findsOneWidget);
+  });
+
+  testWidgets('listening is measured on its own, one tap away', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Medir tu escucha'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Medir tu escucha'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('LISTENING'), findsOneWidget);
+  });
+
+  testWidgets('a measured listening level is shown next to vocabulary',
+      (tester) async {
+    await tester.pumpWidget(_app(
+      listening: ListeningResult(
+          level: CefrLevel.b1, takenAt: DateTime.utc(2026, 9, 1)),
+    ));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Escucha: B1'), findsOneWidget);
   });
 }

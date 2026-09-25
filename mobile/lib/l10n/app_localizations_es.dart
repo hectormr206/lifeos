@@ -1755,4 +1755,48 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get englishRealEntry => 'Preparar o repasar una conversación real';
+
+  @override
+  String get englishListeningTitle => 'Prueba de escucha';
+
+  @override
+  String get englishListeningIntro =>
+      'Escucharás oraciones en inglés, cada vez más difíciles. Escribe lo que entiendas; puedes oír cada una dos veces.';
+
+  @override
+  String englishListeningSentence(int number) {
+    return 'Oración $number';
+  }
+
+  @override
+  String get englishListeningCheck => 'Comprobar';
+
+  @override
+  String get englishListeningNext => 'Siguiente';
+
+  @override
+  String englishListeningScore(int percent) {
+    return 'Llegó el $percent% de las palabras.';
+  }
+
+  @override
+  String englishListeningResult(String level) {
+    return 'Tu nivel de escucha estimado: $level';
+  }
+
+  @override
+  String get englishListeningBeforeA1 =>
+      'Aún no llegas a A1 de escucha. Es el punto de partida perfecto: con práctica diaria se nota rápido.';
+
+  @override
+  String get englishListeningCaveat =>
+      'Mide una voz sintética clara; con personas reales suele costar un poco más.';
+
+  @override
+  String get englishListeningMeasure => 'Medir tu escucha';
+
+  @override
+  String englishListeningLevel(String level) {
+    return 'Escucha: $level';
+  }
 }

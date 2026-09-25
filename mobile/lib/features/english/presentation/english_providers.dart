@@ -16,6 +16,7 @@ import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_reminder.dart';
+import '../data/listening_result_repository.dart';
 import '../../reminders/presentation/local_reminders_providers.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/locale_providers.dart';
@@ -202,7 +203,8 @@ Future<void> openEnglishScreen(
   ref
     ..invalidate(studyActivitiesProvider)
     ..invalidate(reviewDueCountProvider)
-    ..invalidate(latestPlacementProvider);
+    ..invalidate(latestPlacementProvider)
+    ..invalidate(latestListeningProvider);
 }
 
 /// The milestones reached, all measured (see domain/milestones.dart).
@@ -245,4 +247,15 @@ final reminderTimePickerProvider =
 /// Before and after a real conversation, on the same on-device model.
 final realTalkServiceProvider = Provider<RealTalkService>(
   (ref) => RealTalkService(ref.watch(localLlmEngineProvider)),
+);
+
+/// Listening levels from the dictation placement, in the encrypted graph.
+final listeningResultsProvider = FutureProvider<ListeningResults>(
+  (ref) async =>
+      ListeningResultRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// The latest listening level; null when never measured.
+final latestListeningProvider = FutureProvider.autoDispose<ListeningResult?>(
+  (ref) async => (await ref.watch(listeningResultsProvider.future)).latest(),
 );

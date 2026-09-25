@@ -739,5 +739,20 @@
   "englishRealWanted": "What did you want to say and could not? One thing per line.",
   "englishRealHowToSay": "How do I say it?",
   "englishRealFailed": "It could not be done this time. Is the local model downloaded?",
-  "englishRealEntry": "Prepare or review a real conversation"
+  "englishRealEntry": "Prepare or review a real conversation",
+  "englishListeningTitle": "Listening test",
+  "englishListeningIntro": "You will hear sentences in English, harder and harder. Write what you understand; you can hear each one twice.",
+  "englishListeningSentence": "Sentence {number}",
+  "@englishListeningSentence": {"placeholders": {"number": {"type": "int"}}},
+  "englishListeningCheck": "Check",
+  "englishListeningNext": "Next",
+  "englishListeningScore": "{percent}% of the words came through.",
+  "@englishListeningScore": {"placeholders": {"percent": {"type": "int"}}},
+  "englishListeningResult": "Your estimated listening level: {level}",
+  "@englishListeningResult": {"placeholders": {"level": {"type": "String"}}},
+  "englishListeningBeforeA1": "You are not at A1 listening yet. It is the perfect starting point: with daily practice it improves fast.",
+  "englishListeningCaveat": "This measures a clear synthetic voice; real people are usually a little harder.",
+  "englishListeningMeasure": "Measure your listening",
+  "englishListeningLevel": "Listening: {level}",
+  "@englishListeningLevel": {"placeholders": {"level": {"type": "String"}}}
 }

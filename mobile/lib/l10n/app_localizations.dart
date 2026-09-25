@@ -3067,6 +3067,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Prepare or review a real conversation'**
   String get englishRealEntry;
+
+  /// No description provided for @englishListeningTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening test'**
+  String get englishListeningTitle;
+
+  /// No description provided for @englishListeningIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'You will hear sentences in English, harder and harder. Write what you understand; you can hear each one twice.'**
+  String get englishListeningIntro;
+
+  /// No description provided for @englishListeningSentence.
+  ///
+  /// In en, this message translates to:
+  /// **'Sentence {number}'**
+  String englishListeningSentence(int number);
+
+  /// No description provided for @englishListeningCheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check'**
+  String get englishListeningCheck;
+
+  /// No description provided for @englishListeningNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next'**
+  String get englishListeningNext;
+
+  /// No description provided for @englishListeningScore.
+  ///
+  /// In en, this message translates to:
+  /// **'{percent}% of the words came through.'**
+  String englishListeningScore(int percent);
+
+  /// No description provided for @englishListeningResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Your estimated listening level: {level}'**
+  String englishListeningResult(String level);
+
+  /// No description provided for @englishListeningBeforeA1.
+  ///
+  /// In en, this message translates to:
+  /// **'You are not at A1 listening yet. It is the perfect starting point: with daily practice it improves fast.'**
+  String get englishListeningBeforeA1;
+
+  /// No description provided for @englishListeningCaveat.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures a clear synthetic voice; real people are usually a little harder.'**
+  String get englishListeningCaveat;
+
+  /// No description provided for @englishListeningMeasure.
+  ///
+  /// In en, this message translates to:
+  /// **'Measure your listening'**
+  String get englishListeningMeasure;
+
+  /// No description provided for @englishListeningLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening: {level}'**
+  String englishListeningLevel(String level);
 }
 
 class _AppLocalizationsDelegate
