@@ -1230,4 +1230,50 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishPlacementLoadError => 'The word list could not be loaded.';
+
+  @override
+  String get englishHubTitle => 'English';
+
+  @override
+  String get englishHubLevelTitle => 'Your level';
+
+  @override
+  String get englishHubNoLevel =>
+      'You don\'t know your vocabulary level yet. The test takes a few minutes.';
+
+  @override
+  String get englishHubTakePlacement => 'Take the level test';
+
+  @override
+  String englishHubLevel(String level) {
+    return 'Vocabulary level: $level';
+  }
+
+  @override
+  String get englishGoalQuestion => 'What do you want English for?';
+
+  @override
+  String get englishGoalHint =>
+      'It changes what you read and practise. Your level and your review stay the same.';
+
+  @override
+  String get englishGoalWork => 'Work and clients';
+
+  @override
+  String get englishGoalWorkDesc =>
+      'Technology, proposals, calls with clients.';
+
+  @override
+  String get englishGoalEveryday => 'Everyday life';
+
+  @override
+  String get englishGoalEverydayDesc =>
+      'Shopping, health, school, conversations.';
+
+  @override
+  String get englishGoalTravel => 'Travel';
+
+  @override
+  String get englishGoalTravelDesc =>
+      'Transport, hotels, places, asking for help.';
 }

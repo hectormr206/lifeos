@@ -1,4 +1,4 @@
-// The "Inglés" home row opens the vocabulary placement, on an unpaired device.
+// The "Inglés" home row opens the English home, on an unpaired device.
 //
 // Learning English is a daily activity, so its door is on home, not in
 // Settings. And like everything on home it works on the device's own data:
@@ -13,7 +13,7 @@ import 'package:lifeos/l10n/locale_providers.dart';
 import '../../../support/fake_token_store.dart';
 
 void main() {
-  testWidgets('unpaired: the "Inglés" row opens the vocabulary placement',
+  testWidgets('unpaired: the "Inglés" row opens the English home',
       (tester) async {
     final container = ProviderContainer(overrides: [
       localeProvider.overrideWithValue(const Locale('es')),
@@ -43,7 +43,7 @@ void main() {
     expect(
       find.descendant(
         of: find.byType(AppBar),
-        matching: find.text('Vocabulario en inglés'),
+        matching: find.text('Inglés'),
       ),
       findsOneWidget,
     );

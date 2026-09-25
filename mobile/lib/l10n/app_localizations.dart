@@ -2257,6 +2257,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The word list could not be loaded.'**
   String get englishPlacementLoadError;
+
+  /// No description provided for @englishHubTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get englishHubTitle;
+
+  /// No description provided for @englishHubLevelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your level'**
+  String get englishHubLevelTitle;
+
+  /// No description provided for @englishHubNoLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'You don\'t know your vocabulary level yet. The test takes a few minutes.'**
+  String get englishHubNoLevel;
+
+  /// No description provided for @englishHubTakePlacement.
+  ///
+  /// In en, this message translates to:
+  /// **'Take the level test'**
+  String get englishHubTakePlacement;
+
+  /// No description provided for @englishHubLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Vocabulary level: {level}'**
+  String englishHubLevel(String level);
+
+  /// No description provided for @englishGoalQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'What do you want English for?'**
+  String get englishGoalQuestion;
+
+  /// No description provided for @englishGoalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'It changes what you read and practise. Your level and your review stay the same.'**
+  String get englishGoalHint;
+
+  /// No description provided for @englishGoalWork.
+  ///
+  /// In en, this message translates to:
+  /// **'Work and clients'**
+  String get englishGoalWork;
+
+  /// No description provided for @englishGoalWorkDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Technology, proposals, calls with clients.'**
+  String get englishGoalWorkDesc;
+
+  /// No description provided for @englishGoalEveryday.
+  ///
+  /// In en, this message translates to:
+  /// **'Everyday life'**
+  String get englishGoalEveryday;
+
+  /// No description provided for @englishGoalEverydayDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Shopping, health, school, conversations.'**
+  String get englishGoalEverydayDesc;
+
+  /// No description provided for @englishGoalTravel.
+  ///
+  /// In en, this message translates to:
+  /// **'Travel'**
+  String get englishGoalTravel;
+
+  /// No description provided for @englishGoalTravelDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Transport, hotels, places, asking for help.'**
+  String get englishGoalTravelDesc;
 }
 
 class _AppLocalizationsDelegate

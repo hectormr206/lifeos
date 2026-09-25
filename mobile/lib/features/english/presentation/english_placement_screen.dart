@@ -17,6 +17,7 @@ import '../../../l10n/app_localizations.dart';
 import '../domain/vocab_placement_scoring.dart';
 import '../domain/vocab_placement_session.dart';
 import 'english_providers.dart';
+import 'english_words_label.dart';
 
 class EnglishPlacementScreen extends ConsumerStatefulWidget {
   const EnglishPlacementScreen({super.key});
@@ -157,15 +158,7 @@ class _EnglishPlacementScreenState
     return ListView(
       children: [
         if (result.reliable) ...[
-          // The test measures in bands of a thousand, so below one full band a
-          // count is noise, and "about 0 words" is the worst first message for
-          // someone starting from scratch. Seen on the real Pixel.
-          Text(
-            result.estimatedWords < kBandSize
-                ? l10n.englishPlacementFewWords(kBandSize)
-                : l10n.englishPlacementWords(result.estimatedWords),
-            style: headline,
-          ),
+          Text(englishWordsLabel(l10n, result.estimatedWords), style: headline),
           const SizedBox(height: 8),
           Text(l10n.englishPlacementLevel(result.cefr.name.toUpperCase())),
           const SizedBox(height: 16),

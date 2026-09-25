@@ -1237,4 +1237,50 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get englishPlacementLoadError =>
       'No se pudo cargar la lista de palabras.';
+
+  @override
+  String get englishHubTitle => 'Inglés';
+
+  @override
+  String get englishHubLevelTitle => 'Tu nivel';
+
+  @override
+  String get englishHubNoLevel =>
+      'Aún no sabes tu nivel de vocabulario. La prueba tarda unos minutos.';
+
+  @override
+  String get englishHubTakePlacement => 'Hacer la prueba de nivel';
+
+  @override
+  String englishHubLevel(String level) {
+    return 'Nivel de vocabulario: $level';
+  }
+
+  @override
+  String get englishGoalQuestion => '¿Para qué quieres el inglés?';
+
+  @override
+  String get englishGoalHint =>
+      'Cambia lo que lees y practicas. Tu nivel y tu repaso siguen siendo los mismos.';
+
+  @override
+  String get englishGoalWork => 'Trabajo y clientes';
+
+  @override
+  String get englishGoalWorkDesc =>
+      'Tecnología, propuestas, llamadas con clientes.';
+
+  @override
+  String get englishGoalEveryday => 'Vida diaria';
+
+  @override
+  String get englishGoalEverydayDesc =>
+      'Compras, salud, escuela, conversaciones.';
+
+  @override
+  String get englishGoalTravel => 'Viajes';
+
+  @override
+  String get englishGoalTravelDesc =>
+      'Transporte, hoteles, lugares, pedir ayuda.';
 }

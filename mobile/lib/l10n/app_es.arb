@@ -469,5 +469,18 @@
   "englishPlacementRetake": "Repetir la prueba",
   "englishPlacementDone": "Listo",
   "englishPlacementSaveFailed": "No se pudo guardar el resultado. Lo ves aquí, pero no aparecerá la próxima vez.",
-  "englishPlacementLoadError": "No se pudo cargar la lista de palabras."
+  "englishPlacementLoadError": "No se pudo cargar la lista de palabras.",
+  "englishHubTitle": "Inglés",
+  "englishHubLevelTitle": "Tu nivel",
+  "englishHubNoLevel": "Aún no sabes tu nivel de vocabulario. La prueba tarda unos minutos.",
+  "englishHubTakePlacement": "Hacer la prueba de nivel",
+  "englishHubLevel": "Nivel de vocabulario: {level}",
+  "englishGoalQuestion": "¿Para qué quieres el inglés?",
+  "englishGoalHint": "Cambia lo que lees y practicas. Tu nivel y tu repaso siguen siendo los mismos.",
+  "englishGoalWork": "Trabajo y clientes",
+  "englishGoalWorkDesc": "Tecnología, propuestas, llamadas con clientes.",
+  "englishGoalEveryday": "Vida diaria",
+  "englishGoalEverydayDesc": "Compras, salud, escuela, conversaciones.",
+  "englishGoalTravel": "Viajes",
+  "englishGoalTravelDesc": "Transporte, hoteles, lugares, pedir ayuda."
 }

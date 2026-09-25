@@ -573,5 +573,23 @@
   "englishPlacementRetake": "Take it again",
   "englishPlacementDone": "Done",
   "englishPlacementSaveFailed": "Your result could not be saved. It is still shown here, but it will not appear next time.",
-  "englishPlacementLoadError": "The word list could not be loaded."
+  "englishPlacementLoadError": "The word list could not be loaded.",
+  "englishHubTitle": "English",
+  "englishHubLevelTitle": "Your level",
+  "englishHubNoLevel": "You don't know your vocabulary level yet. The test takes a few minutes.",
+  "englishHubTakePlacement": "Take the level test",
+  "englishHubLevel": "Vocabulary level: {level}",
+  "@englishHubLevel": {
+    "placeholders": {
+      "level": { "type": "String" }
+    }
+  },
+  "englishGoalQuestion": "What do you want English for?",
+  "englishGoalHint": "It changes what you read and practise. Your level and your review stay the same.",
+  "englishGoalWork": "Work and clients",
+  "englishGoalWorkDesc": "Technology, proposals, calls with clients.",
+  "englishGoalEveryday": "Everyday life",
+  "englishGoalEverydayDesc": "Shopping, health, school, conversations.",
+  "englishGoalTravel": "Travel",
+  "englishGoalTravelDesc": "Transport, hotels, places, asking for help."
 }
