@@ -164,6 +164,16 @@ dependencies:
   flutter_timezone: ^4.1.1
   open_filex: ^4.7.0
   image_picker: ^1.2.3
+  # English: importing the learner's own audio or video. file_selector is the
+  # Flutter team's picker (its Linux/macOS/Windows parts were already in the
+  # tree through image_picker). audio_decoder turns mp3/m4a/mp4/ogg/flac into
+  # 16 kHz mono WAV with the platform codecs (Android MediaCodec, Linux
+  # GStreamer), no FFmpeg. PINNED EXACTLY: it is native code from a single
+  # author, reviewed at 0.8.1 (no network, no exec, no permissions on Android;
+  # on Linux the path goes into a GStreamer pipeline string, which is why the
+  # importer only ever hands it a file name of its own).
+  file_selector: ^1.1.0
+  audio_decoder: 0.8.1
   record: ^7.1.1
   audioplayers: ^6.8.1
 

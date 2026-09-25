@@ -17,6 +17,8 @@ import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_reminder.dart';
 import '../data/listening_result_repository.dart';
+import '../data/audio_importer.dart';
+import '../data/platform_audio_import.dart';
 import '../data/sherpa_long_audio_recognizer.dart';
 import '../../stt/presentation/stt_providers.dart';
 import 'package:path_provider/path_provider.dart';
@@ -286,5 +288,19 @@ final longAudioRecognizerProvider = Provider<SherpaLongAudioRecognizer>(
   (ref) => SherpaLongAudioRecognizer(
     ref.watch(sttModelGatewayProvider),
     ref.watch(vadModelPathProvider),
+  ),
+);
+
+/// Picks an audio or video file from the device.
+final audioFilePickerProvider = Provider<AudioFilePicker>(
+  (ref) => FileSelectorAudioPicker(),
+);
+
+/// Imported audio: platform decoder, then VAD and Whisper in an isolate.
+final audioImporterProvider = Provider<AudioImporter>(
+  (ref) => AudioImporter(
+    decoder: PlatformAudioToWav(),
+    recognizer: ref.watch(longAudioRecognizerProvider),
+    workDirectory: getTemporaryDirectory,
   ),
 );
