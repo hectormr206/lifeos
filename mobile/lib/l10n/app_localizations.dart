@@ -2401,6 +2401,66 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The word could not be saved.'**
   String get englishReaderSaveFailed;
+
+  /// No description provided for @englishReadTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Read at your level'**
+  String get englishReadTitle;
+
+  /// The only part of the English feature that leaves the device; say so.
+  ///
+  /// In en, this message translates to:
+  /// **'Readings come from Simple English Wikipedia and Wikivoyage: fetching them needs the internet.'**
+  String get englishReadNote;
+
+  /// No description provided for @englishReadNeedsPlacement.
+  ///
+  /// In en, this message translates to:
+  /// **'First take the level test: that is how I know which texts suit you.'**
+  String get englishReadNeedsPlacement;
+
+  /// No description provided for @englishReadNeedsGoal.
+  ///
+  /// In en, this message translates to:
+  /// **'First choose what you want English for, on the previous screen.'**
+  String get englishReadNeedsGoal;
+
+  /// No description provided for @englishReadLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking for readings at your level…'**
+  String get englishReadLoading;
+
+  /// No description provided for @englishReadRateLimited.
+  ///
+  /// In en, this message translates to:
+  /// **'Wikipedia asked to wait {seconds} seconds. Try again in a moment.'**
+  String englishReadRateLimited(int seconds);
+
+  /// No description provided for @englishReadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'I couldn\'t fetch readings. Is there an internet connection?'**
+  String get englishReadFailed;
+
+  /// No description provided for @englishReadEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'I found no passages this time.'**
+  String get englishReadEmpty;
+
+  /// No description provided for @englishReadAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Find others'**
+  String get englishReadAgain;
+
+  /// No description provided for @englishReadNewWords.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No new words} =1{1 word probably new} other{{count} words probably new}}'**
+  String englishReadNewWords(int count);
 }
 
 class _AppLocalizationsDelegate

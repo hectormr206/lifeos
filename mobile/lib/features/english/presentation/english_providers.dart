@@ -8,6 +8,7 @@ import '../../settings/data/synced_settings_store.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
+import '../data/wikimedia_reading.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
 import '../../local_model/presentation/local_model_providers.dart';
@@ -42,6 +43,26 @@ final latestPlacementProvider = FutureProvider<PlacementRecord?>(
 final englishGoalProvider = FutureProvider<EnglishGoal?>(
   (ref) async => (await ref.watch(englishGoalStoreProvider.future)).read(),
 );
+
+/// Where passages come from: Wikimedia, one polite request at a time.
+final readingSelectorProvider = Provider<ReadingSelector>(
+  (ref) => ReadingSelector(WikimediaArticleSource(DioHttpGetter())),
+);
+
+/// Today's passages for the learner's goal, ranked against their placement.
+/// Only watched once both exist; the screen checks that first.
+final readingListProvider =
+    FutureProvider.autoDispose<List<PickedReading>>((ref) async {
+  final goal = await ref.watch(englishGoalProvider.future);
+  final placement = await ref.watch(latestPlacementProvider.future);
+  final index = await ref.watch(wordIndexProvider.future);
+  if (goal == null || placement == null) return const [];
+  return ref.read(readingSelectorProvider).pick(
+        goal,
+        index,
+        knownByBand: placement.result.knownByBand,
+      );
+});
 
 /// The word bank, searchable by any form of a word.
 final wordIndexProvider = FutureProvider<WordIndex>(

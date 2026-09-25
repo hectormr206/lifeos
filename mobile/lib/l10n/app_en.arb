@@ -604,5 +604,18 @@
   "englishReaderNoGloss": "I couldn't get the meaning. Is the local model downloaded?",
   "englishReaderSave": "Save for review",
   "englishReaderSaved": "Saved for review",
-  "englishReaderSaveFailed": "The word could not be saved."
+  "englishReaderSaveFailed": "The word could not be saved.",
+  "englishReadTitle": "Read at your level",
+  "englishReadNote": "Readings come from Simple English Wikipedia and Wikivoyage: fetching them needs the internet.",
+  "@englishReadNote": {"description": "The only part of the English feature that leaves the device; say so."},
+  "englishReadNeedsPlacement": "First take the level test: that is how I know which texts suit you.",
+  "englishReadNeedsGoal": "First choose what you want English for, on the previous screen.",
+  "englishReadLoading": "Looking for readings at your level…",
+  "englishReadRateLimited": "Wikipedia asked to wait {seconds} seconds. Try again in a moment.",
+  "@englishReadRateLimited": {"placeholders": {"seconds": {"type": "int"}}},
+  "englishReadFailed": "I couldn't fetch readings. Is there an internet connection?",
+  "englishReadEmpty": "I found no passages this time.",
+  "englishReadAgain": "Find others",
+  "englishReadNewWords": "{count, plural, =0{No new words} =1{1 word probably new} other{{count} words probably new}}",
+  "@englishReadNewWords": {"placeholders": {"count": {"type": "int"}}}
 }

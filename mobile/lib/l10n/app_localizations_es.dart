@@ -1322,4 +1322,49 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get englishReaderSaveFailed => 'No se pudo guardar la palabra.';
+
+  @override
+  String get englishReadTitle => 'Leer a tu nivel';
+
+  @override
+  String get englishReadNote =>
+      'Las lecturas vienen de Simple English Wikipedia y Wikivoyage: hace falta internet para traerlas.';
+
+  @override
+  String get englishReadNeedsPlacement =>
+      'Primero haz la prueba de nivel: así sé qué textos son para ti.';
+
+  @override
+  String get englishReadNeedsGoal =>
+      'Primero elige para qué quieres el inglés, en la pantalla anterior.';
+
+  @override
+  String get englishReadLoading => 'Buscando lecturas a tu nivel…';
+
+  @override
+  String englishReadRateLimited(int seconds) {
+    return 'Wikipedia pidió esperar $seconds segundos. Inténtalo en un momento.';
+  }
+
+  @override
+  String get englishReadFailed =>
+      'No pude traer lecturas. ¿Hay conexión a internet?';
+
+  @override
+  String get englishReadEmpty => 'No encontré pasajes esta vez.';
+
+  @override
+  String get englishReadAgain => 'Buscar otras';
+
+  @override
+  String englishReadNewWords(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count palabras probablemente nuevas',
+      one: '1 palabra probablemente nueva',
+      zero: 'Ninguna palabra nueva',
+    );
+    return '$_temp0';
+  }
 }
