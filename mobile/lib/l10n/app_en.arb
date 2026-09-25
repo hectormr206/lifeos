@@ -677,5 +677,14 @@
   "englishWriteReview": "Review",
   "englishReviewing": "Reviewing…",
   "englishFeedbackNone": "No important mistakes. Well done!",
-  "englishFeedbackFailed": "It could not be reviewed this time. Is the local model downloaded? Try again."
+  "englishFeedbackFailed": "It could not be reviewed this time. Is the local model downloaded? Try again.",
+  "englishPracticeTalk": "Talk",
+  "englishTalkGoal": "Your goal: {task}",
+  "@englishTalkGoal": {"placeholders": {"task": {"type": "String"}}},
+  "englishTalkHint": "Write or say your answer in English. The character does not correct you: when you finish, I point out what matters most.",
+  "englishTalkSend": "Send",
+  "englishTalkSpeak": "Speak",
+  "englishTalkDoneSpeaking": "Done",
+  "englishTalkFinish": "Finish and review",
+  "englishTalkNoReply": "The character did not answer. Is the local model downloaded? Try again."
 }

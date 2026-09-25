@@ -551,5 +551,13 @@
   "englishWriteReview": "Revisar",
   "englishReviewing": "Revisando…",
   "englishFeedbackNone": "Sin errores importantes. ¡Bien hecho!",
-  "englishFeedbackFailed": "No se pudo revisar esta vez. ¿Está descargado el modelo local? Inténtalo otra vez."
+  "englishFeedbackFailed": "No se pudo revisar esta vez. ¿Está descargado el modelo local? Inténtalo otra vez.",
+  "englishPracticeTalk": "Conversar",
+  "englishTalkGoal": "Tu objetivo: {task}",
+  "englishTalkHint": "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+  "englishTalkSend": "Enviar",
+  "englishTalkSpeak": "Hablar",
+  "englishTalkDoneSpeaking": "Listo",
+  "englishTalkFinish": "Terminar y revisar",
+  "englishTalkNoReply": "El personaje no respondió. ¿Está descargado el modelo local? Inténtalo otra vez."
 }

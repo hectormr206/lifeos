@@ -1,7 +1,7 @@
 // Practice: what there is to do for the learner's goal.
 //
-// Writing tasks for now; conversations join once their screen exists (no
-// entry here ever leads nowhere). Without a goal it asks for one first, since
+// Conversations (role-plays) and writing tasks, both from the goal. Without a
+// goal it asks for one first, since
 // the goal is what decides whether the practice is a client proposal or a
 // note to a child's school.
 library;
@@ -13,6 +13,7 @@ import '../../../l10n/app_localizations.dart';
 import '../domain/practice.dart';
 import 'english_feedback_view.dart';
 import 'english_providers.dart';
+import 'english_roleplay_screen.dart';
 
 class EnglishPracticeScreen extends ConsumerWidget {
   const EnglishPracticeScreen({super.key});
@@ -35,6 +36,16 @@ class EnglishPracticeScreen extends ConsumerWidget {
       body = ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text(l10n.englishPracticeTalk, style: theme.textTheme.titleMedium),
+          for (final scenario in roleplaysFor(goal.value!))
+            ListTile(
+              title: Text(scenario.title),
+              subtitle: Text(scenario.task),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                builder: (_) => EnglishRoleplayScreen(scenario: scenario),
+              )),
+            ),
+          const SizedBox(height: 16),
           Text(l10n.englishPracticeWrite, style: theme.textTheme.titleMedium),
           for (final task in writingTasksFor(goal.value!))
             ListTile(

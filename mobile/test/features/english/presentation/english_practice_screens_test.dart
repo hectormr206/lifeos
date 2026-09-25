@@ -26,6 +26,7 @@ Widget _app({EnglishGoal? goal, String Function(String)? reply}) =>
     );
 
 Future<void> _write(WidgetTester tester, String text) async {
+  await tester.scrollUntilVisible(find.text('Propuesta para un cliente'), 200);
   await tester.tap(find.text('Propuesta para un cliente'));
   await tester.pumpAndSettle();
   await tester.enterText(find.byType(TextField), text);
@@ -48,7 +49,9 @@ void main() {
     await tester.pumpWidget(_app(goal: EnglishGoal.work));
     await tester.pumpAndSettle();
 
+    expect(find.text('Primera llamada con un cliente'), findsOneWidget);
     expect(find.text('Propuesta para un cliente'), findsOneWidget);
+    expect(find.text('En un restaurante'), findsNothing);
     expect(find.text('Correo a la escuela'), findsNothing);
   });
 
@@ -94,6 +97,7 @@ void main() {
     await tester.pumpWidget(_app(goal: EnglishGoal.work));
     await tester.pumpAndSettle();
 
+    await tester.scrollUntilVisible(find.text('Propuesta para un cliente'), 200);
     await tester.tap(find.text('Propuesta para un cliente'));
     await tester.pumpAndSettle();
 

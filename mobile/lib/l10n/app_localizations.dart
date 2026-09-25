@@ -2749,6 +2749,54 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'It could not be reviewed this time. Is the local model downloaded? Try again.'**
   String get englishFeedbackFailed;
+
+  /// No description provided for @englishPracticeTalk.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk'**
+  String get englishPracticeTalk;
+
+  /// No description provided for @englishTalkGoal.
+  ///
+  /// In en, this message translates to:
+  /// **'Your goal: {task}'**
+  String englishTalkGoal(String task);
+
+  /// No description provided for @englishTalkHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Write or say your answer in English. The character does not correct you: when you finish, I point out what matters most.'**
+  String get englishTalkHint;
+
+  /// No description provided for @englishTalkSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get englishTalkSend;
+
+  /// No description provided for @englishTalkSpeak.
+  ///
+  /// In en, this message translates to:
+  /// **'Speak'**
+  String get englishTalkSpeak;
+
+  /// No description provided for @englishTalkDoneSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get englishTalkDoneSpeaking;
+
+  /// No description provided for @englishTalkFinish.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish and review'**
+  String get englishTalkFinish;
+
+  /// No description provided for @englishTalkNoReply.
+  ///
+  /// In en, this message translates to:
+  /// **'The character did not answer. Is the local model downloaded? Try again.'**
+  String get englishTalkNoReply;
 }
 
 class _AppLocalizationsDelegate

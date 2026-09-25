@@ -1560,4 +1560,32 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get englishFeedbackFailed =>
       'It could not be reviewed this time. Is the local model downloaded? Try again.';
+
+  @override
+  String get englishPracticeTalk => 'Talk';
+
+  @override
+  String englishTalkGoal(String task) {
+    return 'Your goal: $task';
+  }
+
+  @override
+  String get englishTalkHint =>
+      'Write or say your answer in English. The character does not correct you: when you finish, I point out what matters most.';
+
+  @override
+  String get englishTalkSend => 'Send';
+
+  @override
+  String get englishTalkSpeak => 'Speak';
+
+  @override
+  String get englishTalkDoneSpeaking => 'Done';
+
+  @override
+  String get englishTalkFinish => 'Finish and review';
+
+  @override
+  String get englishTalkNoReply =>
+      'The character did not answer. Is the local model downloaded? Try again.';
 }
