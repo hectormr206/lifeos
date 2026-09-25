@@ -17,6 +17,9 @@ import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_reminder.dart';
 import '../data/listening_result_repository.dart';
+import '../data/sherpa_long_audio_recognizer.dart';
+import '../../stt/presentation/stt_providers.dart';
+import 'package:path_provider/path_provider.dart';
 import '../../reminders/presentation/local_reminders_providers.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/locale_providers.dart';
@@ -258,4 +261,30 @@ final listeningResultsProvider = FutureProvider<ListeningResults>(
 /// The latest listening level; null when never measured.
 final latestListeningProvider = FutureProvider.autoDispose<ListeningResult?>(
   (ref) async => (await ref.watch(listeningResultsProvider.future)).latest(),
+);
+
+/// Where the bundled Silero VAD model is written so sherpa-onnx can open it:
+/// the native engine takes a file path, not asset bytes. Rewritten when the
+/// size differs, so an app update that changes the model replaces it.
+const String kVadModelAsset = 'assets/english/silero_vad.int8.onnx';
+
+final vadModelPathProvider = Provider<Future<String> Function()>(
+  (ref) => () async {
+    final bytes = await rootBundle.load(kVadModelAsset);
+    final dir = await getApplicationSupportDirectory();
+    final file = File('${dir.path}/english/silero_vad.int8.onnx');
+    if (!file.existsSync() || file.lengthSync() != bytes.lengthInBytes) {
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    }
+    return file.path;
+  },
+);
+
+/// Voice activity detection plus Whisper over imported audio, in an isolate.
+final longAudioRecognizerProvider = Provider<SherpaLongAudioRecognizer>(
+  (ref) => SherpaLongAudioRecognizer(
+    ref.watch(sttModelGatewayProvider),
+    ref.watch(vadModelPathProvider),
+  ),
 );

@@ -33,3 +33,14 @@ published test.
 The CEFR level the app reports comes from the vocabulary-size table in Milton &
 Alexiou (2009). Only its thresholds are used, in code, with the citation next to
 them. No data from that paper is in this file.
+
+## silero_vad.int8.onnx
+
+Silero VAD, the voice activity detector used to cut imported audio into
+speech chunks before transcription. MIT License, Copyright (c) 2020-present
+Silero Team (https://github.com/snakers4/silero-vad). This is the 8-bit,
+16 kHz ONNX export published by k2-fsa for sherpa-onnx
+(https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models), SHA-256
+`c36d490aff5ab924ca6c7aeec4d8f6bd3d22db6fa17611b9c5b17eae58ac3a20`. It ships
+inside the app, so every device has the same model.
+
