@@ -1841,4 +1841,138 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get englishImportNothingHeard => 'No se oyó voz en ese archivo.';
+
+  @override
+  String get englishSoundsTitle => 'Sonidos para practicar';
+
+  @override
+  String get englishSoundsNone => 'Ningún sonido que practicar en esta frase.';
+
+  @override
+  String get englishSoundsWorking => 'Escuchando los sonidos…';
+
+  @override
+  String englishSoundsHeard(String words, String heard, String expected) {
+    return 'En $words: se oyó [$heard] en lugar de [$expected].';
+  }
+
+  @override
+  String englishSoundsMissing(String words, String expected) {
+    return 'En $words: no se oyó [$expected].';
+  }
+
+  @override
+  String get englishSoundsCaveat =>
+      'Orientativo: el análisis de sonidos también se equivoca, sobre todo con nombres propios.';
+
+  @override
+  String get englishSoundsDownload =>
+      'Analizar los sonidos (descarga de 71 MB, solo con Wi-Fi)';
+
+  @override
+  String englishSoundsDownloading(int percent) {
+    return 'Descargando el análisis de sonidos… $percent%';
+  }
+
+  @override
+  String get englishSoundsFailed =>
+      'No se pudo descargar el análisis de sonidos.';
+
+  @override
+  String get englishTipShortITitle => 'La i corta de ship';
+
+  @override
+  String get englishTipShortIHow =>
+      'Relaja la boca: un sonido corto entre i y e. «ship» no es «sheep».';
+
+  @override
+  String get englishTipCatVowelTitle => 'La a de cat';
+
+  @override
+  String get englishTipCatVowelHow =>
+      'Abre mucho la boca, entre a y e, con la lengua baja y hacia adelante.';
+
+  @override
+  String get englishTipVAsBTitle => 'La v de very';
+
+  @override
+  String get englishTipVAsBHow =>
+      'Apoya los dientes de arriba en el labio de abajo y deja que vibre: no juntes los labios.';
+
+  @override
+  String get englishTipThVoicelessTitle => 'La th de think';
+
+  @override
+  String get englishTipThVoicelessHow =>
+      'Saca la punta de la lengua entre los dientes y sopla, sin voz: ni t ni s.';
+
+  @override
+  String get englishTipEBeforeSTitle => 'Sin «e» antes de la s';
+
+  @override
+  String get englishTipEBeforeSHow =>
+      'Empieza directo con la s: «speak», no «espeak». Alargarla ayuda: «sss-peak».';
+
+  @override
+  String get englishTipZAsSTitle => 'La z que zumba';
+
+  @override
+  String get englishTipZAsSHow =>
+      'Como una s, pero con voz: si tocas tu garganta, debe vibrar.';
+
+  @override
+  String get englishTipThVoicedTitle => 'La th de the';
+
+  @override
+  String get englishTipThVoicedHow =>
+      'La lengua entre los dientes, con voz, vibrando. No es d ni t.';
+
+  @override
+  String get englishTipCupVowelTitle => 'La vocal de cup';
+
+  @override
+  String get englishTipCupVowelHow =>
+      'Una a corta y relajada, en el centro de la boca; no leas la u como u.';
+
+  @override
+  String get englishTipBookVowelTitle => 'La u corta de book';
+
+  @override
+  String get englishTipBookVowelHow =>
+      'Más corta y relajada que la u del español, sin redondear tanto los labios.';
+
+  @override
+  String get englishTipShSoundTitle => 'La sh de shop';
+
+  @override
+  String get englishTipShSoundHow =>
+      'Labios hacia afuera y un soplo continuo, como para pedir silencio: shhh. Ni ch ni s.';
+
+  @override
+  String get englishTipJSoundTitle => 'La j de job';
+
+  @override
+  String get englishTipJSoundHow =>
+      'Una «ch» con voz, d más sh: no es «y» ni jota.';
+
+  @override
+  String get englishTipHAsJotaTitle => 'La h de hello';
+
+  @override
+  String get englishTipHAsJotaHow =>
+      'Solo aire, suave, como al empañar un vidrio; sin raspar la garganta.';
+
+  @override
+  String get englishTipFinalSoundTitle => 'El sonido final';
+
+  @override
+  String get englishTipFinalSoundHow =>
+      'Termina la palabra: el último sonido cambia el significado (cat, cap, can).';
+
+  @override
+  String get englishTipSpanishRTitle => 'La r del inglés';
+
+  @override
+  String get englishTipSpanishRHow =>
+      'La lengua no toca el paladar: enróscala un poco hacia atrás, sin vibrar.';
 }

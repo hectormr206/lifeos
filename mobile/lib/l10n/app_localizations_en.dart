@@ -1835,4 +1835,138 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishImportNothingHeard => 'No speech was heard in that file.';
+
+  @override
+  String get englishSoundsTitle => 'Sounds to practise';
+
+  @override
+  String get englishSoundsNone => 'No sound to practise in this sentence.';
+
+  @override
+  String get englishSoundsWorking => 'Listening to the sounds…';
+
+  @override
+  String englishSoundsHeard(String words, String heard, String expected) {
+    return 'In $words: [$heard] was heard instead of [$expected].';
+  }
+
+  @override
+  String englishSoundsMissing(String words, String expected) {
+    return 'In $words: [$expected] was not heard.';
+  }
+
+  @override
+  String get englishSoundsCaveat =>
+      'A guide: the sound analysis makes mistakes too, especially with names.';
+
+  @override
+  String get englishSoundsDownload =>
+      'Analyse the sounds (71 MB download, Wi-Fi only)';
+
+  @override
+  String englishSoundsDownloading(int percent) {
+    return 'Downloading the sound analysis… $percent%';
+  }
+
+  @override
+  String get englishSoundsFailed =>
+      'The sound analysis could not be downloaded.';
+
+  @override
+  String get englishTipShortITitle => 'The short i of ship';
+
+  @override
+  String get englishTipShortIHow =>
+      'Relax your mouth: a short sound between i and e. \"ship\" is not \"sheep\".';
+
+  @override
+  String get englishTipCatVowelTitle => 'The a of cat';
+
+  @override
+  String get englishTipCatVowelHow =>
+      'Open your mouth wide, between a and e, tongue low and forward.';
+
+  @override
+  String get englishTipVAsBTitle => 'The v of very';
+
+  @override
+  String get englishTipVAsBHow =>
+      'Rest your top teeth on your lower lip and let it buzz: do not close your lips.';
+
+  @override
+  String get englishTipThVoicelessTitle => 'The th of think';
+
+  @override
+  String get englishTipThVoicelessHow =>
+      'Tongue tip between your teeth, and blow, without voice: not t, not s.';
+
+  @override
+  String get englishTipEBeforeSTitle => 'No \"e\" before the s';
+
+  @override
+  String get englishTipEBeforeSHow =>
+      'Start straight on the s: \"speak\", not \"espeak\". Stretching it helps: \"sss-peak\".';
+
+  @override
+  String get englishTipZAsSTitle => 'The buzzing z';
+
+  @override
+  String get englishTipZAsSHow =>
+      'Like an s, with voice: touch your throat, it should vibrate.';
+
+  @override
+  String get englishTipThVoicedTitle => 'The th of the';
+
+  @override
+  String get englishTipThVoicedHow =>
+      'Tongue between your teeth, with voice, buzzing. Not d, not t.';
+
+  @override
+  String get englishTipCupVowelTitle => 'The vowel of cup';
+
+  @override
+  String get englishTipCupVowelHow =>
+      'A short, relaxed a in the middle of the mouth; do not read the u as u.';
+
+  @override
+  String get englishTipBookVowelTitle => 'The short u of book';
+
+  @override
+  String get englishTipBookVowelHow =>
+      'Shorter and more relaxed than a Spanish u, lips less rounded.';
+
+  @override
+  String get englishTipShSoundTitle => 'The sh of shop';
+
+  @override
+  String get englishTipShSoundHow =>
+      'Lips pushed out and a steady breath, as when asking for silence: shhh. Not ch, not s.';
+
+  @override
+  String get englishTipJSoundTitle => 'The j of job';
+
+  @override
+  String get englishTipJSoundHow =>
+      'A voiced \"ch\", d plus sh: not a Spanish y or j.';
+
+  @override
+  String get englishTipHAsJotaTitle => 'The h of hello';
+
+  @override
+  String get englishTipHAsJotaHow =>
+      'Only breath, soft, as when fogging a window; no scraping in the throat.';
+
+  @override
+  String get englishTipFinalSoundTitle => 'The final sound';
+
+  @override
+  String get englishTipFinalSoundHow =>
+      'Finish the word: the last sound changes the meaning (cat, cap, can).';
+
+  @override
+  String get englishTipSpanishRTitle => 'The English r';
+
+  @override
+  String get englishTipSpanishRHow =>
+      'The tongue does not touch the roof of the mouth: curl it back a little, no trill.';
 }

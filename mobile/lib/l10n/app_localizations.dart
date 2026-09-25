@@ -3205,6 +3205,228 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No speech was heard in that file.'**
   String get englishImportNothingHeard;
+
+  /// No description provided for @englishSoundsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sounds to practise'**
+  String get englishSoundsTitle;
+
+  /// No description provided for @englishSoundsNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No sound to practise in this sentence.'**
+  String get englishSoundsNone;
+
+  /// No description provided for @englishSoundsWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening to the sounds…'**
+  String get englishSoundsWorking;
+
+  /// No description provided for @englishSoundsHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'In {words}: [{heard}] was heard instead of [{expected}].'**
+  String englishSoundsHeard(String words, String heard, String expected);
+
+  /// No description provided for @englishSoundsMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'In {words}: [{expected}] was not heard.'**
+  String englishSoundsMissing(String words, String expected);
+
+  /// No description provided for @englishSoundsCaveat.
+  ///
+  /// In en, this message translates to:
+  /// **'A guide: the sound analysis makes mistakes too, especially with names.'**
+  String get englishSoundsCaveat;
+
+  /// No description provided for @englishSoundsDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Analyse the sounds (71 MB download, Wi-Fi only)'**
+  String get englishSoundsDownload;
+
+  /// No description provided for @englishSoundsDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the sound analysis… {percent}%'**
+  String englishSoundsDownloading(int percent);
+
+  /// No description provided for @englishSoundsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The sound analysis could not be downloaded.'**
+  String get englishSoundsFailed;
+
+  /// No description provided for @englishTipShortITitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The short i of ship'**
+  String get englishTipShortITitle;
+
+  /// No description provided for @englishTipShortIHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Relax your mouth: a short sound between i and e. \"ship\" is not \"sheep\".'**
+  String get englishTipShortIHow;
+
+  /// No description provided for @englishTipCatVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The a of cat'**
+  String get englishTipCatVowelTitle;
+
+  /// No description provided for @englishTipCatVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Open your mouth wide, between a and e, tongue low and forward.'**
+  String get englishTipCatVowelHow;
+
+  /// No description provided for @englishTipVAsBTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The v of very'**
+  String get englishTipVAsBTitle;
+
+  /// No description provided for @englishTipVAsBHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Rest your top teeth on your lower lip and let it buzz: do not close your lips.'**
+  String get englishTipVAsBHow;
+
+  /// No description provided for @englishTipThVoicelessTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The th of think'**
+  String get englishTipThVoicelessTitle;
+
+  /// No description provided for @englishTipThVoicelessHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Tongue tip between your teeth, and blow, without voice: not t, not s.'**
+  String get englishTipThVoicelessHow;
+
+  /// No description provided for @englishTipEBeforeSTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No \"e\" before the s'**
+  String get englishTipEBeforeSTitle;
+
+  /// No description provided for @englishTipEBeforeSHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Start straight on the s: \"speak\", not \"espeak\". Stretching it helps: \"sss-peak\".'**
+  String get englishTipEBeforeSHow;
+
+  /// No description provided for @englishTipZAsSTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The buzzing z'**
+  String get englishTipZAsSTitle;
+
+  /// No description provided for @englishTipZAsSHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Like an s, with voice: touch your throat, it should vibrate.'**
+  String get englishTipZAsSHow;
+
+  /// No description provided for @englishTipThVoicedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The th of the'**
+  String get englishTipThVoicedTitle;
+
+  /// No description provided for @englishTipThVoicedHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Tongue between your teeth, with voice, buzzing. Not d, not t.'**
+  String get englishTipThVoicedHow;
+
+  /// No description provided for @englishTipCupVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The vowel of cup'**
+  String get englishTipCupVowelTitle;
+
+  /// No description provided for @englishTipCupVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'A short, relaxed a in the middle of the mouth; do not read the u as u.'**
+  String get englishTipCupVowelHow;
+
+  /// No description provided for @englishTipBookVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The short u of book'**
+  String get englishTipBookVowelTitle;
+
+  /// No description provided for @englishTipBookVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Shorter and more relaxed than a Spanish u, lips less rounded.'**
+  String get englishTipBookVowelHow;
+
+  /// No description provided for @englishTipShSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The sh of shop'**
+  String get englishTipShSoundTitle;
+
+  /// No description provided for @englishTipShSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Lips pushed out and a steady breath, as when asking for silence: shhh. Not ch, not s.'**
+  String get englishTipShSoundHow;
+
+  /// No description provided for @englishTipJSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The j of job'**
+  String get englishTipJSoundTitle;
+
+  /// No description provided for @englishTipJSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'A voiced \"ch\", d plus sh: not a Spanish y or j.'**
+  String get englishTipJSoundHow;
+
+  /// No description provided for @englishTipHAsJotaTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The h of hello'**
+  String get englishTipHAsJotaTitle;
+
+  /// No description provided for @englishTipHAsJotaHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Only breath, soft, as when fogging a window; no scraping in the throat.'**
+  String get englishTipHAsJotaHow;
+
+  /// No description provided for @englishTipFinalSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The final sound'**
+  String get englishTipFinalSoundTitle;
+
+  /// No description provided for @englishTipFinalSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish the word: the last sound changes the meaning (cat, cap, can).'**
+  String get englishTipFinalSoundHow;
+
+  /// No description provided for @englishTipSpanishRTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The English r'**
+  String get englishTipSpanishRTitle;
+
+  /// No description provided for @englishTipSpanishRHow.
+  ///
+  /// In en, this message translates to:
+  /// **'The tongue does not touch the roof of the mouth: curl it back a little, no trill.'**
+  String get englishTipSpanishRHow;
 }
 
 class _AppLocalizationsDelegate
