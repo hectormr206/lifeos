@@ -1,7 +1,8 @@
 // The English home: where you stand, and what you want English for.
 //
-// Two things and nothing else yet, because a button that leads nowhere is
-// worse than no button. The level comes from the latest reliable placement;
+// Its level, its goal, and the way into reading. Nothing that leads nowhere:
+// a button without a destination is worse than no button. The level comes
+// from the latest reliable placement;
 // with none, the screen says "you don't know yet" and offers the test instead
 // of showing an invented A1. The goal is one choice per person (one
 // installation is one person), and it changes what they will read and
@@ -61,6 +62,13 @@ class EnglishHubScreen extends ConsumerWidget {
               child: Text(l10n.englishPlacementRetake),
             ),
           ],
+          const SizedBox(height: 16),
+          // Always offered: the reading list itself says what is missing
+          // (level or goal), which is clearer than a button that is greyed out.
+          FilledButton.tonal(
+            onPressed: () => context.push('/english/read'),
+            child: Text(l10n.englishReadTitle),
+          ),
           const SizedBox(height: 32),
           Text(l10n.englishGoalQuestion, style: title),
           const SizedBox(height: 4),

@@ -52,6 +52,10 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals}) {
         path: '/english/placement',
         builder: (_, _) => const Scaffold(body: Text('PLACEMENT')),
       ),
+      GoRoute(
+        path: '/english/read',
+        builder: (_, _) => const Scaffold(body: Text('READ')),
+      ),
     ],
   );
   return ProviderScope(
@@ -132,5 +136,19 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(_chosen(tester), EnglishGoal.travel);
+  });
+
+  testWidgets('reading at your level is one tap away', (tester) async {
+    await tester.pumpWidget(_app(
+      placement: _placement(2900, CefrLevel.b1),
+      goals: _FakeGoals(EnglishGoal.work),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Leer a tu nivel'));
+    await tester.tap(find.text('Leer a tu nivel'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('READ'), findsOneWidget);
   });
 }
