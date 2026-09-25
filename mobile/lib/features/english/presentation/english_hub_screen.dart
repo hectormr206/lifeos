@@ -80,6 +80,11 @@ class EnglishHubScreen extends ConsumerWidget {
             child: Text(l10n.englishReviewButton(
                 ref.watch(reviewDueCountProvider).value ?? 0)),
           ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () => context.push('/english/recordings'),
+            child: Text(l10n.englishRecordingsTitle),
+          ),
           const SizedBox(height: 32),
           Text(l10n.englishGoalQuestion, style: title),
           const SizedBox(height: 4),

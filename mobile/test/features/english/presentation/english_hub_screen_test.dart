@@ -60,6 +60,10 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
         path: '/english/review',
         builder: (_, _) => const Scaffold(body: Text('REVIEW')),
       ),
+      GoRoute(
+        path: '/english/recordings',
+        builder: (_, _) => const Scaffold(body: Text('RECORDINGS')),
+      ),
     ],
   );
   return ProviderScope(
@@ -168,5 +172,16 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('REVIEW'), findsOneWidget);
+  });
+
+  testWidgets('your recordings are one tap away', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Tus grabaciones'));
+    await tester.tap(find.text('Tus grabaciones'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('RECORDINGS'), findsOneWidget);
   });
 }

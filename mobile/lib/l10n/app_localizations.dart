@@ -2677,6 +2677,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Next sentence'**
   String get englishSpeakNext;
+
+  /// No description provided for @englishRecordingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your recordings'**
+  String get englishRecordingsTitle;
+
+  /// No description provided for @englishRecordingsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No recordings yet. In the reader, tap “Read aloud”.'**
+  String get englishRecordingsEmpty;
+
+  /// No description provided for @englishRecordingsProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'First month: {first}% · Last month: {last}%'**
+  String englishRecordingsProgress(int first, int last);
+
+  /// No description provided for @englishRecordingsPlay.
+  ///
+  /// In en, this message translates to:
+  /// **'Play'**
+  String get englishRecordingsPlay;
+
+  /// No description provided for @englishRecordingsElsewhere.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio is on the other device where you recorded it.'**
+  String get englishRecordingsElsewhere;
 }
 
 class _AppLocalizationsDelegate

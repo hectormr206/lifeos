@@ -539,5 +539,10 @@
   "englishSpeakCaveat": "Mide si se te entendió, no tu acento.",
   "englishSpeakNoMic": "Hace falta permiso para usar el micrófono.",
   "englishSpeakSttFailed": "No se pudo transcribir. ¿Está descargado el modelo de voz?",
-  "englishSpeakNext": "Siguiente oración"
+  "englishSpeakNext": "Siguiente oración",
+  "englishRecordingsTitle": "Tus grabaciones",
+  "englishRecordingsEmpty": "Aún no hay grabaciones. En el lector, toca «Practicar en voz alta».",
+  "englishRecordingsProgress": "Primer mes: {first}% · Último mes: {last}%",
+  "englishRecordingsPlay": "Reproducir",
+  "englishRecordingsElsewhere": "El audio está en el otro dispositivo donde grabaste."
 }

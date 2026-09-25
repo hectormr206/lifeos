@@ -1,5 +1,7 @@
 library;
 
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -138,4 +140,10 @@ final reviewDueCountProvider = FutureProvider.autoDispose<int>((ref) async {
 final recordingArchiveProvider = FutureProvider<RecordingArchive>(
   (ref) async =>
       RecordingsRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// Whether a recording's sealed audio is on THIS device. Audio is never
+/// synced; only the attempt's facts are.
+final recordingAudioExistsProvider = Provider<bool Function(String path)>(
+  (ref) => (path) => File(path).existsSync(),
 );

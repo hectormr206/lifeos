@@ -664,5 +664,11 @@
   "@englishSpeakCaveat": {"description": "Whisper leans towards the right words for a known text: never claim this is a pronunciation score."},
   "englishSpeakNoMic": "Using the microphone needs permission.",
   "englishSpeakSttFailed": "It could not be transcribed. Is the voice model downloaded?",
-  "englishSpeakNext": "Next sentence"
+  "englishSpeakNext": "Next sentence",
+  "englishRecordingsTitle": "Your recordings",
+  "englishRecordingsEmpty": "No recordings yet. In the reader, tap “Read aloud”.",
+  "englishRecordingsProgress": "First month: {first}% · Last month: {last}%",
+  "@englishRecordingsProgress": {"placeholders": {"first": {"type": "int"}, "last": {"type": "int"}}},
+  "englishRecordingsPlay": "Play",
+  "englishRecordingsElsewhere": "The audio is on the other device where you recorded it."
 }

@@ -1518,4 +1518,23 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishSpeakNext => 'Next sentence';
+
+  @override
+  String get englishRecordingsTitle => 'Your recordings';
+
+  @override
+  String get englishRecordingsEmpty =>
+      'No recordings yet. In the reader, tap “Read aloud”.';
+
+  @override
+  String englishRecordingsProgress(int first, int last) {
+    return 'First month: $first% · Last month: $last%';
+  }
+
+  @override
+  String get englishRecordingsPlay => 'Play';
+
+  @override
+  String get englishRecordingsElsewhere =>
+      'The audio is on the other device where you recorded it.';
 }
