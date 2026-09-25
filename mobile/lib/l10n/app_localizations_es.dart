@@ -1799,4 +1799,46 @@ class AppLocalizationsEs extends AppLocalizations {
   String englishListeningLevel(String level) {
     return 'Escucha: $level';
   }
+
+  @override
+  String get englishImportTitle => 'Tu audio o video';
+
+  @override
+  String get englishImportAction => 'Importar audio o video';
+
+  @override
+  String get englishImportIntro =>
+      'Elige un podcast, una charla o un video en inglés. Se transcribe aquí, en tu dispositivo: el archivo no sale de él. Se usan hasta 20 minutos.';
+
+  @override
+  String get englishImportPick => 'Elegir archivo';
+
+  @override
+  String get englishImportPreparing => 'Preparando el audio…';
+
+  @override
+  String englishImportProgress(int done, int total) {
+    return 'Transcribiendo… $done de $total';
+  }
+
+  @override
+  String get englishImportSource => 'tu archivo';
+
+  @override
+  String get englishImportLicense => 'transcrito en tu dispositivo';
+
+  @override
+  String get englishImportUnsupported =>
+      'Ese archivo no es de audio o video que se pueda leer (mp3, m4a, mp4, ogg, flac, wav…).';
+
+  @override
+  String get englishImportCannotDecode =>
+      'No se pudo leer el audio de ese archivo.';
+
+  @override
+  String get englishImportNoModel =>
+      'Falta el modelo de voz. Descárgalo en Ajustes → Voz.';
+
+  @override
+  String get englishImportNothingHeard => 'No se oyó voz en ese archivo.';
 }

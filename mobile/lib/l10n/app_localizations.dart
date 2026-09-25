@@ -3133,6 +3133,78 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Listening: {level}'**
   String englishListeningLevel(String level);
+
+  /// No description provided for @englishImportTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your audio or video'**
+  String get englishImportTitle;
+
+  /// No description provided for @englishImportAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Import audio or video'**
+  String get englishImportAction;
+
+  /// No description provided for @englishImportIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a podcast, a talk or a video in English. It is transcribed here, on your device: the file never leaves it. Up to 20 minutes are used.'**
+  String get englishImportIntro;
+
+  /// No description provided for @englishImportPick.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a file'**
+  String get englishImportPick;
+
+  /// No description provided for @englishImportPreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing the audio…'**
+  String get englishImportPreparing;
+
+  /// No description provided for @englishImportProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing… {done} of {total}'**
+  String englishImportProgress(int done, int total);
+
+  /// No description provided for @englishImportSource.
+  ///
+  /// In en, this message translates to:
+  /// **'your file'**
+  String get englishImportSource;
+
+  /// No description provided for @englishImportLicense.
+  ///
+  /// In en, this message translates to:
+  /// **'transcribed on your device'**
+  String get englishImportLicense;
+
+  /// No description provided for @englishImportUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'That file is not audio or video that can be read (mp3, m4a, mp4, ogg, flac, wav…).'**
+  String get englishImportUnsupported;
+
+  /// No description provided for @englishImportCannotDecode.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio in that file could not be read.'**
+  String get englishImportCannotDecode;
+
+  /// No description provided for @englishImportNoModel.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice model is missing. Download it in Settings → Voice.'**
+  String get englishImportNoModel;
+
+  /// No description provided for @englishImportNothingHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'No speech was heard in that file.'**
+  String get englishImportNothingHeard;
 }
 
 class _AppLocalizationsDelegate

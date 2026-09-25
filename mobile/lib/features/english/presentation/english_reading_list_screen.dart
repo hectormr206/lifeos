@@ -15,6 +15,7 @@ import '../../../l10n/app_localizations.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/lexical_coverage.dart';
 import 'english_providers.dart';
+import 'english_import_screen.dart';
 import 'english_reader_screen.dart';
 
 class EnglishReadingListScreen extends ConsumerWidget {
@@ -41,7 +42,19 @@ class EnglishReadingListScreen extends ConsumerWidget {
       body = _List(l10n: l10n);
     }
     return Scaffold(
-      appBar: AppBar(title: Text(l10n.englishReadTitle)),
+      appBar: AppBar(
+        title: Text(l10n.englishReadTitle),
+        actions: [
+          // The learner's own podcasts and videos: real people, chosen topics.
+          IconButton(
+            tooltip: l10n.englishImportAction,
+            icon: const Icon(Icons.upload_file),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => const EnglishImportScreen(),
+            )),
+          ),
+        ],
+      ),
       body: Padding(padding: const EdgeInsets.all(24), child: body),
     );
   }

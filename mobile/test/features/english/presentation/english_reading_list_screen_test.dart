@@ -155,4 +155,15 @@ void main() {
     expect(find.textContaining('No encontré'), findsOneWidget);
     expect(find.text('Buscar otras'), findsOneWidget);
   });
+
+  testWidgets('your own audio or video can be imported from here',
+      (tester) async {
+    await tester.pumpWidget(_app(placement: _placement, goal: EnglishGoal.everyday));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Importar audio o video'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Tu audio o video'), findsOneWidget);
+  });
 }

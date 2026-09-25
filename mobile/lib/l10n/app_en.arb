@@ -754,5 +754,18 @@
   "englishListeningCaveat": "This measures a clear synthetic voice; real people are usually a little harder.",
   "englishListeningMeasure": "Measure your listening",
   "englishListeningLevel": "Listening: {level}",
-  "@englishListeningLevel": {"placeholders": {"level": {"type": "String"}}}
+  "@englishListeningLevel": {"placeholders": {"level": {"type": "String"}}},
+  "englishImportTitle": "Your audio or video",
+  "englishImportAction": "Import audio or video",
+  "englishImportIntro": "Choose a podcast, a talk or a video in English. It is transcribed here, on your device: the file never leaves it. Up to 20 minutes are used.",
+  "englishImportPick": "Choose a file",
+  "englishImportPreparing": "Preparing the audio…",
+  "englishImportProgress": "Transcribing… {done} of {total}",
+  "@englishImportProgress": {"placeholders": {"done": {"type": "int"}, "total": {"type": "int"}}},
+  "englishImportSource": "your file",
+  "englishImportLicense": "transcribed on your device",
+  "englishImportUnsupported": "That file is not audio or video that can be read (mp3, m4a, mp4, ogg, flac, wav…).",
+  "englishImportCannotDecode": "The audio in that file could not be read.",
+  "englishImportNoModel": "The voice model is missing. Download it in Settings → Voice.",
+  "englishImportNothingHeard": "No speech was heard in that file."
 }

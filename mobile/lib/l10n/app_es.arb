@@ -615,5 +615,17 @@
   "englishListeningBeforeA1": "Aún no llegas a A1 de escucha. Es el punto de partida perfecto: con práctica diaria se nota rápido.",
   "englishListeningCaveat": "Mide una voz sintética clara; con personas reales suele costar un poco más.",
   "englishListeningMeasure": "Medir tu escucha",
-  "englishListeningLevel": "Escucha: {level}"
+  "englishListeningLevel": "Escucha: {level}",
+  "englishImportTitle": "Tu audio o video",
+  "englishImportAction": "Importar audio o video",
+  "englishImportIntro": "Elige un podcast, una charla o un video en inglés. Se transcribe aquí, en tu dispositivo: el archivo no sale de él. Se usan hasta 20 minutos.",
+  "englishImportPick": "Elegir archivo",
+  "englishImportPreparing": "Preparando el audio…",
+  "englishImportProgress": "Transcribiendo… {done} de {total}",
+  "englishImportSource": "tu archivo",
+  "englishImportLicense": "transcrito en tu dispositivo",
+  "englishImportUnsupported": "Ese archivo no es de audio o video que se pueda leer (mp3, m4a, mp4, ogg, flac, wav…).",
+  "englishImportCannotDecode": "No se pudo leer el audio de ese archivo.",
+  "englishImportNoModel": "Falta el modelo de voz. Descárgalo en Ajustes → Voz.",
+  "englishImportNothingHeard": "No se oyó voz en ese archivo."
 }
