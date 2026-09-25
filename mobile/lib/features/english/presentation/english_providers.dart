@@ -39,6 +39,7 @@ import '../domain/milestones.dart';
 import '../domain/review_queue.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
+import '../domain/pron_lexicon.dart';
 import '../../local_model/presentation/local_model_providers.dart';
 import '../domain/english_goal.dart';
 import '../domain/vocab_placement_session.dart';
@@ -303,4 +304,14 @@ final audioImporterProvider = Provider<AudioImporter>(
     recognizer: ref.watch(longAudioRecognizerProvider),
     workDirectory: getTemporaryDirectory,
   ),
+);
+
+/// Expected sounds of ~64k English words (CMUdict, trimmed; see
+/// tool/english/build_pron_lexicon.py).
+const String kPronLexiconAsset = 'assets/english/pron_lexicon.txt';
+
+/// Parsed once, when pronunciation feedback is first needed. Entries are kept
+/// as ARPAbet text and converted per lookup, which keeps the map small.
+final pronLexiconProvider = FutureProvider<PronLexicon>(
+  (ref) async => PronLexicon.parse(await rootBundle.loadString(kPronLexiconAsset)),
 );
