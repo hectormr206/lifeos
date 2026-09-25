@@ -48,7 +48,12 @@ class PhoneResult {
 }
 
 class WordSounds {
-  const WordSounds({required this.text, required this.judged, required this.phones});
+  const WordSounds({
+    required this.text,
+    required this.judged,
+    required this.phones,
+    this.weak = false,
+  });
 
   /// As written in the sentence.
   final String text;
@@ -57,6 +62,10 @@ class WordSounds {
   final bool judged;
 
   final List<PhoneResult> phones;
+
+  /// A function word or a contraction: nearly always said in a reduced form,
+  /// so judged leniently and a poor source of tips.
+  final bool weak;
 }
 
 class PronunciationCheck {
@@ -228,7 +237,11 @@ PronunciationCheck checkPronunciation({
       continue;
     }
     final function = _functionWords.contains(words[w].toLowerCase());
-    results.add(WordSounds(text: words[w], judged: true, phones: [
+    results.add(WordSounds(
+        text: words[w],
+        judged: true,
+        weak: function || words[w].contains(RegExp("['’]")),
+        phones: [
       for (var p = 0; p < phones.length; p++)
         PhoneResult(
           phone: phones[p].phone,
