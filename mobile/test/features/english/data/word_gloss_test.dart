@@ -9,6 +9,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/graph/local_graph_schema.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
 import 'package:lifeos/features/english/data/word_gloss.dart';
+import 'package:lifeos/features/english/domain/fsrs.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
@@ -123,6 +124,51 @@ void main() {
           context: context('The cat sniffed.'));
 
       expect((await words.all()).single.gloss, 'olfatear');
+    });
+    test('a review is kept with the word: its card, count and first day',
+        () async {
+      await words.save(lemma: 'sniff', gloss: 'olfatear',
+          context: context('Dogs sniff the ground.'));
+      final uuid = (await words.all()).single.uuid;
+      final at = DateTime.utc(2026, 9, 25, 12);
+      final card = FsrsScheduler()
+          .review(FsrsCard.newCard(at), FsrsRating.good, at);
+
+      await words.recordReview(uuid, card, at: at);
+      await words.recordReview(uuid, card, at: at.add(const Duration(days: 1)));
+
+      final word = (await words.all()).single;
+      expect(word.card!.stability, card.stability);
+      expect(word.card!.due, card.due);
+      expect(word.card!.state, card.state);
+      expect(word.reviews, 2);
+      expect(word.firstReviewAt, at, reason: 'the first day is set once');
+    });
+
+    test('saving a word again never loses its review progress', () async {
+      await words.save(lemma: 'sniff', gloss: 'olfatear',
+          context: context('Dogs sniff the ground.'));
+      final uuid = (await words.all()).single.uuid;
+      final at = DateTime.utc(2026, 9, 25, 12);
+      await words.recordReview(uuid,
+          FsrsScheduler().review(FsrsCard.newCard(at), FsrsRating.good, at),
+          at: at);
+
+      await words.save(lemma: 'sniff', gloss: 'olfatear',
+          context: context('The cat sniffed.'));
+
+      final word = (await words.all()).single;
+      expect(word.card, isNotNull);
+      expect(word.reviews, 1);
+    });
+
+    test('a word never reviewed has no card yet', () async {
+      await words.save(lemma: 'sniff', gloss: null,
+          context: context('Dogs sniff.'));
+
+      final word = (await words.all()).single;
+      expect(word.card, isNull);
+      expect(word.reviews, 0);
     });
   });
 }

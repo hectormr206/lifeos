@@ -18,6 +18,7 @@ import 'dart:convert';
 import '../../../core/graph/graph_records.dart';
 import '../../../core/graph/local_graph_store.dart';
 import '../../local_model/domain/local_llm_engine.dart';
+import '../domain/fsrs.dart';
 
 /// A gloss longer than this is cut: it has to fit on a card.
 const int kMaxGlossChars = 80;
@@ -86,16 +87,31 @@ class SavedContext {
 
 class SavedWord {
   const SavedWord({
+    required this.uuid,
     required this.lemma,
     required this.gloss,
     required this.contexts,
+    this.card,
+    this.reviews = 0,
+    this.firstReviewAt,
   });
 
+  /// The graph node it lives in.
+  final String uuid;
   final String lemma;
   final String? gloss;
 
   /// Oldest first.
   final List<SavedContext> contexts;
+
+  /// Its FSRS memory state; null until the first review.
+  final FsrsCard? card;
+
+  /// Reviews so far: also picks which saved sentence the next one shows.
+  final int reviews;
+
+  /// When it was first reviewed: new words are capped per day.
+  final DateTime? firstReviewAt;
 }
 
 /// What the reader needs to keep a word. An interface so the screen can be
@@ -138,13 +154,36 @@ class SavedWordsRepository implements WordSaver {
       context,
     ];
     await _store.upsertNode(existing.copyWith(
-      data: _data(
-        gloss: gloss ?? word.gloss,
-        contexts: contexts.length > kMaxSavedContexts
-            ? contexts.sublist(contexts.length - kMaxSavedContexts)
-            : contexts,
-      ),
+      data: {
+        // Review progress travels with the word: saving it again from a new
+        // sentence must never reset what the learner already built.
+        ...existing.data,
+        ..._data(
+          gloss: gloss ?? word.gloss,
+          contexts: contexts.length > kMaxSavedContexts
+              ? contexts.sublist(contexts.length - kMaxSavedContexts)
+              : contexts,
+        ),
+      },
     ));
+  }
+
+  /// Stores the card after a review, counts it, and remembers the first day.
+  Future<void> recordReview(
+    String uuid,
+    FsrsCard card, {
+    required DateTime at,
+  }) async {
+    final node = await _store.getNodeByUuid(uuid);
+    if (node == null) return;
+    final word = _fromNode(node);
+    await _store.upsertNode(node.copyWith(data: {
+      ...node.data,
+      'fsrs': _cardToJson(card),
+      'reviews': (word?.reviews ?? 0) + 1,
+      'firstReviewAt':
+          (word?.firstReviewAt ?? at).toUtc().toIso8601String(),
+    }));
   }
 
   Future<List<SavedWord>> all() async => [
@@ -179,9 +218,14 @@ SavedWord? _fromNode(GraphNodeRecord node) {
   final contexts = data['contexts'];
   if (contexts is! List) return null;
   final gloss = data['gloss'];
+  final reviews = data['reviews'];
   return SavedWord(
+    uuid: node.uuid,
     lemma: node.label,
     gloss: gloss is String ? gloss : null,
+    card: _cardFromJson(data['fsrs']),
+    reviews: reviews is int ? reviews : 0,
+    firstReviewAt: DateTime.tryParse('${data['firstReviewAt']}'),
     contexts: [
       for (final c in contexts)
         if (c is Map && c['sentence'] is String)
@@ -190,5 +234,34 @@ SavedWord? _fromNode(GraphNodeRecord node) {
             source: '${c['source'] ?? ''}',
           ),
     ],
+  );
+}
+
+Map<String, Object?> _cardToJson(FsrsCard card) => {
+      'state': card.state.name,
+      'step': card.step,
+      'stability': card.stability,
+      'difficulty': card.difficulty,
+      'due': card.due.toUtc().toIso8601String(),
+      'lastReview': card.lastReview?.toUtc().toIso8601String(),
+    };
+
+/// Null for a word never reviewed, or for a card this version cannot read:
+/// it then starts over as new rather than being scheduled from garbage.
+FsrsCard? _cardFromJson(Object? json) {
+  if (json is! Map) return null;
+  final state = FsrsState.values.asNameMap()[json['state']];
+  final due = DateTime.tryParse('${json['due']}');
+  final step = json['step'];
+  final stability = json['stability'];
+  final difficulty = json['difficulty'];
+  if (state == null || due == null) return null;
+  return FsrsCard(
+    state: state,
+    step: step is int ? step : null,
+    stability: stability is num ? stability.toDouble() : null,
+    difficulty: difficulty is num ? difficulty.toDouble() : null,
+    due: due,
+    lastReview: DateTime.tryParse('${json['lastReview']}'),
   );
 }
