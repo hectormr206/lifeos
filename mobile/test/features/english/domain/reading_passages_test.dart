@@ -51,6 +51,17 @@ void main() {
       }
     });
 
+    test('a long paragraph after a short one is cut, not glued on', () {
+      // Found against the live API: Simple Wikipedia "Computer" gave a
+      // 323-word passage, a 100-word paragraph plus a 223-word one.
+      final long = List.filled(8, '${words(28)}.').join(' ');
+      final text = '${words(100)}.\n$long';
+
+      for (final passage in splitPassages(text)) {
+        expect(passage.wordCount, lessThanOrEqualTo(kPassageMaxWords));
+      }
+    });
+
     test('section headings become the passage section, not its text', () {
       final text = '== History ==\n${words(130)}.';
 

@@ -92,7 +92,13 @@ List<Passage> splitPassages(String text) {
       section = name;
       continue;
     }
-    if (_count(line) > kPassageMaxWords) {
+    // A paragraph that does not fit goes in sentence by sentence, so the cut
+    // lands inside it. Needed both for one very long paragraph and for a long
+    // one after a short passage that has not reached its minimum yet (the
+    // live API gave a 323-word passage before this).
+    final n = _count(line);
+    final fits = words + n <= kPassageMaxWords;
+    if (n > kPassageMaxWords || (!fits && words < kPassageMinWords)) {
       for (final sentence in _sentence.allMatches(line)) {
         add(sentence.group(0)!.trim());
       }
