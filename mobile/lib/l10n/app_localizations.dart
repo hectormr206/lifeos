@@ -2461,6 +2461,42 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'{count, plural, =0{No new words} =1{1 word probably new} other{{count} words probably new}}'**
   String englishReadNewWords(int count);
+
+  /// No description provided for @englishListen.
+  ///
+  /// In en, this message translates to:
+  /// **'Listen'**
+  String get englishListen;
+
+  /// No description provided for @englishListenStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get englishListenStop;
+
+  /// No description provided for @englishListenSlow.
+  ///
+  /// In en, this message translates to:
+  /// **'Slower'**
+  String get englishListenSlow;
+
+  /// No description provided for @englishListenNoVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening needs an English voice. Download one in Settings → Voice.'**
+  String get englishListenNoVoice;
+
+  /// No description provided for @englishListenGetVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Open'**
+  String get englishListenGetVoice;
+
+  /// No description provided for @englishListenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be read aloud.'**
+  String get englishListenFailed;
 }
 
 class _AppLocalizationsDelegate

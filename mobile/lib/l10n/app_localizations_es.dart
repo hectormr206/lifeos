@@ -1367,4 +1367,23 @@ class AppLocalizationsEs extends AppLocalizations {
     );
     return '$_temp0';
   }
+
+  @override
+  String get englishListen => 'Escuchar';
+
+  @override
+  String get englishListenStop => 'Detener';
+
+  @override
+  String get englishListenSlow => 'Más lento';
+
+  @override
+  String get englishListenNoVoice =>
+      'Para escuchar hace falta una voz en inglés. Descárgala en Ajustes → Voz.';
+
+  @override
+  String get englishListenGetVoice => 'Abrir';
+
+  @override
+  String get englishListenFailed => 'No se pudo leer en voz alta.';
 }

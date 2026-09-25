@@ -5,6 +5,10 @@
 // attention to a form helps it get noticed and learned (textual enhancement),
 // and it tells the learner at a glance that there are only a few.
 //
+// "Escuchar" reads it aloud with one of the installed English voices, sentence
+// by sentence, highlighting the sentence being spoken; "Más lento" slows it to
+// the learner pace. With no English voice installed it says how to get one.
+//
 // A tap asks the on-device model what the word means in THAT sentence. When
 // the model cannot answer, the sheet says so instead of guessing. "Guardar
 // para repasar" keeps the dictionary form with the sentence and its source,
@@ -12,11 +16,15 @@
 // as CC BY-SA requires.
 library;
 
+import 'dart:async';
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../data/passage_speaker.dart';
 import '../data/wikimedia_reading.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
@@ -41,12 +49,83 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
       if (_tokens[i].isWord) i: TapGestureRecognizer()..onTap = () => _open(i),
   };
 
+  /// The sentences of the passage, in order, each once.
+  late final List<String> _sentences = <String>{
+    for (final t in _tokens)
+      if (t.isWord && t.sentence.isNotEmpty) t.sentence,
+  }.toList();
+
+  /// The sentence being spoken, or null when not listening.
+  String? _speaking;
+  bool _listening = false;
+  bool _slow = false;
+  StreamSubscription<int>? _speech;
+
   @override
   void dispose() {
     for (final tap in _taps.values) {
       tap.dispose();
     }
+    // The provider stops the speaker when it is disposed with this screen;
+    // the subscription is only released here, never awaited.
+    unawaited(_speech?.cancel());
     super.dispose();
+  }
+
+  Future<void> _listen() async {
+    final l10n = AppLocalizations.of(context);
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.maybeOf(context);
+    final voices = await ref.read(installedEnglishVoicesProvider.future);
+    final text = widget.reading.ranked.passage.text;
+    final id = pickEnglishVoice(
+      voices.keys.toList(),
+      seed: text.codeUnits.fold(0, (h, c) => (h * 31 + c) & 0x7fffffff),
+    );
+    if (!mounted) return;
+    if (id == null) {
+      messenger.showSnackBar(SnackBar(
+        content: Text(l10n.englishListenNoVoice),
+        action: router == null
+            ? null
+            : SnackBarAction(
+                label: l10n.englishListenGetVoice,
+                onPressed: () => router.push('/settings/voice/catalog'),
+              ),
+      ));
+      return;
+    }
+    setState(() => _listening = true);
+    _speech = ref
+        .read(passageSpeakerProvider)
+        .speak(_sentences, voice: voices[id]!, speed: _slow ? kSlowSpeed : 1.0)
+        .listen(
+          (i) => setState(() => _speaking = _sentences[i]),
+          onError: (Object _) {
+            messenger.showSnackBar(
+                SnackBar(content: Text(l10n.englishListenFailed)));
+            _stopped();
+          },
+          onDone: _stopped,
+        );
+  }
+
+  void _stopped() {
+    if (mounted) {
+      setState(() {
+        _listening = false;
+        _speaking = null;
+      });
+    }
+  }
+
+  /// The speaker is stopped FIRST: cancelling an `async*` stream waits for it
+  /// to leave its current await, and that await is waiting for the stop. The
+  /// other order deadlocks (the test caught it).
+  Future<void> _stop() async {
+    await ref.read(passageSpeakerProvider).stop();
+    await _speech?.cancel();
+    _stopped();
   }
 
   void _open(int i) {
@@ -78,8 +157,30 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
     bool isNew(String word) =>
         unknown.contains(index?.lemmaOf(word) ?? word.toLowerCase());
 
+    final highlight = theme.colorScheme.secondaryContainer;
+    // Watched, not just read: the speaker is autoDispose, and only a watch
+    // keeps it (and its player) alive while this reader is open. With `read`
+    // alone Riverpod could release it mid-sentence. Its onDispose stops the
+    // voice when the reader closes.
+    ref.watch(passageSpeakerProvider);
+
     return Scaffold(
-      appBar: AppBar(title: Text(reading.article.title)),
+      appBar: AppBar(
+        title: Text(reading.article.title),
+        actions: [
+          IconButton(
+            tooltip: l10n.englishListenSlow,
+            isSelected: _slow,
+            icon: const Icon(Icons.slow_motion_video),
+            onPressed: () => setState(() => _slow = !_slow),
+          ),
+          IconButton(
+            tooltip: _listening ? l10n.englishListenStop : l10n.englishListen,
+            icon: Icon(_listening ? Icons.stop : Icons.volume_up),
+            onPressed: _listening ? _stop : _listen,
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
@@ -104,9 +205,15 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
                   TextSpan(
                     text: _tokens[i].text,
                     recognizer: _taps[i],
-                    style: _tokens[i].isWord && isNew(_tokens[i].text)
-                        ? const TextStyle(decoration: TextDecoration.underline)
-                        : null,
+                    style: TextStyle(
+                      decoration: _tokens[i].isWord && isNew(_tokens[i].text)
+                          ? TextDecoration.underline
+                          : null,
+                      backgroundColor: _tokens[i].isWord &&
+                              _tokens[i].sentence == _speaking
+                          ? highlight
+                          : null,
+                    ),
                   ),
               ],
             ),

@@ -6,63 +6,23 @@
 // one plays, and the screen told which sentence is playing so it can follow
 // along in the text.
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/english/data/passage_speaker.dart';
-import 'package:lifeos/features/tts/domain/piper_speech_synthesizer.dart';
-import 'package:lifeos/features/tts/domain/tts_playback.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
 
-class _FakeSynth implements PiperSpeechSynthesizer {
-  final List<String> texts = [];
-  final List<double> speeds = [];
-  String? failOn;
-
-  @override
-  Future<SynthesizedAudio> synthesize({
-    required TtsVoicePaths voice,
-    required String text,
-    double speed = 1.0,
-  }) async {
-    texts.add(text);
-    speeds.add(speed);
-    if (text == failOn) throw Exception('synthesis failed');
-    return SynthesizedAudio(samples: Float32List(8), sampleRate: 22050);
-  }
-}
-
-class _FakePlayback implements TtsPlayback {
-  final _ends = StreamController<void>.broadcast();
-  int plays = 0;
-  int stops = 0;
-
-  /// Ends the current sentence, as the player would.
-  void finish() => _ends.add(null);
-
-  @override
-  Future<void> play(Uint8List wavBytes) async => plays++;
-
-  @override
-  Future<void> stop() async => stops++;
-
-  @override
-  Stream<void> get completions => _ends.stream;
-
-  @override
-  Future<void> dispose() => _ends.close();
-}
+import '../support/fake_speech.dart';
 
 const _voice = TtsVoicePaths(model: 'm', tokens: 't', dataDir: 'd');
 
 void main() {
-  late _FakeSynth synth;
-  late _FakePlayback playback;
+  late FakeSynth synth;
+  late FakePlayback playback;
   late PassageSpeaker speaker;
 
   setUp(() {
-    synth = _FakeSynth();
-    playback = _FakePlayback();
+    synth = FakeSynth();
+    playback = FakePlayback();
     speaker = PassageSpeaker(synthesizer: synth, playback: playback);
   });
 

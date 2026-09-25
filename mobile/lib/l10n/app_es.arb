@@ -503,5 +503,11 @@
   "englishReadFailed": "No pude traer lecturas. ¿Hay conexión a internet?",
   "englishReadEmpty": "No encontré pasajes esta vez.",
   "englishReadAgain": "Buscar otras",
-  "englishReadNewWords": "{count, plural, =0{Ninguna palabra nueva} =1{1 palabra probablemente nueva} other{{count} palabras probablemente nuevas}}"
+  "englishReadNewWords": "{count, plural, =0{Ninguna palabra nueva} =1{1 palabra probablemente nueva} other{{count} palabras probablemente nuevas}}",
+  "englishListen": "Escuchar",
+  "englishListenStop": "Detener",
+  "englishListenSlow": "Más lento",
+  "englishListenNoVoice": "Para escuchar hace falta una voz en inglés. Descárgala en Ajustes → Voz.",
+  "englishListenGetVoice": "Abrir",
+  "englishListenFailed": "No se pudo leer en voz alta."
 }

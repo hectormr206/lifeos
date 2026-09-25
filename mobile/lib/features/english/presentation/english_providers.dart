@@ -5,7 +5,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
 import '../../settings/data/synced_settings_store.dart';
+import '../../tts/data/audioplayers_tts_playback.dart';
+import '../../tts/domain/tts_voice.dart';
+import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/english_goal_store.dart';
+import '../data/passage_speaker.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
@@ -79,3 +84,32 @@ final wordSaverProvider = FutureProvider<WordSaver>(
   (ref) async =>
       SavedWordsRepository(await ref.watch(localGraphStoreProvider.future)),
 );
+
+/// The English voices from the catalog that are installed on this device, by
+/// id. Empty when none is: the reader then says how to get one.
+final installedEnglishVoicesProvider =
+    FutureProvider.autoDispose<Map<String, TtsVoicePaths>>((ref) async {
+  final gateway = ref.watch(ttsVoiceGatewayProvider);
+  final installed = <String, TtsVoicePaths>{};
+  for (final voice in VoiceCatalog.all) {
+    if (!voice.languageTag.startsWith('en')) continue;
+    final paths = await gateway.installedVoice(voice.id);
+    if (paths != null) installed[voice.id] = paths;
+  }
+  return installed;
+});
+
+/// Reads passages aloud with its own player, so it never fights a chat reply
+/// being spoken. Stopped and released when the reader goes away.
+final passageSpeakerProvider = Provider.autoDispose<PassageSpeaker>((ref) {
+  final playback = AudioplayersTtsPlayback();
+  final speaker = PassageSpeaker(
+    synthesizer: ref.watch(piperSpeechSynthesizerProvider),
+    playback: playback,
+  );
+  ref.onDispose(() async {
+    await speaker.stop();
+    await playback.dispose();
+  });
+  return speaker;
+});

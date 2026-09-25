@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/english/data/passage_speaker.dart';
 import 'package:lifeos/features/english/data/wikimedia_reading.dart';
 import 'package:lifeos/features/english/data/word_gloss.dart';
 import 'package:lifeos/features/english/domain/lexical_coverage.dart';
@@ -9,9 +10,11 @@ import 'package:lifeos/features/english/domain/reading_passages.dart';
 import 'package:lifeos/features/english/domain/vocab_placement_session.dart';
 import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/features/english/presentation/english_reader_screen.dart';
+import 'package:lifeos/features/tts/domain/tts_voice.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
+import '../support/fake_speech.dart';
 
 class _FakeSaver implements WordSaver {
   final List<(String, String?, SavedContext)> saved = [];
@@ -51,13 +54,21 @@ PickedReading _reading() {
   );
 }
 
-Widget _app({FakeLocalLlmEngine? engine, _FakeSaver? saver}) => ProviderScope(
+Widget _app({
+  FakeLocalLlmEngine? engine,
+  _FakeSaver? saver,
+  PassageSpeaker? speaker,
+  Map<String, TtsVoicePaths> voices = const {},
+}) =>
+    ProviderScope(
       overrides: [
         wordIndexProvider.overrideWith((ref) async => _index),
         wordGlosserProvider.overrideWithValue(
           WordGlosser(engine ?? FakeLocalLlmEngine(reply: (_) => 'olfatear')),
         ),
         wordSaverProvider.overrideWith((ref) async => saver ?? _FakeSaver()),
+        installedEnglishVoicesProvider.overrideWith((ref) async => voices),
+        if (speaker != null) passageSpeakerProvider.overrideWithValue(speaker),
       ],
       child: MaterialApp(
         locale: const Locale('es'),
@@ -66,6 +77,8 @@ Widget _app({FakeLocalLlmEngine? engine, _FakeSaver? saver}) => ProviderScope(
         home: EnglishReaderScreen(reading: _reading()),
       ),
     );
+
+const _lessac = TtsVoicePaths(model: 'm', tokens: 't', dataDir: 'd');
 
 /// The style the passage gives [word], found in the rendered spans.
 TextStyle? _styleOf(WidgetTester tester, String word) {
@@ -142,5 +155,61 @@ void main() {
     expect(context.sentence, 'Dogs sniffed the ground.');
     expect(context.source, 'simple.wikipedia.org/Dog');
     expect(find.text('Guardada para repasar'), findsOneWidget);
+  });
+
+  group('listening', () {
+    testWidgets('without an English voice it says how to get one',
+        (tester) async {
+      await tester.pumpWidget(_app());
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Escuchar'));
+      await tester.pumpAndSettle();
+
+      expect(find.textContaining('voz en inglés'), findsOneWidget);
+    });
+
+    testWidgets('it reads the passage and highlights the sentence playing',
+        (tester) async {
+      final synth = FakeSynth();
+      final playback = FakePlayback();
+      await tester.pumpWidget(_app(
+        speaker: PassageSpeaker(synthesizer: synth, playback: playback),
+        voices: const {'en_US-lessac': _lessac},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Escuchar'));
+      await tester.pumpAndSettle();
+
+      expect(synth.texts.first, 'Dogs sniffed the ground.');
+      expect(_styleOf(tester, 'ground')?.backgroundColor, isNotNull);
+      expect(_styleOf(tester, 'sleep')?.backgroundColor, isNull);
+
+      playback.finish();
+      await tester.pumpAndSettle();
+      expect(_styleOf(tester, 'sleep')?.backgroundColor, isNotNull);
+
+      await tester.tap(find.byTooltip('Detener'));
+      await tester.pumpAndSettle();
+      expect(playback.stops, greaterThan(0));
+      expect(_styleOf(tester, 'sleep')?.backgroundColor, isNull);
+    });
+
+    testWidgets('"slower" reads at the learner pace', (tester) async {
+      final synth = FakeSynth();
+      await tester.pumpWidget(_app(
+        speaker: PassageSpeaker(synthesizer: synth, playback: FakePlayback()),
+        voices: const {'en_US-lessac': _lessac},
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Más lento'));
+      await tester.pump();
+      await tester.tap(find.byTooltip('Escuchar'));
+      await tester.pumpAndSettle();
+
+      expect(synth.speeds.first, kSlowSpeed);
+    });
   });
 }
