@@ -75,8 +75,8 @@ class Correction {
   final String why;
 }
 
-class Feedback {
-  const Feedback({required this.corrections});
+class PracticeFeedback {
+  const PracticeFeedback({required this.corrections});
 
   /// Empty means "no real mistakes", which is an answer, not a failure.
   final List<Correction> corrections;
@@ -291,7 +291,7 @@ String _plain(String s) =>
     s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), '').trim();
 
 /// The model's feedback, or null when it did not follow the format.
-Feedback? parseFeedback(String answer) {
+PracticeFeedback? parseFeedback(String answer) {
   final corrections = <Correction>[];
   String? wrong;
   String? right;
@@ -326,8 +326,8 @@ Feedback? parseFeedback(String answer) {
 
   if (!sawField) {
     return answer.toUpperCase().contains('NO MISTAKES')
-        ? const Feedback(corrections: [])
+        ? const PracticeFeedback(corrections: [])
         : null;
   }
-  return Feedback(corrections: corrections.take(kMaxCorrections).toList());
+  return PracticeFeedback(corrections: corrections.take(kMaxCorrections).toList());
 }

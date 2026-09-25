@@ -670,5 +670,12 @@
   "englishRecordingsProgress": "First month: {first}% · Last month: {last}%",
   "@englishRecordingsProgress": {"placeholders": {"first": {"type": "int"}, "last": {"type": "int"}}},
   "englishRecordingsPlay": "Play",
-  "englishRecordingsElsewhere": "The audio is on the other device where you recorded it."
+  "englishRecordingsElsewhere": "The audio is on the other device where you recorded it.",
+  "englishPracticeTitle": "Practice",
+  "englishPracticeWrite": "Write",
+  "englishWriteHint": "Write in English. Then review it: I point out at most two mistakes, the ones that matter most.",
+  "englishWriteReview": "Review",
+  "englishReviewing": "Reviewing…",
+  "englishFeedbackNone": "No important mistakes. Well done!",
+  "englishFeedbackFailed": "It could not be reviewed this time. Is the local model downloaded? Try again."
 }

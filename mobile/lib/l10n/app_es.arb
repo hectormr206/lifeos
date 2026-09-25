@@ -544,5 +544,12 @@
   "englishRecordingsEmpty": "Aún no hay grabaciones. En el lector, toca «Practicar en voz alta».",
   "englishRecordingsProgress": "Primer mes: {first}% · Último mes: {last}%",
   "englishRecordingsPlay": "Reproducir",
-  "englishRecordingsElsewhere": "El audio está en el otro dispositivo donde grabaste."
+  "englishRecordingsElsewhere": "El audio está en el otro dispositivo donde grabaste.",
+  "englishPracticeTitle": "Practicar",
+  "englishPracticeWrite": "Escribir",
+  "englishWriteHint": "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+  "englishWriteReview": "Revisar",
+  "englishReviewing": "Revisando…",
+  "englishFeedbackNone": "Sin errores importantes. ¡Bien hecho!",
+  "englishFeedbackFailed": "No se pudo revisar esta vez. ¿Está descargado el modelo local? Inténtalo otra vez."
 }

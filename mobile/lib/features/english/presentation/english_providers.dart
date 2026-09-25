@@ -13,6 +13,7 @@ import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/english_goal_store.dart';
 import '../data/passage_speaker.dart';
+import '../data/practice_service.dart';
 import '../data/recordings_repository.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
@@ -146,4 +147,9 @@ final recordingArchiveProvider = FutureProvider<RecordingArchive>(
 /// synced; only the attempt's facts are.
 final recordingAudioExistsProvider = Provider<bool Function(String path)>(
   (ref) => (path) => File(path).existsSync(),
+);
+
+/// Role-plays and reviews run on the same on-device model as everything else.
+final practiceServiceProvider = Provider<PracticeService>(
+  (ref) => PracticeService(ref.watch(localLlmEngineProvider)),
 );

@@ -2707,6 +2707,48 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The audio is on the other device where you recorded it.'**
   String get englishRecordingsElsewhere;
+
+  /// No description provided for @englishPracticeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Practice'**
+  String get englishPracticeTitle;
+
+  /// No description provided for @englishPracticeWrite.
+  ///
+  /// In en, this message translates to:
+  /// **'Write'**
+  String get englishPracticeWrite;
+
+  /// No description provided for @englishWriteHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Write in English. Then review it: I point out at most two mistakes, the ones that matter most.'**
+  String get englishWriteHint;
+
+  /// No description provided for @englishWriteReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Review'**
+  String get englishWriteReview;
+
+  /// No description provided for @englishReviewing.
+  ///
+  /// In en, this message translates to:
+  /// **'Reviewing…'**
+  String get englishReviewing;
+
+  /// No description provided for @englishFeedbackNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No important mistakes. Well done!'**
+  String get englishFeedbackNone;
+
+  /// No description provided for @englishFeedbackFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be reviewed this time. Is the local model downloaded? Try again.'**
+  String get englishFeedbackFailed;
 }
 
 class _AppLocalizationsDelegate

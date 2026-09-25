@@ -38,7 +38,7 @@ class PracticeService {
 
   /// At most two corrections of [learnerText], or null when the model could
   /// not review it.
-  Future<Feedback?> review(String learnerText) async {
+  Future<PracticeFeedback?> review(String learnerText) async {
     try {
       final result = await _engine.generate(
         buildFeedbackPrompt(learnerText: learnerText),

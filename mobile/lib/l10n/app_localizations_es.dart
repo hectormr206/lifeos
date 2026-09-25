@@ -1543,4 +1543,27 @@ class AppLocalizationsEs extends AppLocalizations {
   @override
   String get englishRecordingsElsewhere =>
       'El audio está en el otro dispositivo donde grabaste.';
+
+  @override
+  String get englishPracticeTitle => 'Practicar';
+
+  @override
+  String get englishPracticeWrite => 'Escribir';
+
+  @override
+  String get englishWriteHint =>
+      'Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.';
+
+  @override
+  String get englishWriteReview => 'Revisar';
+
+  @override
+  String get englishReviewing => 'Revisando…';
+
+  @override
+  String get englishFeedbackNone => 'Sin errores importantes. ¡Bien hecho!';
+
+  @override
+  String get englishFeedbackFailed =>
+      'No se pudo revisar esta vez. ¿Está descargado el modelo local? Inténtalo otra vez.';
 }
