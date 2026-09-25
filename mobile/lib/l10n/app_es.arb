@@ -559,5 +559,21 @@
   "englishTalkSpeak": "Hablar",
   "englishTalkDoneSpeaking": "Listo",
   "englishTalkFinish": "Terminar y revisar",
-  "englishTalkNoReply": "El personaje no respondió. ¿Está descargado el modelo local? Inténtalo otra vez."
+  "englishTalkNoReply": "El personaje no respondió. ¿Está descargado el modelo local? Inténtalo otra vez.",
+  "englishTodayTitle": "Hoy · {minutes} min",
+  "englishTodayProgress": "Llevas {done} de {target} minutos.",
+  "englishTodayDone": "Día cumplido: {minutes} minutos. ¡Bien!",
+  "englishTodayFloor": "Ayer no hubo práctica. Hoy basta con 5 minutos para no fallar dos veces.",
+  "englishTodayWeek": "Esta semana: {days} de 7 días.",
+  "englishStepReview": "Repasar palabras",
+  "englishStepRead": "Leer y escuchar un pasaje",
+  "englishStepSpeak": "Leer en voz alta (desde un pasaje)",
+  "englishStepTalk": "Conversar",
+  "englishStepWrite": "Escribir",
+  "englishStepMinutes": "{label} · {minutes} min",
+  "englishProposeBuild": "Llevas dos semanas constantes. ¿Subimos a 30 minutos al día?",
+  "englishProposeCruise": "Ya es un hábito (día 66). ¿Subimos a 45 minutos al día?",
+  "englishProposeYes": "Sí, subir",
+  "englishStepBack": "Bajar el ritmo",
+  "englishReassess": "Pasó un mes desde tu última prueba: repítela para ver tu avance."
 }

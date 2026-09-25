@@ -3,7 +3,9 @@ library;
 import 'dart:io';
 
 import 'package:flutter/services.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../../core/graph/graph_providers.dart';
 import '../../settings/data/synced_settings_store.dart';
@@ -13,12 +15,14 @@ import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
+import '../data/english_phase_store.dart';
 import '../data/passage_speaker.dart';
 import '../data/practice_service.dart';
 import '../data/recordings_repository.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
+import '../domain/daily_plan.dart';
 import '../domain/fsrs.dart';
 import '../domain/review_queue.dart';
 import '../data/word_gloss.dart';
@@ -160,3 +164,37 @@ final activityLogProvider = FutureProvider<ActivityLog>(
   (ref) async =>
       ActivityLogRepository(await ref.watch(localGraphStoreProvider.future)),
 );
+
+/// Everything practised so far, for today's plan and the milestones.
+final studyActivitiesProvider = FutureProvider.autoDispose<List<StudyActivity>>(
+  (ref) async => (await ref.watch(activityLogProvider.future)).all(),
+);
+
+/// The pace the learner accepted, a synced setting like the goal.
+final englishPhaseStoreProvider = FutureProvider<EnglishPhaseStore>(
+  (ref) async => SyncedEnglishPhaseStore(
+    SyncedSettingsStore(await ref.watch(localGraphStoreProvider.future)),
+  ),
+);
+
+/// The phase in force: the one accepted, or the start.
+final englishPhaseProvider = FutureProvider.autoDispose<StudyPhase>(
+  (ref) async =>
+      await (await ref.watch(englishPhaseStoreProvider.future)).read() ??
+      StudyPhase.start,
+);
+
+/// Opens an English screen and, back on the English home, refreshes what that
+/// screen may have changed: today's minutes, the words due, the level.
+Future<void> openEnglishScreen(
+  BuildContext context,
+  WidgetRef ref,
+  String route,
+) async {
+  await GoRouter.of(context).push(route);
+  if (!context.mounted) return;
+  ref
+    ..invalidate(studyActivitiesProvider)
+    ..invalidate(reviewDueCountProvider)
+    ..invalidate(latestPlacementProvider);
+}

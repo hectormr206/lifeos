@@ -11,11 +11,11 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../domain/english_goal.dart';
 import 'english_providers.dart';
+import 'english_today_card.dart';
 import 'english_words_label.dart';
 
 class EnglishHubScreen extends ConsumerWidget {
@@ -40,13 +40,19 @@ class EnglishHubScreen extends ConsumerWidget {
       body: ListView(
         padding: const EdgeInsets.all(24),
         children: [
+          // Today's plan first: the habit is the point.
+          if (placement != null) ...[
+            const EnglishTodayCard(),
+            const SizedBox(height: 24),
+          ],
           Text(l10n.englishHubLevelTitle, style: title),
           const SizedBox(height: 8),
           if (placement == null) ...[
             Text(l10n.englishHubNoLevel),
             const SizedBox(height: 12),
             FilledButton(
-              onPressed: () => context.push('/english/placement'),
+              onPressed: () =>
+                  openEnglishScreen(context, ref, '/english/placement'),
               child: Text(l10n.englishHubTakePlacement),
             ),
           ] else ...[
@@ -54,11 +60,13 @@ class EnglishHubScreen extends ConsumerWidget {
               englishWordsLabel(l10n, placement.result.estimatedWords),
               style: Theme.of(context).textTheme.headlineSmall,
             ),
-            Text(l10n.englishHubLevel(
-                placement.result.cefr.name.toUpperCase())),
+            Text(
+              l10n.englishHubLevel(placement.result.cefr.name.toUpperCase()),
+            ),
             const SizedBox(height: 12),
             OutlinedButton(
-              onPressed: () => context.push('/english/placement'),
+              onPressed: () =>
+                  openEnglishScreen(context, ref, '/english/placement'),
               child: Text(l10n.englishPlacementRetake),
             ),
           ],
@@ -66,28 +74,30 @@ class EnglishHubScreen extends ConsumerWidget {
           // Always offered: the reading list itself says what is missing
           // (level or goal), which is clearer than a button that is greyed out.
           FilledButton.tonal(
-            onPressed: () => context.push('/english/read'),
+            onPressed: () => openEnglishScreen(context, ref, '/english/read'),
             child: Text(l10n.englishReadTitle),
           ),
           const SizedBox(height: 8),
           // The count is what is waiting TODAY (due words plus the day's new
           // ones), so a 0 is an honest "nothing to do", not a broken button.
           OutlinedButton(
-            onPressed: () async {
-              await context.push('/english/review');
-              if (context.mounted) ref.invalidate(reviewDueCountProvider);
-            },
-            child: Text(l10n.englishReviewButton(
-                ref.watch(reviewDueCountProvider).value ?? 0)),
+            onPressed: () => openEnglishScreen(context, ref, '/english/review'),
+            child: Text(
+              l10n.englishReviewButton(
+                ref.watch(reviewDueCountProvider).value ?? 0,
+              ),
+            ),
           ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () => context.push('/english/practice'),
+            onPressed: () =>
+                openEnglishScreen(context, ref, '/english/practice'),
             child: Text(l10n.englishPracticeTitle),
           ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () => context.push('/english/recordings'),
+            onPressed: () =>
+                openEnglishScreen(context, ref, '/english/recordings'),
             child: Text(l10n.englishRecordingsTitle),
           ),
           const SizedBox(height: 32),
@@ -117,10 +127,10 @@ class EnglishHubScreen extends ConsumerWidget {
 }
 
 String _goalTitle(AppLocalizations l10n, EnglishGoal goal) => switch (goal) {
-      EnglishGoal.work => l10n.englishGoalWork,
-      EnglishGoal.everyday => l10n.englishGoalEveryday,
-      EnglishGoal.travel => l10n.englishGoalTravel,
-    };
+  EnglishGoal.work => l10n.englishGoalWork,
+  EnglishGoal.everyday => l10n.englishGoalEveryday,
+  EnglishGoal.travel => l10n.englishGoalTravel,
+};
 
 String _goalDescription(AppLocalizations l10n, EnglishGoal goal) =>
     switch (goal) {

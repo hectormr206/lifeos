@@ -2797,6 +2797,102 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The character did not answer. Is the local model downloaded? Try again.'**
   String get englishTalkNoReply;
+
+  /// No description provided for @englishTodayTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Today · {minutes} min'**
+  String englishTodayTitle(int minutes);
+
+  /// No description provided for @englishTodayProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'{done} of {target} minutes so far.'**
+  String englishTodayProgress(int done, int target);
+
+  /// No description provided for @englishTodayDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Day done: {minutes} minutes. Well done!'**
+  String englishTodayDone(int minutes);
+
+  /// No description provided for @englishTodayFloor.
+  ///
+  /// In en, this message translates to:
+  /// **'Yesterday had no practice. Today 5 minutes are enough so you never miss twice.'**
+  String get englishTodayFloor;
+
+  /// No description provided for @englishTodayWeek.
+  ///
+  /// In en, this message translates to:
+  /// **'This week: {days} of 7 days.'**
+  String englishTodayWeek(int days);
+
+  /// No description provided for @englishStepReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words'**
+  String get englishStepReview;
+
+  /// No description provided for @englishStepRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Read and listen to a passage'**
+  String get englishStepRead;
+
+  /// No description provided for @englishStepSpeak.
+  ///
+  /// In en, this message translates to:
+  /// **'Read aloud (from a passage)'**
+  String get englishStepSpeak;
+
+  /// No description provided for @englishStepTalk.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk'**
+  String get englishStepTalk;
+
+  /// No description provided for @englishStepWrite.
+  ///
+  /// In en, this message translates to:
+  /// **'Write'**
+  String get englishStepWrite;
+
+  /// No description provided for @englishStepMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} · {minutes} min'**
+  String englishStepMinutes(String label, int minutes);
+
+  /// No description provided for @englishProposeBuild.
+  ///
+  /// In en, this message translates to:
+  /// **'Two steady weeks. Shall we go up to 30 minutes a day?'**
+  String get englishProposeBuild;
+
+  /// No description provided for @englishProposeCruise.
+  ///
+  /// In en, this message translates to:
+  /// **'It is a habit now (day 66). Shall we go up to 45 minutes a day?'**
+  String get englishProposeCruise;
+
+  /// No description provided for @englishProposeYes.
+  ///
+  /// In en, this message translates to:
+  /// **'Yes, go up'**
+  String get englishProposeYes;
+
+  /// No description provided for @englishStepBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Lower the pace'**
+  String get englishStepBack;
+
+  /// No description provided for @englishReassess.
+  ///
+  /// In en, this message translates to:
+  /// **'A month since your last test: take it again to see your progress.'**
+  String get englishReassess;
 }
 
 class _AppLocalizationsDelegate

@@ -1588,4 +1588,66 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get englishTalkNoReply =>
       'The character did not answer. Is the local model downloaded? Try again.';
+
+  @override
+  String englishTodayTitle(int minutes) {
+    return 'Today · $minutes min';
+  }
+
+  @override
+  String englishTodayProgress(int done, int target) {
+    return '$done of $target minutes so far.';
+  }
+
+  @override
+  String englishTodayDone(int minutes) {
+    return 'Day done: $minutes minutes. Well done!';
+  }
+
+  @override
+  String get englishTodayFloor =>
+      'Yesterday had no practice. Today 5 minutes are enough so you never miss twice.';
+
+  @override
+  String englishTodayWeek(int days) {
+    return 'This week: $days of 7 days.';
+  }
+
+  @override
+  String get englishStepReview => 'Review words';
+
+  @override
+  String get englishStepRead => 'Read and listen to a passage';
+
+  @override
+  String get englishStepSpeak => 'Read aloud (from a passage)';
+
+  @override
+  String get englishStepTalk => 'Talk';
+
+  @override
+  String get englishStepWrite => 'Write';
+
+  @override
+  String englishStepMinutes(String label, int minutes) {
+    return '$label · $minutes min';
+  }
+
+  @override
+  String get englishProposeBuild =>
+      'Two steady weeks. Shall we go up to 30 minutes a day?';
+
+  @override
+  String get englishProposeCruise =>
+      'It is a habit now (day 66). Shall we go up to 45 minutes a day?';
+
+  @override
+  String get englishProposeYes => 'Yes, go up';
+
+  @override
+  String get englishStepBack => 'Lower the pace';
+
+  @override
+  String get englishReassess =>
+      'A month since your last test: take it again to see your progress.';
 }
