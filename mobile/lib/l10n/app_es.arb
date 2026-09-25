@@ -591,5 +591,18 @@
   "englishReminderButton": "Recordarme cada día",
   "englishReminderSet": "Te lo recuerdo cada día a las {time}.",
   "englishReminderText": "Inglés: tu práctica de hoy",
-  "englishReminderFailed": "No se pudo crear el recordatorio."
+  "englishReminderFailed": "No se pudo crear el recordatorio.",
+  "englishRealTitle": "Con personas reales",
+  "englishRealIntro": "Lo que la app no reemplaza: hablar con personas. Aquí te preparas antes y aprendes después.",
+  "englishRealSituation": "¿Qué conversación vas a tener, o tuviste?",
+  "englishRealBefore": "Antes",
+  "englishRealPrepare": "Preparar",
+  "englishRealPhrases": "Frases que puedes usar",
+  "englishRealQuestions": "Preguntas que te pueden hacer",
+  "englishRealRehearse": "Ensayar la conversación",
+  "englishRealAfter": "Después",
+  "englishRealWanted": "¿Qué quisiste decir y no pudiste? Una cosa por línea.",
+  "englishRealHowToSay": "¿Cómo lo digo?",
+  "englishRealFailed": "No se pudo esta vez. ¿Está descargado el modelo local?",
+  "englishRealEntry": "Preparar o repasar una conversación real"
 }

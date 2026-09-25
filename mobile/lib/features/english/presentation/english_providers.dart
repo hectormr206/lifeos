@@ -22,6 +22,7 @@ import '../../../l10n/locale_providers.dart';
 import '../data/english_phase_store.dart';
 import '../data/passage_speaker.dart';
 import '../data/practice_service.dart';
+import '../data/real_talk_service.dart';
 import '../data/recordings_repository.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
@@ -239,4 +240,9 @@ final reminderTimePickerProvider =
         context: context,
         initialTime: const TimeOfDay(hour: 20, minute: 0),
       ),
+);
+
+/// Before and after a real conversation, on the same on-device model.
+final realTalkServiceProvider = Provider<RealTalkService>(
+  (ref) => RealTalkService(ref.watch(localLlmEngineProvider)),
 );

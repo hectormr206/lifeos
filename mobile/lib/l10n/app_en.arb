@@ -726,5 +726,18 @@
   "@englishReminderSet": {"placeholders": {"time": {"type": "String"}}},
   "englishReminderText": "English: today's practice",
   "@englishReminderText": {"description": "Also how an existing English reminder is recognised: keep it stable."},
-  "englishReminderFailed": "The reminder could not be created."
+  "englishReminderFailed": "The reminder could not be created.",
+  "englishRealTitle": "With real people",
+  "englishRealIntro": "What the app does not replace: talking with people. Here you get ready before and learn after.",
+  "englishRealSituation": "What conversation are you going to have, or did you have?",
+  "englishRealBefore": "Before",
+  "englishRealPrepare": "Prepare",
+  "englishRealPhrases": "Phrases you can use",
+  "englishRealQuestions": "Questions you may be asked",
+  "englishRealRehearse": "Rehearse the conversation",
+  "englishRealAfter": "After",
+  "englishRealWanted": "What did you want to say and could not? One thing per line.",
+  "englishRealHowToSay": "How do I say it?",
+  "englishRealFailed": "It could not be done this time. Is the local model downloaded?",
+  "englishRealEntry": "Prepare or review a real conversation"
 }

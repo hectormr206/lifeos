@@ -1712,4 +1712,47 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get englishReminderFailed => 'No se pudo crear el recordatorio.';
+
+  @override
+  String get englishRealTitle => 'Con personas reales';
+
+  @override
+  String get englishRealIntro =>
+      'Lo que la app no reemplaza: hablar con personas. Aquí te preparas antes y aprendes después.';
+
+  @override
+  String get englishRealSituation =>
+      '¿Qué conversación vas a tener, o tuviste?';
+
+  @override
+  String get englishRealBefore => 'Antes';
+
+  @override
+  String get englishRealPrepare => 'Preparar';
+
+  @override
+  String get englishRealPhrases => 'Frases que puedes usar';
+
+  @override
+  String get englishRealQuestions => 'Preguntas que te pueden hacer';
+
+  @override
+  String get englishRealRehearse => 'Ensayar la conversación';
+
+  @override
+  String get englishRealAfter => 'Después';
+
+  @override
+  String get englishRealWanted =>
+      '¿Qué quisiste decir y no pudiste? Una cosa por línea.';
+
+  @override
+  String get englishRealHowToSay => '¿Cómo lo digo?';
+
+  @override
+  String get englishRealFailed =>
+      'No se pudo esta vez. ¿Está descargado el modelo local?';
+
+  @override
+  String get englishRealEntry => 'Preparar o repasar una conversación real';
 }

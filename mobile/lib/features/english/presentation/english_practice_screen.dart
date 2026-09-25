@@ -15,6 +15,7 @@ import 'english_feedback_view.dart';
 import '../data/activity_log.dart';
 import '../domain/daily_plan.dart';
 import 'english_providers.dart';
+import 'english_real_talk_screen.dart';
 import 'english_roleplay_screen.dart';
 
 class EnglishPracticeScreen extends ConsumerWidget {
@@ -38,6 +39,14 @@ class EnglishPracticeScreen extends ConsumerWidget {
       body = ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          // With people: the part the app does not replace, first in view.
+          FilledButton.tonal(
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => const EnglishRealTalkScreen(),
+            )),
+            child: Text(l10n.englishRealEntry),
+          ),
+          const SizedBox(height: 16),
           Text(l10n.englishPracticeTalk, style: theme.textTheme.titleMedium),
           for (final scenario in roleplaysFor(goal.value!))
             ListTile(

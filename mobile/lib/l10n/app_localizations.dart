@@ -2989,6 +2989,84 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The reminder could not be created.'**
   String get englishReminderFailed;
+
+  /// No description provided for @englishRealTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'With real people'**
+  String get englishRealTitle;
+
+  /// No description provided for @englishRealIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'What the app does not replace: talking with people. Here you get ready before and learn after.'**
+  String get englishRealIntro;
+
+  /// No description provided for @englishRealSituation.
+  ///
+  /// In en, this message translates to:
+  /// **'What conversation are you going to have, or did you have?'**
+  String get englishRealSituation;
+
+  /// No description provided for @englishRealBefore.
+  ///
+  /// In en, this message translates to:
+  /// **'Before'**
+  String get englishRealBefore;
+
+  /// No description provided for @englishRealPrepare.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare'**
+  String get englishRealPrepare;
+
+  /// No description provided for @englishRealPhrases.
+  ///
+  /// In en, this message translates to:
+  /// **'Phrases you can use'**
+  String get englishRealPhrases;
+
+  /// No description provided for @englishRealQuestions.
+  ///
+  /// In en, this message translates to:
+  /// **'Questions you may be asked'**
+  String get englishRealQuestions;
+
+  /// No description provided for @englishRealRehearse.
+  ///
+  /// In en, this message translates to:
+  /// **'Rehearse the conversation'**
+  String get englishRealRehearse;
+
+  /// No description provided for @englishRealAfter.
+  ///
+  /// In en, this message translates to:
+  /// **'After'**
+  String get englishRealAfter;
+
+  /// No description provided for @englishRealWanted.
+  ///
+  /// In en, this message translates to:
+  /// **'What did you want to say and could not? One thing per line.'**
+  String get englishRealWanted;
+
+  /// No description provided for @englishRealHowToSay.
+  ///
+  /// In en, this message translates to:
+  /// **'How do I say it?'**
+  String get englishRealHowToSay;
+
+  /// No description provided for @englishRealFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be done this time. Is the local model downloaded?'**
+  String get englishRealFailed;
+
+  /// No description provided for @englishRealEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare or review a real conversation'**
+  String get englishRealEntry;
 }
 
 class _AppLocalizationsDelegate
