@@ -33,6 +33,9 @@ void main() {
         'app.language',
         'app.theme',
         'voice.autoSpeak',
+        // Para qué quiere el inglés: una decisión sobre su vida, no sobre el
+        // aparato. Elegida en el teléfono, vale en la laptop.
+        'english.goal',
       ]) {
         expect(isSyncedSetting(key), isTrue, reason: '$key debería viajar');
       }
