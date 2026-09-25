@@ -89,6 +89,10 @@ void main() {
       expect(prompt, contains('I have 30 years.'));
       expect(prompt.toLowerCase(), contains('at most two'));
       expect(prompt, contains('WRONG:'));
+      // Both found against the real E2B: a RIGHT that fixed one mistake and
+      // kept another in the same sentence, and a WHY written in English.
+      expect(prompt, contains('EVERY mistake'));
+      expect(prompt, contains('en español'));
     });
 
     test('a well-formed answer becomes corrections', () {

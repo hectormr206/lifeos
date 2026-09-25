@@ -280,8 +280,8 @@ String buildFeedbackPrompt({required String learnerText}) =>
     'capital letters.\n'
     'For each mistake write exactly three lines:\n'
     "WRONG: the learner's sentence with the mistake\n"
-    'RIGHT: the same sentence, corrected\n'
-    'WHY: one short explanation in Spanish\n'
+    'RIGHT: the same sentence with EVERY mistake in it corrected\n'
+    'WHY: one short explanation, written in Spanish (en español)\n'
     'If there are no real mistakes, write only: NO MISTAKES\n\n'
     "Learner's English:\n$learnerText";
 
