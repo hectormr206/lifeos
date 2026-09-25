@@ -11,6 +11,7 @@ import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
 import '../data/english_goal_store.dart';
 import '../data/passage_speaker.dart';
+import '../data/recordings_repository.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
@@ -132,3 +133,9 @@ final reviewDueCountProvider = FutureProvider.autoDispose<int>((ref) async {
   final store = await ref.watch(reviewStoreProvider.future);
   return buildReviewQueue(await store.all(), DateTime.now()).length;
 });
+
+/// Read-aloud attempts, in the encrypted graph like everything else.
+final recordingArchiveProvider = FutureProvider<RecordingArchive>(
+  (ref) async =>
+      RecordingsRepository(await ref.watch(localGraphStoreProvider.future)),
+);

@@ -528,5 +528,16 @@
   "englishReviewDone": "{count, plural, =1{Listo por hoy. Repasaste 1 palabra.} other{Listo por hoy. Repasaste {count} palabras.}}",
   "englishReviewSaveFailed": "No se pudo guardar este repaso. Inténtalo otra vez.",
   "englishReviewBack": "Volver",
-  "englishReviewButton": "Repasar palabras ({count})"
+  "englishReviewButton": "Repasar palabras ({count})",
+  "englishSpeakTitle": "Practicar en voz alta",
+  "englishSpeakHint": "Escucha la oración y dila a la vez o justo después (shadowing), o léela tú primero.",
+  "englishSpeakRecord": "Grabar",
+  "englishSpeakStop": "Terminar",
+  "englishSpeakListening": "Escuchando lo que dijiste…",
+  "englishSpeakScore": "Se entendió el {percent}% de las palabras",
+  "englishSpeakHeard": "Se oyó: «{text}»",
+  "englishSpeakCaveat": "Mide si se te entendió, no tu acento.",
+  "englishSpeakNoMic": "Hace falta permiso para usar el micrófono.",
+  "englishSpeakSttFailed": "No se pudo transcribir. ¿Está descargado el modelo de voz?",
+  "englishSpeakNext": "Siguiente oración"
 }

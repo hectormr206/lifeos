@@ -1485,4 +1485,43 @@ class AppLocalizationsEs extends AppLocalizations {
   String englishReviewButton(int count) {
     return 'Repasar palabras ($count)';
   }
+
+  @override
+  String get englishSpeakTitle => 'Practicar en voz alta';
+
+  @override
+  String get englishSpeakHint =>
+      'Escucha la oración y dila a la vez o justo después (shadowing), o léela tú primero.';
+
+  @override
+  String get englishSpeakRecord => 'Grabar';
+
+  @override
+  String get englishSpeakStop => 'Terminar';
+
+  @override
+  String get englishSpeakListening => 'Escuchando lo que dijiste…';
+
+  @override
+  String englishSpeakScore(int percent) {
+    return 'Se entendió el $percent% de las palabras';
+  }
+
+  @override
+  String englishSpeakHeard(String text) {
+    return 'Se oyó: «$text»';
+  }
+
+  @override
+  String get englishSpeakCaveat => 'Mide si se te entendió, no tu acento.';
+
+  @override
+  String get englishSpeakNoMic => 'Hace falta permiso para usar el micrófono.';
+
+  @override
+  String get englishSpeakSttFailed =>
+      'No se pudo transcribir. ¿Está descargado el modelo de voz?';
+
+  @override
+  String get englishSpeakNext => 'Siguiente oración';
 }

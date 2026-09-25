@@ -212,4 +212,15 @@ void main() {
       expect(synth.speeds.first, kSlowSpeed);
     });
   });
+
+  testWidgets('from the passage, one tap to read it aloud', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Practicar en voz alta'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Dogs sniffed the ground.'), findsOneWidget);
+    expect(find.text('Grabar'), findsOneWidget);
+  });
 }

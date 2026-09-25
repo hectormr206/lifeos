@@ -2611,6 +2611,72 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Review words ({count})'**
   String englishReviewButton(int count);
+
+  /// No description provided for @englishSpeakTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Read aloud'**
+  String get englishSpeakTitle;
+
+  /// No description provided for @englishSpeakHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Listen to the sentence and say it along or right after (shadowing), or read it yourself first.'**
+  String get englishSpeakHint;
+
+  /// No description provided for @englishSpeakRecord.
+  ///
+  /// In en, this message translates to:
+  /// **'Record'**
+  String get englishSpeakRecord;
+
+  /// No description provided for @englishSpeakStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish'**
+  String get englishSpeakStop;
+
+  /// No description provided for @englishSpeakListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening to what you said…'**
+  String get englishSpeakListening;
+
+  /// No description provided for @englishSpeakScore.
+  ///
+  /// In en, this message translates to:
+  /// **'{percent}% of the words were understood'**
+  String englishSpeakScore(int percent);
+
+  /// No description provided for @englishSpeakHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'Heard: “{text}”'**
+  String englishSpeakHeard(String text);
+
+  /// Whisper leans towards the right words for a known text: never claim this is a pronunciation score.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures whether you were understood, not your accent.'**
+  String get englishSpeakCaveat;
+
+  /// No description provided for @englishSpeakNoMic.
+  ///
+  /// In en, this message translates to:
+  /// **'Using the microphone needs permission.'**
+  String get englishSpeakNoMic;
+
+  /// No description provided for @englishSpeakSttFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be transcribed. Is the voice model downloaded?'**
+  String get englishSpeakSttFailed;
+
+  /// No description provided for @englishSpeakNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next sentence'**
+  String get englishSpeakNext;
 }
 
 class _AppLocalizationsDelegate

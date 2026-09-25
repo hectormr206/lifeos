@@ -650,5 +650,19 @@
   "englishReviewSaveFailed": "This review could not be saved. Try again.",
   "englishReviewBack": "Back",
   "englishReviewButton": "Review words ({count})",
-  "@englishReviewButton": {"placeholders": {"count": {"type": "int"}}}
+  "@englishReviewButton": {"placeholders": {"count": {"type": "int"}}},
+  "englishSpeakTitle": "Read aloud",
+  "englishSpeakHint": "Listen to the sentence and say it along or right after (shadowing), or read it yourself first.",
+  "englishSpeakRecord": "Record",
+  "englishSpeakStop": "Finish",
+  "englishSpeakListening": "Listening to what you said…",
+  "englishSpeakScore": "{percent}% of the words were understood",
+  "@englishSpeakScore": {"placeholders": {"percent": {"type": "int"}}},
+  "englishSpeakHeard": "Heard: “{text}”",
+  "@englishSpeakHeard": {"placeholders": {"text": {"type": "String"}}},
+  "englishSpeakCaveat": "This measures whether you were understood, not your accent.",
+  "@englishSpeakCaveat": {"description": "Whisper leans towards the right words for a known text: never claim this is a pronunciation score."},
+  "englishSpeakNoMic": "Using the microphone needs permission.",
+  "englishSpeakSttFailed": "It could not be transcribed. Is the voice model downloaded?",
+  "englishSpeakNext": "Next sentence"
 }

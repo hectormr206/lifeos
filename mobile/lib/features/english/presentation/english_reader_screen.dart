@@ -30,6 +30,7 @@ import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
 import '../domain/reader_tokens.dart';
 import 'english_providers.dart';
+import 'english_speak_screen.dart';
 
 class EnglishReaderScreen extends ConsumerStatefulWidget {
   const EnglishReaderScreen({super.key, required this.reading});
@@ -168,6 +169,16 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
       appBar: AppBar(
         title: Text(reading.article.title),
         actions: [
+          IconButton(
+            tooltip: l10n.englishSpeakTitle,
+            icon: const Icon(Icons.record_voice_over),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
+              builder: (_) => EnglishSpeakScreen(
+                text: reading.ranked.passage.text,
+                source: '${reading.article.site}/${reading.article.title}',
+              ),
+            )),
+          ),
           IconButton(
             tooltip: l10n.englishListenSlow,
             isSelected: _slow,
