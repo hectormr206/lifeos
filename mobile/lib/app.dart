@@ -66,6 +66,7 @@ import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
 import 'package:lifeos/features/english/presentation/english_hub_screen.dart';
 import 'package:lifeos/features/english/presentation/english_placement_screen.dart';
+import 'package:lifeos/features/english/presentation/english_practice_screen.dart';
 import 'package:lifeos/features/english/presentation/english_reading_list_screen.dart';
 import 'package:lifeos/features/english/presentation/english_recordings_screen.dart';
 import 'package:lifeos/features/english/presentation/english_review_screen.dart';
@@ -199,6 +200,10 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
         path: '/english/recordings',
         builder: (context, state) => const EnglishRecordingsScreen(),
+      ),
+      GoRoute(
+        path: '/english/practice',
+        builder: (context, state) => const EnglishPracticeScreen(),
       ),
       // App-shell slice: `/settings` is now the offline-reachable Settings hub
       // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
@@ -760,6 +765,7 @@ const List<String> kLifeosRoutePaths = [
   '/english/read',
   '/english/review',
   '/english/recordings',
+  '/english/practice',
   '/settings',
   '/settings/local-model',
   '/settings/dictation',

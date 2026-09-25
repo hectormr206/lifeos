@@ -64,6 +64,10 @@ Widget _app({PlacementRecord? placement, _FakeGoals? goals, int dueWords = 0}) {
         path: '/english/recordings',
         builder: (_, _) => const Scaffold(body: Text('RECORDINGS')),
       ),
+      GoRoute(
+        path: '/english/practice',
+        builder: (_, _) => const Scaffold(body: Text('PRACTICE')),
+      ),
     ],
   );
   return ProviderScope(
@@ -132,6 +136,8 @@ void main() {
     await tester.pumpWidget(_app(goals: goals));
     await tester.pumpAndSettle();
 
+    await tester.ensureVisible(find.text('Vida diaria'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Vida diaria'));
     await tester.pumpAndSettle();
 
@@ -155,6 +161,7 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.text('Leer a tu nivel'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Leer a tu nivel'));
     await tester.pumpAndSettle();
 
@@ -179,9 +186,22 @@ void main() {
     await tester.pumpAndSettle();
 
     await tester.ensureVisible(find.text('Tus grabaciones'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Tus grabaciones'));
     await tester.pumpAndSettle();
 
     expect(find.text('RECORDINGS'), findsOneWidget);
+  });
+
+  testWidgets('talking and writing practice is one tap away', (tester) async {
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+
+    await tester.ensureVisible(find.text('Practicar'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Practicar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('PRACTICE'), findsOneWidget);
   });
 }

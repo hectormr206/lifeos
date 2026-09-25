@@ -82,6 +82,11 @@ class EnglishHubScreen extends ConsumerWidget {
           ),
           const SizedBox(height: 8),
           OutlinedButton(
+            onPressed: () => context.push('/english/practice'),
+            child: Text(l10n.englishPracticeTitle),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
             onPressed: () => context.push('/english/recordings'),
             child: Text(l10n.englishRecordingsTitle),
           ),

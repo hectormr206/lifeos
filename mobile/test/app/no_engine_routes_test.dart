@@ -54,6 +54,7 @@ void main() {
       '/english/read',
       '/english/review',
       '/english/recordings',
+      '/english/practice',
     ]) {
       expect(kLifeosRoutePaths, contains(path), reason: '$path disappeared');
     }
