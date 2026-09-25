@@ -14,6 +14,7 @@ import '../data/passage_speaker.dart';
 import '../data/english_placement_repository.dart';
 import '../data/vocab_bank_asset.dart';
 import '../data/wikimedia_reading.dart';
+import '../domain/fsrs.dart';
 import '../data/word_gloss.dart';
 import '../domain/lexical_coverage.dart';
 import '../../local_model/presentation/local_model_providers.dart';
@@ -113,3 +114,14 @@ final passageSpeakerProvider = Provider.autoDispose<PassageSpeaker>((ref) {
   });
   return speaker;
 });
+
+/// Saved words and their reviews: the same repository as the reader's saver.
+final reviewStoreProvider = FutureProvider<ReviewStore>(
+  (ref) async =>
+      SavedWordsRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// FSRS with interval fuzz, as py-fsrs schedules by default.
+final fsrsSchedulerProvider = Provider<FsrsScheduler>(
+  (ref) => FsrsScheduler.fuzzed(),
+);

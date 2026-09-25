@@ -124,7 +124,15 @@ abstract interface class WordSaver {
   });
 }
 
-class SavedWordsRepository implements WordSaver {
+/// What the review needs: the saved words, and a place to record each
+/// answer. An interface so the screen can be tested without the database.
+abstract interface class ReviewStore {
+  Future<List<SavedWord>> all();
+
+  Future<void> recordReview(String uuid, FsrsCard card, {required DateTime at});
+}
+
+class SavedWordsRepository implements WordSaver, ReviewStore {
   SavedWordsRepository(this._store);
 
   final LocalGraphStore _store;
@@ -169,6 +177,7 @@ class SavedWordsRepository implements WordSaver {
   }
 
   /// Stores the card after a review, counts it, and remembers the first day.
+  @override
   Future<void> recordReview(
     String uuid,
     FsrsCard card, {
@@ -186,6 +195,7 @@ class SavedWordsRepository implements WordSaver {
     }));
   }
 
+  @override
   Future<List<SavedWord>> all() async => [
         for (final node in await _store.listNodesByKind(kSavedWordKind))
           ?_fromNode(node),

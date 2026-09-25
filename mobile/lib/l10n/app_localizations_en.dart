@@ -1379,4 +1379,98 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishListenFailed => 'It could not be read aloud.';
+
+  @override
+  String get englishReviewTitle => 'Review words';
+
+  @override
+  String get englishReviewEmpty =>
+      'Nothing to review right now. Save words while you read and they will show up here.';
+
+  @override
+  String get englishReviewQuestion => 'What does it mean here?';
+
+  @override
+  String get englishReviewShow => 'Show';
+
+  @override
+  String get englishReviewNoGloss => 'No meaning saved.';
+
+  @override
+  String get englishReviewAgain => 'Again';
+
+  @override
+  String get englishReviewHard => 'Hard';
+
+  @override
+  String get englishReviewGood => 'Good';
+
+  @override
+  String get englishReviewEasy => 'Easy';
+
+  @override
+  String englishReviewAnswer(String label, String when) {
+    return '$label · $when';
+  }
+
+  @override
+  String englishIntervalMinutes(int count) {
+    return '$count min';
+  }
+
+  @override
+  String englishIntervalHours(int count) {
+    return '$count h';
+  }
+
+  @override
+  String englishIntervalDays(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count days',
+      one: '1 day',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalMonths(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count months',
+      one: '1 month',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalYears(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count years',
+      one: '1 year',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishReviewDone(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Done for today. You reviewed $count words.',
+      one: 'Done for today. You reviewed 1 word.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get englishReviewSaveFailed =>
+      'This review could not be saved. Try again.';
+
+  @override
+  String get englishReviewBack => 'Back';
 }

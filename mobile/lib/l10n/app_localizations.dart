@@ -2497,6 +2497,114 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'It could not be read aloud.'**
   String get englishListenFailed;
+
+  /// No description provided for @englishReviewTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words'**
+  String get englishReviewTitle;
+
+  /// No description provided for @englishReviewEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to review right now. Save words while you read and they will show up here.'**
+  String get englishReviewEmpty;
+
+  /// No description provided for @englishReviewQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'What does it mean here?'**
+  String get englishReviewQuestion;
+
+  /// No description provided for @englishReviewShow.
+  ///
+  /// In en, this message translates to:
+  /// **'Show'**
+  String get englishReviewShow;
+
+  /// No description provided for @englishReviewNoGloss.
+  ///
+  /// In en, this message translates to:
+  /// **'No meaning saved.'**
+  String get englishReviewNoGloss;
+
+  /// No description provided for @englishReviewAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Again'**
+  String get englishReviewAgain;
+
+  /// No description provided for @englishReviewHard.
+  ///
+  /// In en, this message translates to:
+  /// **'Hard'**
+  String get englishReviewHard;
+
+  /// No description provided for @englishReviewGood.
+  ///
+  /// In en, this message translates to:
+  /// **'Good'**
+  String get englishReviewGood;
+
+  /// No description provided for @englishReviewEasy.
+  ///
+  /// In en, this message translates to:
+  /// **'Easy'**
+  String get englishReviewEasy;
+
+  /// No description provided for @englishReviewAnswer.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} · {when}'**
+  String englishReviewAnswer(String label, String when);
+
+  /// No description provided for @englishIntervalMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} min'**
+  String englishIntervalMinutes(int count);
+
+  /// No description provided for @englishIntervalHours.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} h'**
+  String englishIntervalHours(int count);
+
+  /// No description provided for @englishIntervalDays.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 day} other{{count} days}}'**
+  String englishIntervalDays(int count);
+
+  /// No description provided for @englishIntervalMonths.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 month} other{{count} months}}'**
+  String englishIntervalMonths(int count);
+
+  /// No description provided for @englishIntervalYears.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 year} other{{count} years}}'**
+  String englishIntervalYears(int count);
+
+  /// No description provided for @englishReviewDone.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Done for today. You reviewed 1 word.} other{Done for today. You reviewed {count} words.}}'**
+  String englishReviewDone(int count);
+
+  /// No description provided for @englishReviewSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This review could not be saved. Try again.'**
+  String get englishReviewSaveFailed;
+
+  /// No description provided for @englishReviewBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Back'**
+  String get englishReviewBack;
 }
 
 class _AppLocalizationsDelegate

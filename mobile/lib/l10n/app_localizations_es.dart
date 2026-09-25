@@ -1386,4 +1386,98 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get englishListenFailed => 'No se pudo leer en voz alta.';
+
+  @override
+  String get englishReviewTitle => 'Repasar palabras';
+
+  @override
+  String get englishReviewEmpty =>
+      'No hay nada que repasar ahora. Guarda palabras mientras lees y aparecerán aquí.';
+
+  @override
+  String get englishReviewQuestion => '¿Qué significa aquí?';
+
+  @override
+  String get englishReviewShow => 'Mostrar';
+
+  @override
+  String get englishReviewNoGloss => 'Sin significado guardado.';
+
+  @override
+  String get englishReviewAgain => 'Otra vez';
+
+  @override
+  String get englishReviewHard => 'Difícil';
+
+  @override
+  String get englishReviewGood => 'Bien';
+
+  @override
+  String get englishReviewEasy => 'Fácil';
+
+  @override
+  String englishReviewAnswer(String label, String when) {
+    return '$label · $when';
+  }
+
+  @override
+  String englishIntervalMinutes(int count) {
+    return '$count min';
+  }
+
+  @override
+  String englishIntervalHours(int count) {
+    return '$count h';
+  }
+
+  @override
+  String englishIntervalDays(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count días',
+      one: '1 día',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalMonths(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count meses',
+      one: '1 mes',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalYears(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count años',
+      one: '1 año',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishReviewDone(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Listo por hoy. Repasaste $count palabras.',
+      one: 'Listo por hoy. Repasaste 1 palabra.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get englishReviewSaveFailed =>
+      'No se pudo guardar este repaso. Inténtalo otra vez.';
+
+  @override
+  String get englishReviewBack => 'Volver';
 }
