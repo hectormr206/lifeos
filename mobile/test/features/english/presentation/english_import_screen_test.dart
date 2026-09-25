@@ -15,10 +15,12 @@ import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
 class _Picker implements AudioFilePicker {
-  _Picker(this.path);
+  _Picker(this.path, {this.appCopy = false});
   final String? path;
+  final bool appCopy;
   @override
-  Future<String?> pick() async => path;
+  Future<PickedAudio?> pick() async =>
+      path == null ? null : PickedAudio(path: path!, isAppCopy: appCopy);
 }
 
 class _Decoder implements AudioToWav {
@@ -83,9 +85,10 @@ void main() {
 
   tearDown(() => temp.deleteSync(recursive: true));
 
-  Widget app({String? picked, _Recognizer? recognizer}) => ProviderScope(
+  Widget app({String? picked, bool appCopy = false, _Recognizer? recognizer}) =>
+      ProviderScope(
         overrides: [
-          audioFilePickerProvider.overrideWithValue(_Picker(picked)),
+          audioFilePickerProvider.overrideWithValue(_Picker(picked, appCopy: appCopy)),
           audioImporterProvider.overrideWithValue(AudioImporter(
             decoder: _Decoder(),
             recognizer: recognizer ??
@@ -126,6 +129,21 @@ void main() {
 
     expect(find.textContaining('Toca cualquier palabra'), findsOneWidget,
         reason: 'it opens in the ordinary reader');
+  });
+
+  testWidgets("the picker's own copy is deleted, the learner's file is not",
+      (tester) async {
+    await tester.pumpWidget(app(picked: podcast, appCopy: true));
+    await tester.pumpAndSettle();
+    await _import(tester);
+    expect(File(podcast).existsSync(), isFalse);
+
+    final own = '${temp.path}/Mine.mp3';
+    File(own).writeAsStringSync('ID3');
+    await tester.pumpWidget(app(picked: own));
+    await tester.pumpAndSettle();
+    await _import(tester);
+    expect(File(own).existsSync(), isTrue);
   });
 
   testWidgets('no file picked, nothing happens', (tester) async {

@@ -12,7 +12,9 @@
 //     this code chose (`import-<time>.<ext>`), which closes any quoting trick
 //     a hostile file name could try;
 //   * temporary audio (the copy and the decoded WAV, which is plain audio) is
-//     deleted whatever happens;
+//     deleted whatever happens. That includes the copy Android's picker makes
+//     in the app cache, which it never deletes itself; the learner's own
+//     file is never touched;
 //   * long files are capped at [kMaxImportSeconds], not refused, and every
 //     failure has its own reason so the screen can say what to do.
 library;
@@ -87,6 +89,18 @@ class ImportFailed extends ImportEvent {
   final ImportFailure reason;
 }
 
+/// Whether [path] lies strictly inside [directory], after resolving `..`.
+/// Tells a copy the app owns (in its cache) from the learner's own file.
+bool isInsideDirectory(String path, String directory) {
+  String normal(String s) => Uri.file(s).normalizePath().toFilePath();
+  final dir = normal(directory);
+  final prefix = dir.endsWith(Platform.pathSeparator)
+      ? dir
+      : '$dir${Platform.pathSeparator}';
+  final file = normal(path);
+  return file.length > prefix.length && file.startsWith(prefix);
+}
+
 class AudioImporter {
   AudioImporter({
     required this._decoder,
@@ -98,11 +112,14 @@ class AudioImporter {
   final LongAudioRecognizer _recognizer;
   final Future<Directory> Function() _workDirectory;
 
-  Stream<ImportEvent> importFile(String path) async* {
+  /// Imports [path]. With [deleteSourceAfter] the file itself is removed at
+  /// the end: only for a copy the app owns, never for the learner's file.
+  Stream<ImportEvent> importFile(String path, {bool deleteSourceAfter = false}) async* {
     final name = path.split(Platform.pathSeparator).last;
     final dot = name.lastIndexOf('.');
     final ext = dot < 0 ? '' : name.substring(dot + 1).toLowerCase();
     if (!kImportExtensions.contains(ext)) {
+      if (deleteSourceAfter) _deleteQuietly(File(path));
       yield const ImportFailed(ImportFailure.unsupported);
       return;
     }
@@ -146,13 +163,17 @@ class AudioImporter {
           ? const ImportFailed(ImportFailure.nothingHeard)
           : ImportDone(title: name, text: lines.join('\n'));
     } finally {
-      for (final f in [copy, wav]) {
-        try {
-          if (f.existsSync()) f.deleteSync();
-        } on FileSystemException {
-          // Best effort; the OS reclaims its temp directory anyway.
-        }
+      for (final f in [copy, wav, if (deleteSourceAfter) File(path)]) {
+        _deleteQuietly(f);
       }
     }
+  }
+}
+
+void _deleteQuietly(File f) {
+  try {
+    if (f.existsSync()) f.deleteSync();
+  } on FileSystemException {
+    // Best effort; the OS reclaims its temp directory anyway.
   }
 }

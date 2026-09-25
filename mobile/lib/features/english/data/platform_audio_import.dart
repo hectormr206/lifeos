@@ -10,12 +10,20 @@ library;
 
 import 'package:audio_decoder/audio_decoder.dart';
 import 'package:file_selector/file_selector.dart';
+import 'package:path_provider/path_provider.dart';
 
 import 'audio_importer.dart';
 
+/// A chosen file, and whether it is a copy the app owns (and must delete).
+class PickedAudio {
+  const PickedAudio({required this.path, required this.isAppCopy});
+  final String path;
+  final bool isAppCopy;
+}
+
 /// Chooses a file; null when the learner cancels.
 abstract interface class AudioFilePicker {
-  Future<String?> pick();
+  Future<PickedAudio?> pick();
 }
 
 class PlatformAudioToWav implements AudioToWav {
@@ -31,9 +39,12 @@ class PlatformAudioToWav implements AudioToWav {
   }
 }
 
+/// On Android the picker copies the chosen file into the app cache
+/// (`cacheDir/<uuid>/<name>`) and never deletes it; on desktop it returns the
+/// learner's own file. Which one it is, is read from where the path lies.
 class FileSelectorAudioPicker implements AudioFilePicker {
   @override
-  Future<String?> pick() async {
+  Future<PickedAudio?> pick() async {
     final file = await openFile(acceptedTypeGroups: [
       XTypeGroup(
         label: 'audio / video',
@@ -42,6 +53,11 @@ class FileSelectorAudioPicker implements AudioFilePicker {
         uniformTypeIdentifiers: const ['public.audio', 'public.movie'],
       ),
     ]);
-    return file?.path;
+    if (file == null) return null;
+    final cache = await getTemporaryDirectory();
+    return PickedAudio(
+      path: file.path,
+      isAppCopy: isInsideDirectory(file.path, cache.path),
+    );
   }
 }

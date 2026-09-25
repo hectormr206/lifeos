@@ -33,15 +33,17 @@ class _EnglishImportScreenState extends ConsumerState<EnglishImportScreen> {
   List<PickedReading> _readings = const [];
 
   Future<void> _pickAndImport() async {
-    final path = await ref.read(audioFilePickerProvider).pick();
-    if (path == null || !mounted) return;
+    final picked = await ref.read(audioFilePickerProvider).pick();
+    if (picked == null || !mounted) return;
     setState(() {
       _working = true;
       _progress = null;
       _failure = null;
       _readings = const [];
     });
-    await for (final event in ref.read(audioImporterProvider).importFile(path)) {
+    await for (final event in ref
+        .read(audioImporterProvider)
+        .importFile(picked.path, deleteSourceAfter: picked.isAppCopy)) {
       if (!mounted) return;
       switch (event) {
         case ImportProgress():

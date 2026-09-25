@@ -98,6 +98,33 @@ void main() {
     expect(left, ['My "podcast" ! filesink.mp3'], reason: 'only the original stays');
   });
 
+  test('a picker copy the app owns is deleted too, even after a failure',
+      () async {
+    // Android's picker copies the chosen file into the app cache and never
+    // deletes it: a whole podcast would stay there, in the clear.
+    final ok = File('${temp.path}/copy-ok.mp3')..writeAsStringSync('ID3');
+    final bad = File('${temp.path}/copy-bad.mp3')..writeAsStringSync('ID3');
+
+    await importer(_Decoder(), _Recognizer(['x.']))
+        .importFile(ok.path, deleteSourceAfter: true)
+        .drain<void>();
+    await importer(_Decoder(fail: true), _Recognizer(['x.']))
+        .importFile(bad.path, deleteSourceAfter: true)
+        .drain<void>();
+
+    expect(ok.existsSync(), isFalse);
+    expect(bad.existsSync(), isFalse);
+    expect(picked.existsSync(), isTrue, reason: 'without the flag, never');
+  });
+
+  test('isInsideDirectory tells an app copy from a file of the learner', () {
+    expect(isInsideDirectory('/data/cache/1f2e/talk.mp3', '/data/cache'), isTrue);
+    expect(isInsideDirectory('/data/cache', '/data/cache'), isFalse);
+    expect(isInsideDirectory('/data/cache-other/talk.mp3', '/data/cache'), isFalse);
+    expect(isInsideDirectory('/data/cache/../music/talk.mp3', '/data/cache'), isFalse);
+    expect(isInsideDirectory('/home/me/Music/talk.mp3', '/tmp'), isFalse);
+  });
+
   test('a file that cannot be decoded is said as such', () async {
     final events = await importer(_Decoder(fail: true), _Recognizer(['x.']))
         .importFile(picked.path)
