@@ -82,3 +82,20 @@ CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 POSSIBILITY OF SUCH DAMAGE.
 
+## ZIPA-small CR-CTC (downloaded, not bundled)
+
+The phone recogniser for pronunciation feedback is fetched on first use from
+the LifeOS model server as `zipa-small-crctc-500k.int8.onnx` (SHA-256
+`d0e28b68164e8b1fbd6105100c01798828aa0855000ce9bbbd1a2cec233adf13`) and
+`zipa-small-crctc-500k.tokens.txt`.
+
+ZIPA: "A family of efficient models for multilingual phone recognition",
+Jian Zhu et al., ACL 2025 (https://github.com/lingjzhu/zipa, code under the
+MIT License). The files are the ONNX export published as
+`anyspeech/zipa-small-crctc-500k` on Hugging Face: the average of the ten
+checkpoints 464k–500k of `anyspeech/zipa-cr-s`, which the same author
+publishes under the Apache License 2.0. The export's own repository carries
+no licence tag; LifeOS relies on the Apache-2.0 licence of the weights it is
+derived from. A copy of the Apache License 2.0 is at
+https://www.apache.org/licenses/LICENSE-2.0.
+
