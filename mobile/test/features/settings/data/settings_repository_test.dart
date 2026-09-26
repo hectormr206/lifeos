@@ -23,6 +23,9 @@ import 'package:lifeos/core/cache/response_cache.dart';
 import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/settings/data/settings_repository.dart';
+import 'package:lifeos/features/settings/domain/config_field_descriptor.dart';
+
+import '../../../support/outbox_test_doubles.dart';
 
 class _RoutedAdapter implements HttpClientAdapter {
   _RoutedAdapter(this.responses);
@@ -108,6 +111,34 @@ const _valuesFixture = {
 };
 
 void main() {
+  pendingCountFailureTests<List<ConfigFieldDescriptor>>(
+    operation: 'updateConfig',
+    mutate: (outbox, reporter) async {
+      final cache = InMemoryResponseCache();
+      await cache.put('config:current', {'tts_enabled': true});
+      await cache.put('config:schema', {
+        'properties': {
+          'tts_enabled': {'type': 'boolean', 'default': true},
+        },
+      });
+      return HttpSettingsRepository(
+        _unreachableDio(),
+        cache: cache,
+        outbox: outbox,
+        pendingSync: reporter,
+      ).updateConfig({'tts_enabled': false});
+    },
+    expectSuccess: (fields) {
+      expect(fields, hasLength(1));
+      expect(fields.single.name, 'tts_enabled');
+      expect(fields.single.value, false);
+    },
+    httpMethod: 'POST',
+    path: '/api/v1/config',
+    kind: 'config_update',
+    jsonBody: {'tts_enabled': false},
+  );
+
   group('HttpSettingsRepository.fetchConfig', () {
     test('parses the real /api/v1/config + /api/v1/config/schema shapes', () async {
       final dio = _dioWith({

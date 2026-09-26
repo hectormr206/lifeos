@@ -3,6 +3,7 @@ import 'package:dio/dio.dart';
 import '../../../core/cache/response_cache.dart';
 import '../../../core/connectivity/connectivity_status.dart';
 import '../../../core/outbox/outbox.dart';
+import '../../../core/outbox/pending_sync_reporting.dart';
 import '../domain/reminder.dart';
 
 /// Raised when a reminders call fails (non-2xx, network error). [message]
@@ -101,9 +102,8 @@ class HttpRemindersRepository implements RemindersRepository {
     }
   }
 
-  Future<void> _reportPendingCount() async {
-    _pendingSync.reportPendingCount((await _outbox.list()).length);
-  }
+  Future<void> _reportPendingCount() =>
+      reportPendingCountIfAvailable(_outbox, _pendingSync);
 
   ReminderModel _parseRow(Map<String, Object?> row) {
     final id = row['id']?.toString() ?? '';

@@ -6,7 +6,11 @@
 // instead of looping on it forever. No live engine — a hand-written
 // HttpClientAdapter fake per scenario, same pattern as
 // reminders_repository_test.dart.
+import 'dart:io';
 import 'dart:typed_data';
+
+import 'package:cryptography/cryptography.dart';
+import 'package:lifeos/core/security/encrypted_file_cipher.dart';
 
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -57,6 +61,36 @@ Dio _dioWith(_ScriptedAdapter adapter) => Dio(BaseOptions(baseUrl: 'https://engi
 
 void main() {
   group('SyncService.drain', () {
+    test(
+      'storage failure stops safely and a repaired queue can drain',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'sync_storage_test_',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final outbox = FileOutbox(
+          directoryProvider: () async => directory,
+          cipher: EncryptedFileCipher(
+            keyProvider: () async => SecretKey(List.filled(32, 7)),
+          ),
+        );
+        await outbox.enqueue(httpMethod: 'POST', path: '/saved');
+        final file = File('${directory.path}/outbox/outbox.json');
+        final original = await file.readAsBytes();
+        await file.writeAsString('{broken');
+        final damaged = await file.readAsBytes();
+        final adapter = _ScriptedAdapter(okPaths: {'/saved'});
+        final service = SyncService(_dioWith(adapter), outbox);
+        await expectLater(service.drain(), completes);
+        expect(adapter.requestedPaths, isEmpty);
+        expect(await file.readAsBytes(), damaged);
+        await file.writeAsBytes(original);
+        await service.drain();
+        expect(adapter.requestedPaths, ['/saved']);
+        expect(await outbox.list(), isEmpty);
+      },
+    );
+
     test('replays queued entries in FIFO order and removes each on success', () async {
       final outbox = InMemoryOutbox();
       await outbox.enqueue(httpMethod: 'POST', path: '/first', jsonBody: {'text': 'a'});

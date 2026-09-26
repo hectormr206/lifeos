@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../api/api_providers.dart';
@@ -71,6 +72,9 @@ class SyncService {
         }
         await _reportPendingCount();
       }
+    } on OutboxStorageException {
+      // Keep the last known pending count; unavailable does not mean empty.
+      debugPrint('Outbox storage unavailable; synchronization will retry.');
     } finally {
       _draining = false;
     }

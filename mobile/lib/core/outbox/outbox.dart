@@ -146,6 +146,14 @@ class InMemoryOutbox implements Outbox {
   }
 }
 
+/// Recoverable storage failure: callers must retain queued work and retry.
+class OutboxStorageException implements Exception {
+  const OutboxStorageException();
+
+  @override
+  String toString() => 'Outbox storage unavailable; retry after recovery';
+}
+
 /// File-backed [Outbox] used in production: one JSON array file under the
 /// app support directory, so queued mutations survive an app restart
 /// (durability requirement, M3 slice 2). Same injectable-directory pattern
@@ -195,38 +203,54 @@ class FileOutbox implements Outbox {
     await _writeEntries(entries);
   }
 
-  /// Any failure (missing file, malformed JSON, unavailable platform
-  /// channel in a test environment) degrades to an empty queue rather than
-  /// crashing the app — a corrupt/unavailable outbox must never block
-  /// mutations from at least attempting to run, and must never break
-  /// `SyncService.drain()`.
+  /// Only absence or a valid empty array represents an empty queue.
+  /// Read and migration failures must never permit mutations to overwrite it.
   Future<List<OutboxEntry>> _readEntries() async {
     try {
       final file = await _file();
       if (!await file.exists()) return [];
       final raw = await file.readAsBytes();
       final plaintext = await _cipher.openOrLegacy(raw);
-      if (plaintext == null) return [];
+      if (plaintext == null) throw const OutboxStorageException();
       final decoded = jsonDecode(utf8.decode(plaintext));
-      if (decoded is! List) return [];
-      final entries = decoded
-          .whereType<Map>()
-          .map((row) => OutboxEntry.fromJson(Map<String, Object?>.from(row)))
-          .toList();
+      if (decoded is! List) throw const OutboxStorageException();
+      final entries = <OutboxEntry>[];
+      for (final row in decoded) {
+        if (row is! Map ||
+            row['id'] is! String ||
+            (row['id'] as String).isEmpty ||
+            row['httpMethod'] is! String ||
+            (row['httpMethod'] as String).isEmpty ||
+            row['path'] is! String ||
+            (row['path'] as String).isEmpty ||
+            row['createdAt'] is! String ||
+            DateTime.tryParse(row['createdAt'] as String) == null ||
+            (row['jsonBody'] != null && row['jsonBody'] is! Map) ||
+            (row['kind'] != null && row['kind'] is! String)) {
+          throw const OutboxStorageException();
+        }
+        entries.add(OutboxEntry.fromJson(Map<String, Object?>.from(row)));
+      }
       // Legacy plaintext becomes encrypted as soon as it is read successfully.
       if (!_cipher.isEncrypted(raw)) await _writeEntries(entries);
       return entries;
     } catch (_) {
-      return [];
+      throw const OutboxStorageException();
     }
   }
 
   Future<void> _writeEntries(List<OutboxEntry> entries) async {
-    final file = await _file();
-    await _cipher.writeSealed(
-      file,
-      utf8.encode(jsonEncode(entries.map((entry) => entry.toJson()).toList())),
-    );
+    try {
+      final file = await _file();
+      await _cipher.writeSealed(
+        file,
+        utf8.encode(
+          jsonEncode(entries.map((entry) => entry.toJson()).toList()),
+        ),
+      );
+    } catch (_) {
+      throw const OutboxStorageException();
+    }
   }
 
   Future<File> _file() async {

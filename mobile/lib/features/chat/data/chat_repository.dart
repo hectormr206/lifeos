@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'package:dio/dio.dart';
 
 import '../../../core/outbox/outbox.dart';
+import '../../../core/outbox/pending_sync_reporting.dart';
 import '../domain/chat_message.dart';
 
 /// Raised when `POST /api/v1/chat/ask` fails (non-2xx, network error, or an
@@ -129,9 +130,8 @@ class HttpChatRepository implements ChatRepository {
         timestamp: DateTime.now(),
       );
 
-  Future<void> _reportPendingCount() async {
-    _pendingSync.reportPendingCount((await _outbox.list()).length);
-  }
+  Future<void> _reportPendingCount() =>
+      reportPendingCountIfAvailable(_outbox, _pendingSync);
 
   @override
   Future<List<ChatMessage>> loadHistory() async {

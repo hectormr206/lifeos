@@ -18,6 +18,8 @@ import 'package:lifeos/core/connectivity/connectivity_status.dart';
 import 'package:lifeos/core/outbox/outbox.dart';
 import 'package:lifeos/features/reminders/data/reminders_repository.dart';
 
+import '../../../support/outbox_test_doubles.dart';
+
 class _FixedResponseAdapter implements HttpClientAdapter {
   _FixedResponseAdapter(this.statusCode, this.body);
 
@@ -86,6 +88,19 @@ class _FakeConnectivityReporter implements ConnectivityReporter {
 }
 
 void main() {
+  pendingCountFailureTests<void>(
+    operation: 'cancel',
+    mutate: (outbox, reporter) => HttpRemindersRepository(
+      _unreachableDio(),
+      outbox: outbox,
+      pendingSync: reporter,
+    ).cancel('test-reminder'),
+    expectSuccess: (_) {}, // Future<void> completion is the queued-success API.
+    httpMethod: 'DELETE',
+    path: '/api/v1/reminders/test-reminder',
+    kind: 'reminder_cancel',
+  );
+
   group('HttpRemindersRepository.list', () {
     test('parses the real /api/v1/reminders shape (status=pending default)', () async {
       final fixture = jsonEncode({

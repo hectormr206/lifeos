@@ -4,6 +4,12 @@
 // DomainNotifier.capture — the engine's bilingual reminder parser handles
 // "recuérdame llamar al doctor mañana a las 3" through
 // POST /api/v1/chat/ask). No live engine — both repositories faked.
+import 'dart:io';
+
+import 'package:cryptography/cryptography.dart';
+import 'package:dio/dio.dart';
+import 'package:lifeos/core/outbox/outbox.dart';
+import 'package:lifeos/core/security/encrypted_file_cipher.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/chat/data/chat_repository.dart';
@@ -64,6 +70,72 @@ class _FakeChatRepository implements ChatRepository {
 
 void main() {
   group('RemindersNotifier', () {
+    test(
+      'offline completion preserves unreadable queue and surfaces retryable failure',
+      () async {
+        final directory = await Directory.systemTemp.createTemp(
+          'reminder_storage_test_',
+        );
+        addTearDown(() => directory.delete(recursive: true));
+        final file = File('${directory.path}/outbox/outbox.json');
+        await file.parent.create(recursive: true);
+        await file.writeAsString('{broken');
+        final original = await file.readAsBytes();
+        final outbox = FileOutbox(
+          directoryProvider: () async => directory,
+          cipher: EncryptedFileCipher(
+            keyProvider: () async => SecretKey(List.filled(32, 7)),
+          ),
+        );
+        final dio = Dio();
+        addTearDown(() => dio.close(force: true));
+        var loads = 0;
+        dio.interceptors.add(
+          InterceptorsWrapper(
+            onRequest: (options, handler) {
+              if (options.method == 'DELETE') {
+                handler.reject(
+                  DioException.connectionError(
+                    requestOptions: options,
+                    reason: 'offline',
+                  ),
+                );
+              } else {
+                loads++;
+                handler.resolve(
+                  Response(
+                    requestOptions: options,
+                    data: {
+                      'reminders': [
+                        {'id': 'r1', 'message': 'Pending', 'status': 'pending'},
+                      ],
+                    },
+                  ),
+                );
+              }
+            },
+          ),
+        );
+        final container = ProviderContainer(
+          overrides: [
+            remindersRepositoryProvider.overrideWithValue(
+              HttpRemindersRepository(dio, outbox: outbox),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+        final notifier = container.read(remindersNotifierProvider.notifier);
+        await notifier.ready;
+        await expectLater(notifier.markDone('r1'), completes);
+        final state = container.read(remindersNotifierProvider);
+        expect(state.error, isNotNull);
+        expect(state.error, isNotEmpty);
+        expect(state.reminders.single.id, 'r1');
+        expect(loads, 1);
+        expect(await file.readAsBytes(), original);
+      },
+    );
+
     test('loads pending reminders on init', () async {
       final reminder = ReminderModel(id: 'r1', whenTs: DateTime.utc(2026, 7, 15, 15), message: 'Llamar al doctor', status: 'pending');
       final repo = _FakeRemindersRepository(reminders: [reminder]);
