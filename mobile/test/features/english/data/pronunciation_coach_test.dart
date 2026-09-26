@@ -56,6 +56,13 @@ void main() {
       expect(tips!.map((t) => t.pattern), [SoundPattern.shortI, SoundPattern.vAsB]);
     });
 
+    test('noise instead of the sentence gives no tips, not "nothing to fix"',
+        () async {
+      final coach = PronunciationCoach(_Recognizer('b'), () async => _lexicon);
+
+      expect(await coach.tips('/n.wav', 'The very ship'), isNull);
+    });
+
     test('without the model there are no tips to give, and no error', () async {
       final coach = PronunciationCoach(
           _Recognizer('', missing: true), () async => _lexicon);

@@ -142,3 +142,25 @@ List<SoundTip> soundTips(PronunciationCheck check) {
       ),
   ];
 }
+
+/// Share of expected sounds that must have been heard as something (right or
+/// wrong) for the recording to count as the sentence said.
+const double kMinHeardShare = 0.6;
+
+/// Whether the sentence was actually said: an accent changes sounds but they
+/// are heard; silence or room noise leaves nearly all of them missing, and
+/// then "the final sound was not heard" is not a tip, it is an artefact (seen
+/// on the Pixel with a recording of noise). Function words do not count:
+/// dropping them is normal speech.
+bool heardEnough(PronunciationCheck check) {
+  var expected = 0;
+  var heard = 0;
+  for (final word in check.words) {
+    if (!word.judged || word.weak) continue;
+    for (final phone in word.phones) {
+      expected++;
+      if (phone.heard.isNotEmpty) heard++;
+    }
+  }
+  return expected > 0 && heard / expected >= kMinHeardShare;
+}

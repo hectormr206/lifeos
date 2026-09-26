@@ -61,8 +61,8 @@ class PronunciationCoach {
   final Future<PronLexicon> Function() _lexicon;
 
   /// The tips for [sentence] as said in [recordingPath]; null when they
-  /// cannot be given (no model, or it failed). An empty list means nothing
-  /// worth practising was heard.
+  /// cannot be given (no model, it failed, or the sentence was not really
+  /// said). An empty list means nothing worth practising was heard.
   Future<List<SoundTip>?> tips(String recordingPath, String sentence) async {
     try {
       final ipa = await _recognizer.phones(recordingPath);
@@ -71,7 +71,9 @@ class PronunciationCoach {
         heardIpa: ipa,
         lexicon: await _lexicon(),
       );
-      return soundTips(check);
+      // Noise or silence is not the sentence: no tips, rather than a false
+      // "nothing to practise".
+      return heardEnough(check) ? soundTips(check) : null;
     } catch (_) {
       return null;
     }

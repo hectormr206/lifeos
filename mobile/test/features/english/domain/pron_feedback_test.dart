@@ -86,6 +86,26 @@ void main() {
     expect(_tips('Jim', 'ʝɪm').single.pattern, SoundPattern.jSound);
   });
 
+  group('heardEnough', () {
+    PronunciationCheck check(String target, String heard) =>
+        checkPronunciation(target: target, heardIpa: heard, lexicon: _lexicon);
+
+    test('silence or noise is not a sentence said', () {
+      // On the Pixel a recording of room noise ("[BELL RINGING]") gave the
+      // tip "Recording: [ŋ] not heard". Nothing was said; nothing to judge.
+      expect(heardEnough(check('ship cat zoo', '')), isFalse);
+      expect(heardEnough(check('ship cat zoo', 'ʃ')), isFalse);
+    });
+
+    test('a sentence said with an accent is enough', () {
+      expect(heardEnough(check('ship cat zoo', 'ʃipkatsu')), isTrue);
+    });
+
+    test('with no judged sound at all there is nothing to go on', () {
+      expect(heardEnough(check('Mayjoy', 'meɪdʒɔɪ')), isFalse);
+    });
+  });
+
   test('said as written, there is nothing to practise', () {
     expect(_tips('the ship', 'ðəʃɪp'), isEmpty);
   });
