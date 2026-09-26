@@ -497,7 +497,6 @@
   "englishReadTitle": "Leer a tu nivel",
   "englishReadNote": "Las lecturas vienen de Simple English Wikipedia y Wikivoyage: hace falta internet para traerlas.",
   "englishReadNeedsPlacement": "Primero haz la prueba de nivel: así sé qué textos son para ti.",
-  "englishReadNeedsGoal": "Primero elige para qué quieres el inglés, en la pantalla anterior.",
   "englishReadLoading": "Buscando lecturas a tu nivel…",
   "englishReadRateLimited": "Wikipedia pidió esperar {seconds} segundos. Inténtalo en un momento.",
   "englishReadFailed": "No pude traer lecturas. ¿Hay conexión a internet?",

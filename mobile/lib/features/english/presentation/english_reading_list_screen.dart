@@ -15,6 +15,7 @@ import '../../../l10n/app_localizations.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/lexical_coverage.dart';
 import 'english_providers.dart';
+import 'english_goal_picker.dart';
 import 'english_import_screen.dart';
 import 'english_reader_screen.dart';
 
@@ -37,7 +38,10 @@ class EnglishReadingListScreen extends ConsumerWidget {
         onAction: () => context.push('/english/placement'),
       );
     } else if (goal.value == null) {
-      body = _Message(text: l10n.englishReadNeedsGoal);
+      body = ListView(
+        padding: const EdgeInsets.all(24),
+        children: const [EnglishGoalPicker()],
+      );
     } else {
       body = _List(l10n: l10n);
     }

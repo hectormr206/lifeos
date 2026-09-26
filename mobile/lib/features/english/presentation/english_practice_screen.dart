@@ -11,6 +11,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../domain/practice.dart';
+import 'english_goal_picker.dart';
 import 'english_feedback_view.dart';
 import '../data/activity_log.dart';
 import '../domain/daily_plan.dart';
@@ -31,9 +32,9 @@ class EnglishPracticeScreen extends ConsumerWidget {
     if (goal.isLoading) {
       body = const Center(child: CircularProgressIndicator());
     } else if (goal.value == null) {
-      body = Padding(
+      body = ListView(
         padding: const EdgeInsets.all(24),
-        child: Text(l10n.englishReadNeedsGoal),
+        children: const [EnglishGoalPicker()],
       );
     } else {
       body = ListView(

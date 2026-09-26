@@ -1328,10 +1328,6 @@ class AppLocalizationsEn extends AppLocalizations {
       'First take the level test: that is how I know which texts suit you.';
 
   @override
-  String get englishReadNeedsGoal =>
-      'First choose what you want English for, on the previous screen.';
-
-  @override
   String get englishReadLoading => 'Looking for readings at your level…';
 
   @override

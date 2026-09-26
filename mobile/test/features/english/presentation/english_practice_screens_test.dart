@@ -10,6 +10,8 @@ import 'package:lifeos/features/english/presentation/english_practice_screen.dar
 import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
+import '../support/fake_goal_store.dart';
+
 import '../../local_model/support/fake_local_llm_engine.dart';
 
 class _MemoryLog implements ActivityLog {
@@ -20,11 +22,19 @@ class _MemoryLog implements ActivityLog {
   Future<List<StudyActivity>> all() async => recorded;
 }
 
-Widget _app({EnglishGoal? goal, String Function(String)? reply, _MemoryLog? log}) =>
+Widget _app({
+  EnglishGoal? goal,
+  String Function(String)? reply,
+  _MemoryLog? log,
+  FakeGoalStore? goals,
+}) =>
     ProviderScope(
       overrides: [
         if (log != null) activityLogProvider.overrideWith((ref) async => log),
-        englishGoalProvider.overrideWith((ref) async => goal),
+        if (goals != null)
+          englishGoalStoreProvider.overrideWith((ref) async => goals)
+        else
+          englishGoalProvider.overrideWith((ref) async => goal),
         practiceServiceProvider.overrideWithValue(PracticeService(
             FakeLocalLlmEngine(reply: reply ?? (_) => 'NO MISTAKES'))),
       ],
@@ -49,11 +59,17 @@ Future<void> _write(WidgetTester tester, String text) async {
 }
 
 void main() {
-  testWidgets('without a goal it asks for one first', (tester) async {
-    await tester.pumpWidget(_app());
+  testWidgets('without a goal it asks for it right here', (tester) async {
+    final goals = FakeGoalStore();
+    await tester.pumpWidget(_app(goals: goals));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Primero elige'), findsOneWidget);
+    await tester.tap(find.text('Viajes'));
+    await tester.pumpAndSettle();
+
+    expect(goals.written, [EnglishGoal.travel]);
+    expect(find.text('Conversar'), findsOneWidget,
+        reason: 'the practice for that goal appears');
   });
 
   testWidgets('the goal decides what there is to practise', (tester) async {

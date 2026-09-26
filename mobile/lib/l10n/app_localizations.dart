@@ -2420,12 +2420,6 @@ abstract class AppLocalizations {
   /// **'First take the level test: that is how I know which texts suit you.'**
   String get englishReadNeedsPlacement;
 
-  /// No description provided for @englishReadNeedsGoal.
-  ///
-  /// In en, this message translates to:
-  /// **'First choose what you want English for, on the previous screen.'**
-  String get englishReadNeedsGoal;
-
   /// No description provided for @englishReadLoading.
   ///
   /// In en, this message translates to:

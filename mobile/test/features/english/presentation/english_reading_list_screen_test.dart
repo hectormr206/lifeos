@@ -19,6 +19,8 @@ import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/features/english/presentation/english_reading_list_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
+import '../support/fake_goal_store.dart';
+
 final _index = WordIndex(const VocabBank(
   bands: [
     ['dog', 'the', 'ground', 'they', 'sleep', 'a', 'lot'],
@@ -52,11 +54,15 @@ Widget _app({
   PlacementRecord? placement,
   EnglishGoal? goal,
   Future<List<PickedReading>> Function()? list,
+  FakeGoalStore? goals,
 }) =>
     ProviderScope(
       overrides: [
         latestPlacementProvider.overrideWith((ref) async => placement),
-        englishGoalProvider.overrideWith((ref) async => goal),
+        if (goals != null)
+          englishGoalStoreProvider.overrideWith((ref) async => goals)
+        else
+          englishGoalProvider.overrideWith((ref) async => goal),
         wordIndexProvider.overrideWith((ref) async => _index),
         readingListProvider.overrideWith(
             (ref) => list?.call() ?? Future.value(const <PickedReading>[])),
@@ -78,11 +84,20 @@ void main() {
     expect(find.textContaining('Primero haz la prueba'), findsOneWidget);
   });
 
-  testWidgets('without a goal it asks for the goal first', (tester) async {
-    await tester.pumpWidget(_app(placement: _placement));
+  testWidgets('without a goal it asks for it right here', (tester) async {
+    // It used to say "in the previous screen", where the question sat below
+    // the fold of the hub.
+    final goals = FakeGoalStore();
+    await tester.pumpWidget(_app(placement: _placement, goals: goals));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('Primero elige'), findsOneWidget);
+    expect(find.textContaining('pantalla anterior'), findsNothing);
+    await tester.tap(find.text('Trabajo y clientes'));
+    await tester.pumpAndSettle();
+
+    expect(goals.written, [EnglishGoal.work]);
+    expect(find.text('Trabajo y clientes'), findsNothing,
+        reason: 'with a goal, the readings take its place');
   });
 
   testWidgets('while fetching it says what it is doing, and that it needs '
