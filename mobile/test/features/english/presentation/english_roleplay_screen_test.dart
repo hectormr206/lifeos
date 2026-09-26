@@ -129,6 +129,19 @@ void main() {
     expect(find.text('I want to eat tacos.'), findsOneWidget);
   });
 
+  testWidgets('finishing puts the keyboard away, so the review is in view',
+      (tester) async {
+    await tester.pumpWidget(_app(FakeLocalLlmEngine(reply: _engineReply)));
+    await tester.pumpAndSettle();
+    await _say(tester, 'I want eat tacos.');
+    await tester.showKeyboard(find.byType(TextField));
+
+    await tester.tap(find.text('Terminar y revisar'));
+    await tester.pumpAndSettle();
+
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
   testWidgets('a character that does not answer is said', (tester) async {
     await tester.pumpWidget(
         _app(FakeLocalLlmEngine(generateShouldFail: true)));

@@ -109,6 +109,8 @@ class _EnglishWritingScreenState extends ConsumerState<EnglishWritingScreen> {
   }
 
   Future<void> _review() async {
+    // The keyboard would cover the review that is about to appear.
+    FocusScope.of(context).unfocus();
     setState(() => _reviewing = true);
     final feedback =
         await ref.read(practiceServiceProvider).review(_text.text.trim());

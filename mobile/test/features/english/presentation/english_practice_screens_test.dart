@@ -84,6 +84,16 @@ void main() {
     expect(find.textContaining('no va "to"'), findsOneWidget);
   });
 
+  testWidgets('reviewing puts the keyboard away, so the review is in view',
+      (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can to make it.');
+
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
   testWidgets('no mistakes is said as good news', (tester) async {
     await tester.pumpWidget(_app(goal: EnglishGoal.work));
     await tester.pumpAndSettle();

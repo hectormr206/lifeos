@@ -125,6 +125,8 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
         if (t.fromLearner) t.text,
     ].join('\n');
     if (said.isEmpty) return;
+    // The keyboard would cover the review that is about to appear.
+    FocusScope.of(context).unfocus();
     setState(() => _reviewing = true);
     final feedback = await ref.read(practiceServiceProvider).review(said);
     if (!mounted) return;

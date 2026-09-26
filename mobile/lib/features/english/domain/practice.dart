@@ -287,6 +287,17 @@ String buildFeedbackPrompt({required String learnerText}) =>
 
 final RegExp _field = RegExp(r'^\s*(WRONG|RIGHT|WHY)\s*:\s*(.*)$');
 
+/// Written English for display: E2B, told to ignore capitals, then writes
+/// its own sentences in lowercase ("yesterday i finished"), and a learner
+/// must not be shown a lowercase "i" as the correct form. The sentence starts
+/// with a capital and the pronoun is "I" (I'm, I've…); "i.e." and words like
+/// "iPhone" are left alone.
+String _written(String s) {
+  final fixed = s.replaceAllMapped(
+      RegExp(r"(?<![\w.])i(?=(['’](m|ve|ll|d))?\b)(?![.\w])"), (_) => 'I');
+  return fixed.isEmpty ? fixed : fixed[0].toUpperCase() + fixed.substring(1);
+}
+
 String _plain(String s) =>
     s.toLowerCase().replaceAll(RegExp(r'[^a-z0-9 ]'), '').trim();
 
@@ -299,7 +310,8 @@ PracticeFeedback? parseFeedback(String answer) {
 
   void close() {
     if (wrong != null && right != null && _plain(wrong!) != _plain(right!)) {
-      corrections.add(Correction(wrong: wrong!, right: right!, why: why));
+      corrections.add(
+          Correction(wrong: _written(wrong!), right: _written(right!), why: why));
     }
     wrong = null;
     right = null;

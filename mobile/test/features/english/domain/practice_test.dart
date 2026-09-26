@@ -109,6 +109,22 @@ WHY: En inglés la edad se dice con "to be", no con "to have".
       expect(c.why, contains('to be'));
     });
 
+    test('what is shown is written English, even if the model wrote lowercase',
+        () {
+      // Seen on the Pixel: the prompt says to ignore capitals, and E2B then
+      // writes its own sentences in lowercase, "yesterday i finished".
+      final c = parseFeedback('WRONG: yesterday i finish the login page\n'
+              "RIGHT: yesterday i finished it, and i'm happy with my iPhone app\n"
+              'WHY: x')!
+          .corrections
+          .single;
+
+      expect(c.wrong, 'Yesterday I finish the login page');
+      expect(c.right, "Yesterday I finished it, and I'm happy with my iPhone app");
+      expect(parseFeedback('WRONG: x i.e. y\nRIGHT: z i.e. y\nWHY: w')!
+          .corrections.single.right, 'Z i.e. y');
+    });
+
     test('"no mistakes" is a real answer, not a failure', () {
       final feedback = parseFeedback('NO MISTAKES')!;
 
