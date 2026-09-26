@@ -125,6 +125,14 @@ WHY: En inglés la edad se dice con "to be", no con "to have".
           .corrections.single.right, 'Z i.e. y');
     });
 
+    test('the same correction twice is shown once', () {
+      // Seen on the Pixel: E2B repeated its one correction, and the screen
+      // showed two identical cards.
+      const pair = 'WRONG: yesterday i finish it\n'
+          'RIGHT: yesterday i finished it\nWHY: pasado';
+      expect(parseFeedback('$pair\n$pair')!.corrections, hasLength(1));
+    });
+
     test('"no mistakes" is a real answer, not a failure', () {
       final feedback = parseFeedback('NO MISTAKES')!;
 
@@ -132,7 +140,9 @@ WHY: En inglés la edad se dice con "to be", no con "to have".
     });
 
     test('never more than two, whatever the model says', () {
-      final block = List.filled(4, 'WRONG: a\nRIGHT: b\nWHY: c').join('\n');
+      final block = [
+        for (var i = 0; i < 4; i++) 'WRONG: a$i\nRIGHT: b$i\nWHY: c',
+      ].join('\n');
 
       expect(parseFeedback(block)!.corrections, hasLength(2));
     });

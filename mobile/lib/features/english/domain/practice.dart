@@ -308,8 +308,12 @@ PracticeFeedback? parseFeedback(String answer) {
   String? right;
   String why = '';
 
+  // A pair the model repeats is shown once (seen on the Pixel).
+  final seen = <String>{};
+
   void close() {
-    if (wrong != null && right != null && _plain(wrong!) != _plain(right!)) {
+    if (wrong != null && right != null && _plain(wrong!) != _plain(right!) &&
+        seen.add('${_plain(wrong!)}|${_plain(right!)}')) {
       corrections.add(
           Correction(wrong: _written(wrong!), right: _written(right!), why: why));
     }
