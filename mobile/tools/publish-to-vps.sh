@@ -60,6 +60,10 @@ flutter build apk --release \
 APK="$MOBILE_DIR/build/app/outputs/flutter-apk/app-release.apk"
 [[ -f "$APK" ]] || { echo "ERROR: no se generó $APK" >&2; exit 1; }
 
+# shellcheck source=lib/baked-config-guard.sh
+source "$MOBILE_DIR/tools/lib/baked-config-guard.sh"
+lifeos_guard_baked_config "$APK" "$UPDATE_BASE_URL"
+
 # ── Metadata (versionCode/name from the APK itself via aapt) ─────────────────
 # El SDK no está en el mismo sitio en las dos máquinas: en el VPS cuelga de
 # $HOME, en el devbox de /opt/buildenv. Buscar sólo en $HOME hacía que aquí el

@@ -112,6 +112,10 @@ BUNDLE="$MOBILE_DIR/build/linux/x64/release/bundle"
 [[ "$ARCH" == "arm64" ]] && BUNDLE="$MOBILE_DIR/build/linux/arm64/release/bundle"
 [[ -x "$BUNDLE/lifeos" ]] || { echo "ERROR: no se generó $BUNDLE/lifeos" >&2; exit 1; }
 
+# shellcheck source=lib/baked-config-guard.sh
+source "$MOBILE_DIR/tools/lib/baked-config-guard.sh"
+lifeos_guard_baked_config "$BUNDLE/lib/libapp.so" "$UPDATE_BASE_URL"
+
 # ── Stage the payload ───────────────────────────────────────────────────────
 # Everything the target machine needs ships inside the ONE artifact whose
 # sha256 the installer verifies: the app, the icon, the systemd units and the
