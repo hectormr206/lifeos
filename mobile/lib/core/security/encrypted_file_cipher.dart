@@ -13,9 +13,11 @@ class EncryptedFileCipher {
     Future<SecretKey> Function()? keyProvider,
     AesGcm? algorithm,
   }) : _keyProvider = keyProvider ?? SecureFileKeyStore().loadOrCreate,
+       _readKeyProvider = keyProvider ?? SecureFileKeyStore().loadExisting,
        _algorithm = algorithm ?? AesGcm.with256bits();
 
   final Future<SecretKey> Function() _keyProvider;
+  final Future<SecretKey> Function() _readKeyProvider;
   final AesGcm _algorithm;
 
   static const _header = <int>[0x4c, 0x4f, 0x53, 0x45, 0x01]; // LOSE + version
@@ -49,7 +51,7 @@ class EncryptedFileCipher {
         macLength: _macLength,
       );
       return Uint8List.fromList(
-        await _algorithm.decrypt(box, secretKey: await _keyProvider()),
+        await _algorithm.decrypt(box, secretKey: await _readKeyProvider()),
       );
     } catch (_) {
       return null;
@@ -84,6 +86,16 @@ class SecureFileKeyStore {
     final bytes = List<int>.generate(32, (_) => _random.nextInt(256));
     await _storage.write(key: _keyName, value: _encodeHex(bytes));
     return SecretKey(bytes);
+  }
+
+  /// Reads never mint a replacement for an existing encrypted file.
+  /// Other auxiliary-file writes still use loadOrCreate; their lifecycle is separate.
+  Future<SecretKey> loadExisting() async {
+    final existing = await _storage.read(key: _keyName);
+    if (existing == null || !RegExp(r'^[0-9a-fA-F]{64}$').hasMatch(existing)) {
+      throw StateError('Auxiliary file key unavailable');
+    }
+    return SecretKey(_decodeHex(existing));
   }
 
   Future<void> deleteKey() => _storage.delete(key: _keyName);
