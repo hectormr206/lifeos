@@ -21,7 +21,6 @@ import 'dart:async';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../data/passage_speaker.dart';
@@ -89,7 +88,6 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
   Future<void> _listen() async {
     final l10n = AppLocalizations.of(context);
     final messenger = ScaffoldMessenger.of(context);
-    final router = GoRouter.maybeOf(context);
     final voices = await ref.read(installedEnglishVoicesProvider.future);
     final text = widget.reading.ranked.passage.text;
     final id = pickEnglishVoice(
@@ -98,15 +96,7 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
     );
     if (!mounted) return;
     if (id == null) {
-      messenger.showSnackBar(SnackBar(
-        content: Text(l10n.englishListenNoVoice),
-        action: router == null
-            ? null
-            : SnackBarAction(
-                label: l10n.englishListenGetVoice,
-                onPressed: () => router.push('/settings/voice/catalog'),
-              ),
-      ));
+      showEnglishVoiceNotice(context, ref);
       return;
     }
     setState(() => _listening = true);

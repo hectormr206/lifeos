@@ -11,7 +11,6 @@ library;
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
 import '../data/activity_log.dart';
@@ -19,6 +18,8 @@ import '../data/passage_speaker.dart';
 import '../domain/daily_plan.dart';
 import '../domain/listening_placement.dart';
 import 'english_providers.dart';
+import '../../tts/domain/tts_voice.dart';
+import '../../voice_settings/presentation/voice_catalog_providers.dart';
 
 /// Plays per sentence: a second chance, not a loop.
 const int _maxPlays = 2;
@@ -98,15 +99,23 @@ class _EnglishListeningScreenState extends ConsumerState<EnglishListeningScreen>
     if (voices.isLoading) {
       body = const Center(child: CircularProgressIndicator());
     } else if ((voices.value ?? const {}).isEmpty) {
+      // Downloaded here, never through the voice catalog: there, downloading
+      // a voice also makes it Axi's voice.
+      final status = ref.watch(voiceCatalogControllerProvider)[kPracticeVoiceId];
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(l10n.englishListenNoVoice),
           const SizedBox(height: 16),
-          FilledButton(
-            onPressed: () => GoRouter.maybeOf(context)?.push('/settings/voice/catalog'),
-            child: Text(l10n.englishListenGetVoice),
-          ),
+          if (status is TtsVoiceDownloading)
+            Text(l10n.englishVoiceDownloading((status.progress * 100).round()))
+          else ...[
+            if (status is TtsVoiceFailed) Text(l10n.englishVoiceFailed),
+            FilledButton(
+              onPressed: () => downloadEnglishVoice(ref),
+              child: Text(l10n.englishListenGetVoice),
+            ),
+          ],
         ],
       );
     } else if (_session.isFinished) {

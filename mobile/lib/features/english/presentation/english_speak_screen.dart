@@ -100,7 +100,11 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
   Future<void> _listen() async {
     final voices = await ref.read(installedEnglishVoicesProvider.future);
     final id = pickEnglishVoice(voices.keys.toList(), seed: _index);
-    if (id == null || !mounted) return;
+    if (!mounted) return;
+    if (id == null) {
+      showEnglishVoiceNotice(context, ref);
+      return;
+    }
     await ref
         .read(passageSpeakerProvider)
         .speak([_sentence], voice: voices[id]!, speed: kSlowSpeed)

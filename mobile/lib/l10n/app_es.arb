@@ -507,8 +507,8 @@
   "englishListen": "Escuchar",
   "englishListenStop": "Detener",
   "englishListenSlow": "Más lento",
-  "englishListenNoVoice": "Para escuchar hace falta una voz en inglés. Descárgala en Ajustes → Voz.",
-  "englishListenGetVoice": "Abrir",
+  "englishListenNoVoice": "Para escuchar hace falta una voz en inglés. Se descarga aquí, y la voz de Axi no cambia.",
+  "englishListenGetVoice": "Descargar voz en inglés",
   "englishListenFailed": "No se pudo leer en voz alta.",
   "englishReviewTitle": "Repasar palabras",
   "englishReviewEmpty": "No hay nada que repasar ahora. Guarda palabras mientras lees y aparecerán aquí.",
@@ -664,5 +664,7 @@
   "englishTipFinalSoundTitle": "El sonido final",
   "englishTipFinalSoundHow": "Termina la palabra: el último sonido cambia el significado (cat, cap, can).",
   "englishTipSpanishRTitle": "La r del inglés",
-  "englishTipSpanishRHow": "La lengua no toca el paladar: enróscala un poco hacia atrás, sin vibrar."
+  "englishTipSpanishRHow": "La lengua no toca el paladar: enróscala un poco hacia atrás, sin vibrar.",
+  "englishVoiceDownloading": "Descargando la voz en inglés… {percent}%",
+  "englishVoiceFailed": "No se pudo descargar la voz en inglés."
 }

@@ -2483,13 +2483,13 @@ abstract class AppLocalizations {
   /// No description provided for @englishListenNoVoice.
   ///
   /// In en, this message translates to:
-  /// **'Listening needs an English voice. Download one in Settings → Voice.'**
+  /// **'Listening needs an English voice. It downloads here, and Axi\'s voice stays the same.'**
   String get englishListenNoVoice;
 
   /// No description provided for @englishListenGetVoice.
   ///
   /// In en, this message translates to:
-  /// **'Open'**
+  /// **'Download an English voice'**
   String get englishListenGetVoice;
 
   /// No description provided for @englishListenFailed.
@@ -3427,6 +3427,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'The tongue does not touch the roof of the mouth: curl it back a little, no trill.'**
   String get englishTipSpanishRHow;
+
+  /// No description provided for @englishVoiceDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the English voice… {percent}%'**
+  String englishVoiceDownloading(int percent);
+
+  /// No description provided for @englishVoiceFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The English voice could not be downloaded.'**
+  String get englishVoiceFailed;
 }
 
 class _AppLocalizationsDelegate

@@ -229,6 +229,29 @@ void main() {
     expect(find.text('Sonidos para practicar'), findsNothing);
   });
 
+  testWidgets('"Escuchar" without an English voice says so, not silence',
+      (tester) async {
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        pronModelGatewayProvider.overrideWithValue(_PronGateway()),
+        installedEnglishVoicesProvider
+            .overrideWith((ref) async => const <String, TtsVoicePaths>{}),
+      ],
+      child: const MaterialApp(
+        locale: Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: EnglishSpeakScreen(text: _passage, source: 's'),
+      ),
+    ));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Escuchar'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Descargar voz en inglés'), findsOneWidget);
+  });
+
   testWidgets('without the microphone it says so', (tester) async {
     await tester.pumpWidget(_app(recorder: _FakeRecorder(allowed: false)));
     await tester.pumpAndSettle();

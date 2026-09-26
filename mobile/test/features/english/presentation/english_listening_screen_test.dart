@@ -9,9 +9,13 @@ import 'package:lifeos/features/english/domain/vocab_placement_scoring.dart';
 import 'package:lifeos/features/english/presentation/english_listening_screen.dart';
 import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
+import 'package:lifeos/features/tts/presentation/tts_providers.dart';
+import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
+import '../../tts/support/fake_tts.dart' show FakeTtsVoiceGateway;
 import '../support/fake_speech.dart';
+import '../support/fake_voice_prefs.dart';
 
 class _Results implements ListeningResults {
   final List<CefrLevel?> saved = [];
@@ -58,7 +62,40 @@ void main() {
     await tester.pumpWidget(_app(voice: false));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('voz en inglés'), findsOneWidget);
+    expect(find.textContaining('hace falta una voz en inglés'), findsOneWidget);
+  });
+
+  testWidgets('the English voice downloads right here, and Axi keeps its own',
+      (tester) async {
+    // On the Pixel, "Abrir" led to the voice catalog, where downloading a
+    // voice also SELECTS it: Axi started speaking English.
+    final gateway = FakeTtsVoiceGateway();
+    final prefs = FakeVoicePrefs();
+    await tester.pumpWidget(ProviderScope(
+      overrides: [
+        listeningResultsProvider.overrideWith((ref) async => _Results()),
+        ttsVoiceGatewayProvider.overrideWithValue(gateway),
+        selectedVoicePreferencesProvider.overrideWithValue(prefs),
+        passageSpeakerProvider.overrideWithValue(
+            PassageSpeaker(synthesizer: FakeSynth(), playback: FakePlayback())),
+      ],
+      child: const MaterialApp(
+        locale: Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: EnglishListeningScreen(),
+      ),
+    ));
+    await tester.pumpAndSettle();
+    expect(find.textContaining('la voz de Axi no cambia'), findsOneWidget);
+
+    await tester.tap(find.text('Descargar voz en inglés'));
+    await tester.pumpAndSettle();
+
+    expect(gateway.downloadCalls, [kPracticeVoiceId]);
+    expect(prefs.saved, isEmpty, reason: "Axi's voice is not touched");
+    expect(find.text('Oración 1'), findsOneWidget,
+        reason: 'the test starts without leaving the screen');
   });
 
   testWidgets('listening plays the sentence with an English voice',

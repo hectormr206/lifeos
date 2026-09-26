@@ -1372,10 +1372,10 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get englishListenNoVoice =>
-      'Listening needs an English voice. Download one in Settings → Voice.';
+      'Listening needs an English voice. It downloads here, and Axi\'s voice stays the same.';
 
   @override
-  String get englishListenGetVoice => 'Open';
+  String get englishListenGetVoice => 'Download an English voice';
 
   @override
   String get englishListenFailed => 'It could not be read aloud.';
@@ -1969,4 +1969,12 @@ class AppLocalizationsEn extends AppLocalizations {
   @override
   String get englishTipSpanishRHow =>
       'The tongue does not touch the roof of the mouth: curl it back a little, no trill.';
+
+  @override
+  String englishVoiceDownloading(int percent) {
+    return 'Downloading the English voice… $percent%';
+  }
+
+  @override
+  String get englishVoiceFailed => 'The English voice could not be downloaded.';
 }

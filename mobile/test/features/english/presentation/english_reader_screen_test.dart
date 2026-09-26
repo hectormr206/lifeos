@@ -11,10 +11,14 @@ import 'package:lifeos/features/english/domain/vocab_placement_session.dart';
 import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/features/english/presentation/english_reader_screen.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
+import 'package:lifeos/features/tts/presentation/tts_providers.dart';
+import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 
 import '../../local_model/support/fake_local_llm_engine.dart';
+import '../../tts/support/fake_tts.dart' show FakeTtsVoiceGateway;
 import '../support/fake_speech.dart';
+import '../support/fake_voice_prefs.dart';
 
 class _FakeSaver implements WordSaver {
   final List<(String, String?, SavedContext)> saved = [];
@@ -59,15 +63,20 @@ Widget _app({
   _FakeSaver? saver,
   PassageSpeaker? speaker,
   Map<String, TtsVoicePaths> voices = const {},
+  FakeTtsVoiceGateway? gateway,
+  FakeVoicePrefs? prefs,
 }) =>
     ProviderScope(
       overrides: [
+        if (gateway != null) ttsVoiceGatewayProvider.overrideWithValue(gateway),
+        if (prefs != null) selectedVoicePreferencesProvider.overrideWithValue(prefs),
         wordIndexProvider.overrideWith((ref) async => _index),
         wordGlosserProvider.overrideWithValue(
           WordGlosser(engine ?? FakeLocalLlmEngine(reply: (_) => 'olfatear')),
         ),
         wordSaverProvider.overrideWith((ref) async => saver ?? _FakeSaver()),
-        installedEnglishVoicesProvider.overrideWith((ref) async => voices),
+        if (gateway == null)
+          installedEnglishVoicesProvider.overrideWith((ref) async => voices),
         if (speaker != null) passageSpeakerProvider.overrideWithValue(speaker),
       ],
       child: MaterialApp(
@@ -166,7 +175,27 @@ void main() {
       await tester.tap(find.byTooltip('Escuchar'));
       await tester.pumpAndSettle();
 
-      expect(find.textContaining('voz en inglés'), findsOneWidget);
+      expect(find.textContaining('hace falta una voz en inglés'), findsOneWidget);
+    });
+
+    testWidgets('the notice downloads the English voice, not selecting it',
+        (tester) async {
+      final gateway = FakeTtsVoiceGateway();
+      final prefs = FakeVoicePrefs();
+      await tester.pumpWidget(_app(
+        gateway: gateway,
+        prefs: prefs,
+        speaker: PassageSpeaker(synthesizer: FakeSynth(), playback: FakePlayback()),
+      ));
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byTooltip('Escuchar'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('Descargar voz en inglés'));
+      await tester.pumpAndSettle();
+
+      expect(gateway.downloadCalls, [kPracticeVoiceId]);
+      expect(prefs.saved, isEmpty);
     });
 
     testWidgets('it reads the passage and highlights the sentence playing',

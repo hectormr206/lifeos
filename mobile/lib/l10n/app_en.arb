@@ -621,8 +621,8 @@
   "englishListen": "Listen",
   "englishListenStop": "Stop",
   "englishListenSlow": "Slower",
-  "englishListenNoVoice": "Listening needs an English voice. Download one in Settings → Voice.",
-  "englishListenGetVoice": "Open",
+  "englishListenNoVoice": "Listening needs an English voice. It downloads here, and Axi's voice stays the same.",
+  "englishListenGetVoice": "Download an English voice",
   "englishListenFailed": "It could not be read aloud.",
   "englishReviewTitle": "Review words",
   "englishReviewEmpty": "Nothing to review right now. Save words while you read and they will show up here.",
@@ -807,5 +807,8 @@
   "englishTipFinalSoundTitle": "The final sound",
   "englishTipFinalSoundHow": "Finish the word: the last sound changes the meaning (cat, cap, can).",
   "englishTipSpanishRTitle": "The English r",
-  "englishTipSpanishRHow": "The tongue does not touch the roof of the mouth: curl it back a little, no trill."
+  "englishTipSpanishRHow": "The tongue does not touch the roof of the mouth: curl it back a little, no trill.",
+  "englishVoiceDownloading": "Downloading the English voice… {percent}%",
+  "@englishVoiceDownloading": {"placeholders": {"percent": {"type": "int"}}},
+  "englishVoiceFailed": "The English voice could not be downloaded."
 }

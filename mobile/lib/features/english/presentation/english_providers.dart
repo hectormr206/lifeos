@@ -13,6 +13,7 @@ import '../../tts/data/audioplayers_tts_playback.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/presentation/tts_providers.dart';
 import '../../voice_settings/domain/voice_catalog.dart';
+import '../../voice_settings/presentation/voice_catalog_providers.dart';
 import '../data/activity_log.dart';
 import '../data/english_goal_store.dart';
 import '../data/english_reminder.dart';
@@ -384,3 +385,36 @@ final pronunciationCoachProvider = Provider<PronunciationCoach>(
     () => ref.read(pronLexiconProvider.future),
   ),
 );
+
+/// The English voice the practice screens fetch when none is installed. The
+/// same one on every device.
+const String kPracticeVoiceId = 'en_US-lessac';
+
+/// Downloads [kPracticeVoiceId] WITHOUT selecting it: the voice catalog's
+/// "download" also makes it Axi's voice, which on the Pixel turned Axi
+/// English. Returns whether the voice is now installed.
+Future<bool> downloadEnglishVoice(WidgetRef ref) async {
+  final catalog = ref.read(voiceCatalogControllerProvider.notifier);
+  await catalog.download(kPracticeVoiceId);
+  ref.invalidate(installedEnglishVoicesProvider);
+  return catalog.statusOf(kPracticeVoiceId) is TtsVoiceReady;
+}
+
+/// The "no English voice" notice with its download action, for the screens
+/// that play English through a snack bar.
+void showEnglishVoiceNotice(BuildContext context, WidgetRef ref) {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.showSnackBar(SnackBar(
+    content: Text(l10n.englishListenNoVoice),
+    action: SnackBarAction(
+      label: l10n.englishListenGetVoice,
+      onPressed: () async {
+        final ok = await downloadEnglishVoice(ref);
+        if (!ok) {
+          messenger.showSnackBar(SnackBar(content: Text(l10n.englishVoiceFailed)));
+        }
+      },
+    ),
+  ));
+}
