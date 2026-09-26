@@ -45,7 +45,7 @@ apply() {
   # era publica de todos modos: updates.lifeos.hectormr.com esta en DNS-only.
   #
   # LO QUE PROTEGE ARRIBA: nginx exige X-LifeOS-Update-Key en /manifest,
-  # /download, /model/, /stt/, /tts/, /embed/ y /linux/, con limit_req y
+  # /download, /model/, /stt/, /tts/, /embed/, /pron/ y /linux/, con limit_req y
   # limit_conn por IP (ops/ota/ota-root.conf). Esa llave viaja dentro del APK y
   # es extraible: es un guardarrail, no autenticacion.
   $IPT -A "$CH" -p tcp -m multiport --dports 80,443 \

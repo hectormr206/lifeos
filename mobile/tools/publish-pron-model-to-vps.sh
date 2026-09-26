@@ -11,10 +11,15 @@
 # the app asks for, and checks the public endpoint serves them. Run it once;
 # re-running is harmless.
 #
-# Config: tools/ota-publish.env (gitignored), as publish-model-to-vps.sh:
-#   UPDATE_BASE_URL  (the path defaults to $UPDATE_BASE_URL/pron,
-#                     override with PRON_MODEL_BASE_URL)
-#   VPS_SSH, VPS_DIR (files land in $VPS_DIR/pron/)
+# The files land in pron/ of the OTA store, the Coolify-managed Docker volume
+# (see tools/ota-volume.sh), next to stt/ and embed/, written atomically by a
+# throwaway container. So it runs where that volume is reachable: on the VPS,
+# or on the devbox, whose DOCKER_HOST points at the VPS.
+#
+# Config: tools/ota-publish.env (gitignored):
+#   UPDATE_BASE_URL    (the path defaults to $UPDATE_BASE_URL/pron,
+#                       override with PRON_MODEL_BASE_URL)
+#   UPDATE_ACCESS_KEY  (the model paths require it)
 #
 # Usage:
 #     ./tools/publish-pron-model-to-vps.sh
@@ -46,16 +51,19 @@ done
 
 ENV_FILE="$MOBILE_DIR/tools/ota-publish.env"
 if [[ ! -f "$ENV_FILE" ]]; then
-  echo "ERROR: falta $ENV_FILE (UPDATE_BASE_URL, VPS_SSH, VPS_DIR)" >&2
+  echo "ERROR: falta $ENV_FILE (UPDATE_BASE_URL, UPDATE_ACCESS_KEY)" >&2
   exit 1
 fi
 # shellcheck disable=SC1090
 source "$ENV_FILE"
 : "${UPDATE_BASE_URL:?falta UPDATE_BASE_URL en ota-publish.env}"
-: "${VPS_SSH:=vps}"
-: "${VPS_DIR:=lifeos-updates}"
+: "${UPDATE_ACCESS_KEY:?falta UPDATE_ACCESS_KEY en ota-publish.env}"
+KEY_HEADER="X-LifeOS-Update-Key"
 BASE_URL="${PRON_MODEL_BASE_URL:-$UPDATE_BASE_URL/pron}"
-REMOTE_DIR="$VPS_DIR/pron"
+
+# shellcheck source=tools/ota-volume.sh
+source "$MOBILE_DIR/tools/ota-volume.sh"
+ota_require_volume
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -74,19 +82,20 @@ for entry in "${FILES[@]}"; do
   fi
 done
 
-# ── Upload (model first, tokens last) ────────────────────────────────────────
-echo "→ Subiendo a $VPS_SSH:$REMOTE_DIR/ …"
-ssh "$VPS_SSH" "mkdir -p '$REMOTE_DIR'"
+# ── Upload (model first, tokens last; each write atomic) ─────────────────────
+echo "→ Subiendo al volumen OTA ($OTA_VOLUME) en pron/ …"
 for entry in "${FILES[@]}"; do
   IFS='|' read -r _ name _ _ <<<"$entry"
-  scp -o ConnectTimeout=20 "$WORK/$name" "$VPS_SSH:$REMOTE_DIR/$name"
+  ota_put "$WORK/$name" "pron/$name"
 done
+ota_ls pron
 
 # ── Verify the public endpoint serves exactly these bytes ────────────────────
 echo "→ Verificando endpoint público…"
 for entry in "${FILES[@]}"; do
   IFS='|' read -r _ name sha _ <<<"$entry"
-  live="$(curl -fsS --max-time 300 -A "$USER_AGENT" "$BASE_URL/$name" | sha256sum | cut -d' ' -f1)"
+  live="$(curl -fsS --max-time 300 -A "$USER_AGENT" -H "$KEY_HEADER: $UPDATE_ACCESS_KEY" \
+    "$BASE_URL/$name" | sha256sum | cut -d' ' -f1)"
   if [[ "$live" != "$sha" ]]; then
     echo "⚠️  $BASE_URL/$name no sirve el archivo esperado (sha ${live:0:12}…)" >&2
     exit 1
