@@ -1160,4 +1160,823 @@ class AppLocalizationsEs extends AppLocalizations {
 
   @override
   String get chatDayYesterday => 'Ayer';
+
+  @override
+  String get homeSectionLearn => 'Aprender';
+
+  @override
+  String get homeEnglish => 'Inglés';
+
+  @override
+  String get englishPlacementTitle => 'Vocabulario en inglés';
+
+  @override
+  String get englishPlacementIntro =>
+      'Verás palabras en inglés, una por una. Marca solo las que conoces, es decir, las que sabes qué significan.';
+
+  @override
+  String get englishPlacementWarning =>
+      'Algunas palabras son inventadas. Si dices que las conoces, el resultado lo nota.';
+
+  @override
+  String get englishPlacementLength =>
+      'Tarda unos minutos y se detiene sola cuando más palabras ya no aportarían nada.';
+
+  @override
+  String get englishPlacementStart => 'Empezar';
+
+  @override
+  String englishPlacementLast(String level, int words) {
+    return 'Tu último resultado: $level · unas $words palabras';
+  }
+
+  @override
+  String get englishPlacementKnow => 'La conozco';
+
+  @override
+  String get englishPlacementDontKnow => 'No la conozco';
+
+  @override
+  String englishPlacementProgress(int count) {
+    return 'Palabra $count';
+  }
+
+  @override
+  String englishPlacementWords(int words) {
+    return 'Unas $words palabras';
+  }
+
+  @override
+  String englishPlacementFewWords(int words) {
+    return 'Menos de $words palabras';
+  }
+
+  @override
+  String englishPlacementLevel(String level) {
+    return 'Nivel de vocabulario estimado: $level';
+  }
+
+  @override
+  String get englishPlacementScope =>
+      'Mide el vocabulario que reconoces al leer. No mide cómo hablas ni cuánto entiendes al escuchar.';
+
+  @override
+  String get englishPlacementUnreliable =>
+      'Marcaste como conocidas varias palabras inventadas, así que este resultado no es fiable. Repite la prueba marcando solo las que sabes qué significan.';
+
+  @override
+  String get englishPlacementRetake => 'Repetir la prueba';
+
+  @override
+  String get englishPlacementDone => 'Listo';
+
+  @override
+  String get englishPlacementSaveFailed =>
+      'No se pudo guardar el resultado. Lo ves aquí, pero no aparecerá la próxima vez.';
+
+  @override
+  String get englishPlacementLoadError =>
+      'No se pudo cargar la lista de palabras.';
+
+  @override
+  String get englishHubTitle => 'Inglés';
+
+  @override
+  String get englishHubLevelTitle => 'Tu nivel';
+
+  @override
+  String get englishHubNoLevel =>
+      'Aún no sabes tu nivel de vocabulario. La prueba tarda unos minutos.';
+
+  @override
+  String get englishHubTakePlacement => 'Hacer la prueba de nivel';
+
+  @override
+  String englishHubLevel(String level) {
+    return 'Nivel de vocabulario: $level';
+  }
+
+  @override
+  String get englishGoalQuestion => '¿Para qué quieres el inglés?';
+
+  @override
+  String get englishGoalHint =>
+      'Cambia lo que lees y practicas. Tu nivel y tu repaso siguen siendo los mismos.';
+
+  @override
+  String get englishGoalWork => 'Trabajo y clientes';
+
+  @override
+  String get englishGoalWorkDesc =>
+      'Tecnología, propuestas, llamadas con clientes.';
+
+  @override
+  String get englishGoalEveryday => 'Vida diaria';
+
+  @override
+  String get englishGoalEverydayDesc =>
+      'Compras, salud, escuela, conversaciones.';
+
+  @override
+  String get englishGoalTravel => 'Viajes';
+
+  @override
+  String get englishGoalTravelDesc =>
+      'Transporte, hoteles, lugares, pedir ayuda.';
+
+  @override
+  String get englishFitEasy => 'Fácil';
+
+  @override
+  String get englishFitAtLevel => 'A tu nivel';
+
+  @override
+  String get englishFitHard => 'Difícil';
+
+  @override
+  String englishFitLine(String fit, int percent) {
+    return '$fit · conoces el $percent% de las palabras';
+  }
+
+  @override
+  String get englishReaderHint =>
+      'Toca cualquier palabra para ver qué significa aquí. Las subrayadas probablemente son nuevas.';
+
+  @override
+  String englishReaderCredit(String title, String site, String license) {
+    return 'Texto: $title ($site), $license';
+  }
+
+  @override
+  String get englishReaderLooking => 'Buscando qué significa aquí…';
+
+  @override
+  String get englishReaderNoGloss =>
+      'No pude obtener el significado. ¿Está descargado el modelo local?';
+
+  @override
+  String get englishReaderSave => 'Guardar para repasar';
+
+  @override
+  String get englishReaderSaved => 'Guardada para repasar';
+
+  @override
+  String get englishReaderSaveFailed => 'No se pudo guardar la palabra.';
+
+  @override
+  String get englishReadTitle => 'Leer a tu nivel';
+
+  @override
+  String get englishReadNote =>
+      'Las lecturas vienen de Simple English Wikipedia y Wikivoyage: hace falta internet para traerlas.';
+
+  @override
+  String get englishReadNeedsPlacement =>
+      'Primero haz la prueba de nivel: así sé qué textos son para ti.';
+
+  @override
+  String get englishReadLoading => 'Buscando lecturas a tu nivel…';
+
+  @override
+  String englishReadRateLimited(int seconds) {
+    return 'Wikipedia pidió esperar $seconds segundos. Inténtalo en un momento.';
+  }
+
+  @override
+  String get englishReadFailed =>
+      'No pude traer lecturas. ¿Hay conexión a internet?';
+
+  @override
+  String get englishReadEmpty => 'No encontré pasajes esta vez.';
+
+  @override
+  String get englishReadAgain => 'Buscar otras';
+
+  @override
+  String englishReadNewWords(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count palabras probablemente nuevas',
+      one: '1 palabra probablemente nueva',
+      zero: 'Ninguna palabra nueva',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get englishListen => 'Escuchar';
+
+  @override
+  String get englishListenStop => 'Detener';
+
+  @override
+  String get englishListenSlow => 'Más lento';
+
+  @override
+  String get englishListenNoVoice =>
+      'Para escuchar hace falta una voz en inglés. Se descarga aquí, y la voz de Axi no cambia.';
+
+  @override
+  String get englishListenGetVoice => 'Descargar voz en inglés';
+
+  @override
+  String get englishListenFailed => 'No se pudo leer en voz alta.';
+
+  @override
+  String get englishReviewTitle => 'Repasar palabras';
+
+  @override
+  String get englishReviewEmpty =>
+      'No hay nada que repasar ahora. Guarda palabras mientras lees y aparecerán aquí.';
+
+  @override
+  String get englishReviewQuestion => '¿Qué significa aquí?';
+
+  @override
+  String get englishReviewShow => 'Mostrar';
+
+  @override
+  String get englishReviewNoGloss => 'Sin significado guardado.';
+
+  @override
+  String get englishReviewAgain => 'Otra vez';
+
+  @override
+  String get englishReviewHard => 'Difícil';
+
+  @override
+  String get englishReviewGood => 'Bien';
+
+  @override
+  String get englishReviewEasy => 'Fácil';
+
+  @override
+  String englishReviewAnswer(String label, String when) {
+    return '$label · $when';
+  }
+
+  @override
+  String englishIntervalMinutes(int count) {
+    return '$count min';
+  }
+
+  @override
+  String englishIntervalHours(int count) {
+    return '$count h';
+  }
+
+  @override
+  String englishIntervalDays(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count días',
+      one: '1 día',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalMonths(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count meses',
+      one: '1 mes',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishIntervalYears(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count años',
+      one: '1 año',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String englishReviewDone(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: 'Listo por hoy. Repasaste $count palabras.',
+      one: 'Listo por hoy. Repasaste 1 palabra.',
+    );
+    return '$_temp0';
+  }
+
+  @override
+  String get englishReviewSaveFailed =>
+      'No se pudo guardar este repaso. Inténtalo otra vez.';
+
+  @override
+  String get englishReviewBack => 'Volver';
+
+  @override
+  String englishReviewButton(int count) {
+    return 'Repasar palabras ($count)';
+  }
+
+  @override
+  String get englishSpeakTitle => 'Practicar en voz alta';
+
+  @override
+  String get englishSpeakHint =>
+      'Escucha la oración y dila a la vez o justo después (shadowing), o léela tú primero.';
+
+  @override
+  String get englishSpeakRecord => 'Grabar';
+
+  @override
+  String get englishSpeakStop => 'Terminar';
+
+  @override
+  String get englishSpeakListening => 'Escuchando lo que dijiste…';
+
+  @override
+  String englishSpeakScore(int percent) {
+    return 'Se entendió el $percent% de las palabras';
+  }
+
+  @override
+  String englishSpeakHeard(String text) {
+    return 'Se oyó: «$text»';
+  }
+
+  @override
+  String get englishSpeakCaveat => 'Mide si se te entendió, no tu acento.';
+
+  @override
+  String get englishSpeakNoMic => 'Hace falta permiso para usar el micrófono.';
+
+  @override
+  String get englishSpeakSttFailed =>
+      'No se pudo transcribir. ¿Está descargado el modelo de voz?';
+
+  @override
+  String get englishSpeakNext => 'Siguiente oración';
+
+  @override
+  String get englishRecordingsTitle => 'Tus grabaciones';
+
+  @override
+  String get englishRecordingsEmpty =>
+      'Aún no hay grabaciones. En el lector, toca «Practicar en voz alta».';
+
+  @override
+  String englishRecordingsProgress(int first, int last) {
+    return 'Primer mes: $first% · Último mes: $last%';
+  }
+
+  @override
+  String get englishRecordingsPlay => 'Reproducir';
+
+  @override
+  String get englishRecordingsElsewhere =>
+      'El audio está en el otro dispositivo donde grabaste.';
+
+  @override
+  String get englishPracticeTitle => 'Practicar';
+
+  @override
+  String get englishPracticeWrite => 'Escribir';
+
+  @override
+  String get englishWriteHint =>
+      'Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.';
+
+  @override
+  String get englishWriteReview => 'Revisar';
+
+  @override
+  String get englishReviewing => 'Revisando…';
+
+  @override
+  String get englishFeedbackNone => 'Sin errores importantes. ¡Bien hecho!';
+
+  @override
+  String get englishFeedbackFailed =>
+      'No se pudo revisar esta vez. ¿Está descargado el modelo local? Inténtalo otra vez.';
+
+  @override
+  String get englishPracticeTalk => 'Conversar';
+
+  @override
+  String englishTalkGoal(String task) {
+    return 'Tu objetivo: $task';
+  }
+
+  @override
+  String get englishTalkHint =>
+      'Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.';
+
+  @override
+  String get englishTalkSend => 'Enviar';
+
+  @override
+  String get englishTalkSpeak => 'Hablar';
+
+  @override
+  String get englishTalkDoneSpeaking => 'Listo';
+
+  @override
+  String get englishTalkFinish => 'Terminar y revisar';
+
+  @override
+  String get englishTalkNoReply =>
+      'El personaje no respondió. ¿Está descargado el modelo local? Inténtalo otra vez.';
+
+  @override
+  String englishTodayTitle(int minutes) {
+    return 'Hoy · $minutes min';
+  }
+
+  @override
+  String englishTodayProgress(int done, int target) {
+    return 'Llevas $done de $target minutos.';
+  }
+
+  @override
+  String englishTodayDone(int minutes) {
+    return 'Día cumplido: $minutes minutos. ¡Bien!';
+  }
+
+  @override
+  String get englishTodayFloor =>
+      'Ayer no hubo práctica. Hoy basta con 5 minutos para no fallar dos veces.';
+
+  @override
+  String englishTodayWeek(int days) {
+    return 'Esta semana: $days de 7 días.';
+  }
+
+  @override
+  String get englishStepReview => 'Repasar palabras';
+
+  @override
+  String get englishStepRead => 'Leer y escuchar un pasaje';
+
+  @override
+  String get englishStepSpeak => 'Leer en voz alta (desde un pasaje)';
+
+  @override
+  String get englishStepTalk => 'Conversar';
+
+  @override
+  String get englishStepWrite => 'Escribir';
+
+  @override
+  String englishStepMinutes(String label, int minutes) {
+    return '$label · $minutes min';
+  }
+
+  @override
+  String get englishProposeBuild =>
+      'Llevas dos semanas constantes. ¿Subimos a 30 minutos al día?';
+
+  @override
+  String get englishProposeCruise =>
+      'Ya es un hábito (día 66). ¿Subimos a 45 minutos al día?';
+
+  @override
+  String get englishProposeYes => 'Sí, subir';
+
+  @override
+  String get englishStepBack => 'Bajar el ritmo';
+
+  @override
+  String get englishReassess =>
+      'Pasó un mes desde tu última prueba: repítela para ver tu avance.';
+
+  @override
+  String englishMilestonesTitle(int reached, int total) {
+    return 'Logros: $reached de $total';
+  }
+
+  @override
+  String get englishMilestonePlaced => 'Hiciste tu prueba de nivel';
+
+  @override
+  String get englishMilestoneFirstReading => 'Leíste tu primer pasaje';
+
+  @override
+  String get englishMilestoneFirstRecording =>
+      'Te grabaste leyendo en voz alta';
+
+  @override
+  String get englishMilestoneFirstConversation =>
+      'Tuviste tu primera conversación';
+
+  @override
+  String get englishMilestoneFirstWriting =>
+      'Escribiste y revisaste tu primer texto';
+
+  @override
+  String get englishMilestoneWords25 => 'Guardaste 25 palabras';
+
+  @override
+  String get englishMilestoneUnderstood90 =>
+      'Se te entendió el 90% al leer en voz alta';
+
+  @override
+  String get englishMilestoneDays7 => 'Practicaste 7 días';
+
+  @override
+  String get englishMilestoneWords100 => 'Guardaste 100 palabras';
+
+  @override
+  String get englishMilestoneDays30 => 'Practicaste 30 días';
+
+  @override
+  String get englishMilestoneDays66 => 'Día 66: ya es un hábito';
+
+  @override
+  String get englishReminderButton => 'Recordarme cada día';
+
+  @override
+  String englishReminderSet(String time) {
+    return 'Te lo recuerdo cada día a las $time.';
+  }
+
+  @override
+  String get englishReminderText => 'Inglés: tu práctica de hoy';
+
+  @override
+  String get englishReminderFailed => 'No se pudo crear el recordatorio.';
+
+  @override
+  String get englishRealTitle => 'Con personas reales';
+
+  @override
+  String get englishRealIntro =>
+      'Lo que la app no reemplaza: hablar con personas. Aquí te preparas antes y aprendes después.';
+
+  @override
+  String get englishRealSituation =>
+      '¿Qué conversación vas a tener, o tuviste?';
+
+  @override
+  String get englishRealBefore => 'Antes';
+
+  @override
+  String get englishRealPrepare => 'Preparar';
+
+  @override
+  String get englishRealPhrases => 'Frases que puedes usar';
+
+  @override
+  String get englishRealQuestions => 'Preguntas que te pueden hacer';
+
+  @override
+  String get englishRealRehearse => 'Ensayar la conversación';
+
+  @override
+  String get englishRealAfter => 'Después';
+
+  @override
+  String get englishRealWanted =>
+      '¿Qué quisiste decir y no pudiste? Una cosa por línea.';
+
+  @override
+  String get englishRealHowToSay => '¿Cómo lo digo?';
+
+  @override
+  String get englishRealFailed =>
+      'No se pudo esta vez. ¿Está descargado el modelo local?';
+
+  @override
+  String get englishRealEntry => 'Preparar o repasar una conversación real';
+
+  @override
+  String get englishListeningTitle => 'Prueba de escucha';
+
+  @override
+  String get englishListeningIntro =>
+      'Escucharás oraciones en inglés, cada vez más difíciles. Escribe lo que entiendas; puedes oír cada una dos veces.';
+
+  @override
+  String englishListeningSentence(int number) {
+    return 'Oración $number';
+  }
+
+  @override
+  String get englishListeningCheck => 'Comprobar';
+
+  @override
+  String get englishListeningNext => 'Siguiente';
+
+  @override
+  String englishListeningScore(int percent) {
+    return 'Llegó el $percent% de las palabras.';
+  }
+
+  @override
+  String englishListeningResult(String level) {
+    return 'Tu nivel de escucha estimado: $level';
+  }
+
+  @override
+  String get englishListeningBeforeA1 =>
+      'Aún no llegas a A1 de escucha. Es el punto de partida perfecto: con práctica diaria se nota rápido.';
+
+  @override
+  String get englishListeningCaveat =>
+      'Mide una voz sintética clara; con personas reales suele costar un poco más.';
+
+  @override
+  String get englishListeningMeasure => 'Medir tu escucha';
+
+  @override
+  String englishListeningLevel(String level) {
+    return 'Escucha: $level';
+  }
+
+  @override
+  String get englishImportTitle => 'Tu audio o video';
+
+  @override
+  String get englishImportAction => 'Importar audio o video';
+
+  @override
+  String get englishImportIntro =>
+      'Elige un podcast, una charla o un video en inglés. Se transcribe aquí, en tu dispositivo: el archivo no sale de él. Se usan hasta 20 minutos.';
+
+  @override
+  String get englishImportPick => 'Elegir archivo';
+
+  @override
+  String get englishImportPreparing => 'Preparando el audio…';
+
+  @override
+  String englishImportProgress(int done, int total) {
+    return 'Transcribiendo… $done de $total';
+  }
+
+  @override
+  String get englishImportSource => 'tu archivo';
+
+  @override
+  String get englishImportLicense => 'transcrito en tu dispositivo';
+
+  @override
+  String get englishImportUnsupported =>
+      'Ese archivo no es de audio o video que se pueda leer (mp3, m4a, mp4, ogg, flac, wav…).';
+
+  @override
+  String get englishImportCannotDecode =>
+      'No se pudo leer el audio de ese archivo.';
+
+  @override
+  String get englishImportNoModel =>
+      'Falta el modelo de voz. Descárgalo en Ajustes → Voz.';
+
+  @override
+  String get englishImportNothingHeard => 'No se oyó voz en ese archivo.';
+
+  @override
+  String get englishSoundsTitle => 'Sonidos para practicar';
+
+  @override
+  String get englishSoundsNone => 'Ningún sonido que practicar en esta frase.';
+
+  @override
+  String get englishSoundsWorking => 'Escuchando los sonidos…';
+
+  @override
+  String englishSoundsHeard(String words, String heard, String expected) {
+    return 'En $words: se oyó [$heard] en lugar de [$expected].';
+  }
+
+  @override
+  String englishSoundsMissing(String words, String expected) {
+    return 'En $words: no se oyó [$expected].';
+  }
+
+  @override
+  String get englishSoundsCaveat =>
+      'Orientativo: el análisis de sonidos también se equivoca, sobre todo con nombres propios.';
+
+  @override
+  String get englishSoundsDownload =>
+      'Analizar los sonidos (descarga de 71 MB, solo con Wi-Fi)';
+
+  @override
+  String englishSoundsDownloading(int percent) {
+    return 'Descargando el análisis de sonidos… $percent%';
+  }
+
+  @override
+  String get englishSoundsFailed =>
+      'No se pudo descargar el análisis de sonidos.';
+
+  @override
+  String get englishTipShortITitle => 'La i corta de ship';
+
+  @override
+  String get englishTipShortIHow =>
+      'Relaja la boca: un sonido corto entre i y e. «ship» no es «sheep».';
+
+  @override
+  String get englishTipCatVowelTitle => 'La a de cat';
+
+  @override
+  String get englishTipCatVowelHow =>
+      'Abre mucho la boca, entre a y e, con la lengua baja y hacia adelante.';
+
+  @override
+  String get englishTipVAsBTitle => 'La v de very';
+
+  @override
+  String get englishTipVAsBHow =>
+      'Apoya los dientes de arriba en el labio de abajo y deja que vibre: no juntes los labios.';
+
+  @override
+  String get englishTipThVoicelessTitle => 'La th de think';
+
+  @override
+  String get englishTipThVoicelessHow =>
+      'Saca la punta de la lengua entre los dientes y sopla, sin voz: ni t ni s.';
+
+  @override
+  String get englishTipEBeforeSTitle => 'Sin «e» antes de la s';
+
+  @override
+  String get englishTipEBeforeSHow =>
+      'Empieza directo con la s: «speak», no «espeak». Alargarla ayuda: «sss-peak».';
+
+  @override
+  String get englishTipZAsSTitle => 'La z que zumba';
+
+  @override
+  String get englishTipZAsSHow =>
+      'Como una s, pero con voz: si tocas tu garganta, debe vibrar.';
+
+  @override
+  String get englishTipThVoicedTitle => 'La th de the';
+
+  @override
+  String get englishTipThVoicedHow =>
+      'La lengua entre los dientes, con voz, vibrando. No es d ni t.';
+
+  @override
+  String get englishTipCupVowelTitle => 'La vocal de cup';
+
+  @override
+  String get englishTipCupVowelHow =>
+      'Una a corta y relajada, en el centro de la boca; no leas la u como u.';
+
+  @override
+  String get englishTipBookVowelTitle => 'La u corta de book';
+
+  @override
+  String get englishTipBookVowelHow =>
+      'Más corta y relajada que la u del español, sin redondear tanto los labios.';
+
+  @override
+  String get englishTipShSoundTitle => 'La sh de shop';
+
+  @override
+  String get englishTipShSoundHow =>
+      'Labios hacia afuera y un soplo continuo, como para pedir silencio: shhh. Ni ch ni s.';
+
+  @override
+  String get englishTipJSoundTitle => 'La j de job';
+
+  @override
+  String get englishTipJSoundHow =>
+      'Una «ch» con voz, d más sh: no es «y» ni jota.';
+
+  @override
+  String get englishTipHAsJotaTitle => 'La h de hello';
+
+  @override
+  String get englishTipHAsJotaHow =>
+      'Solo aire, suave, como al empañar un vidrio; sin raspar la garganta.';
+
+  @override
+  String get englishTipFinalSoundTitle => 'El sonido final';
+
+  @override
+  String get englishTipFinalSoundHow =>
+      'Termina la palabra: el último sonido cambia el significado (cat, cap, can).';
+
+  @override
+  String get englishTipSpanishRTitle => 'La r del inglés';
+
+  @override
+  String get englishTipSpanishRHow =>
+      'La lengua no toca el paladar: enróscala un poco hacia atrás, sin vibrar.';
+
+  @override
+  String englishVoiceDownloading(int percent) {
+    return 'Descargando la voz en inglés… $percent%';
+  }
+
+  @override
+  String get englishVoiceFailed => 'No se pudo descargar la voz en inglés.';
 }

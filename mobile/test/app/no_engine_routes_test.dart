@@ -49,6 +49,13 @@ void main() {
       '/settings/briefing',
       '/settings/daily-digest',
       '/settings/backups',
+      '/english',
+      '/english/placement',
+      '/english/read',
+      '/english/review',
+      '/english/recordings',
+      '/english/practice',
+      '/english/listening',
     ]) {
       expect(kLifeosRoutePaths, contains(path), reason: '$path disappeared');
     }

@@ -25,7 +25,15 @@
 ///                [--bench-speculative=auto|on|off]
 ///                [--bench-max-output-tokens=N]
 ///                [--bench-repeat=N]
+///                [--bench-prompts=prompts.json]
+///                [--bench-show-text=on|off]
 /// ```
+///
+/// `--bench-prompts` cambia los tres prompts fijos por los de un archivo JSON,
+/// una lista de `{"id": "...", "text": "...", "temperature": 0.2}` (la
+/// temperatura es opcional). Con `--bench-show-text=on` se imprime además lo
+/// que respondió el modelo. Sirve para medir la CALIDAD de un prompt nuevo
+/// contra el modelo de verdad, no sólo su velocidad.
 ///
 /// Ejemplos (desde el directorio de la instalación en Linux):
 /// ```sh
@@ -72,6 +80,7 @@
 /// una medición se explica por `stderr`.
 library;
 
+import 'dart:convert';
 import 'dart:io';
 
 import '../data/flutter_gemma_llm_engine.dart';
@@ -94,11 +103,13 @@ const String benchUsage = '''
 uso: lifeos --bench [--bench-backend=auto|cpu|gpu|npu]
                     [--bench-speculative=auto|on|off]
                     [--bench-max-output-tokens=N]
-                    [--bench-repeat=N]''';
+                    [--bench-repeat=N]
+                    [--bench-prompts=prompts.json]
+                    [--bench-show-text=on|off]''';
 
 /// Un prompt del conjunto fijo, con el identificador que aparece en la salida.
 class BenchPrompt {
-  const BenchPrompt(this.id, this.text);
+  const BenchPrompt(this.id, this.text, {this.temperature});
 
   /// Identificador estable: es la columna por la que se agrupa al comparar dos
   /// corridas, así que NO cambia aunque se retoque el texto.
@@ -106,6 +117,30 @@ class BenchPrompt {
 
   /// El texto que se le manda al modelo.
   final String text;
+
+  /// La temperatura de esta generación, o `null` para la afinada del modelo.
+  final double? temperature;
+}
+
+/// Los prompts de un archivo `--bench-prompts`: una lista JSON de objetos con
+/// `id` y `text`, y `temperature` opcional. Lanza [FormatException] si no es
+/// eso, para que un archivo mal escrito PARE en vez de medir otra cosa.
+List<BenchPrompt> parseBenchPrompts(String source) {
+  final json = jsonDecode(source);
+  if (json is! List || json.isEmpty) {
+    throw const FormatException('--bench-prompts espera una lista no vacía');
+  }
+  return [
+    for (final item in json)
+      if (item is Map && item['id'] is String && item['text'] is String)
+        BenchPrompt(
+          item['id'] as String,
+          item['text'] as String,
+          temperature: (item['temperature'] as num?)?.toDouble(),
+        )
+      else
+        throw FormatException('--bench-prompts: elemento sin id o text: $item'),
+  ];
 }
 
 /// El conjunto FIJO de prompts, escrito aquí y no en un fichero, para que dos
@@ -161,6 +196,8 @@ class BenchOptions {
     this.speculativeDecoding,
     this.maxOutputTokens = defaultMaxOutputTokens,
     this.repeat = 1,
+    this.promptsFile,
+    this.showText = false,
   });
 
   /// Tope de tokens generados por respuesta. MUY POR DEBAJO del de la
@@ -181,6 +218,12 @@ class BenchOptions {
   /// dispersión, que es lo que dice si una diferencia es real o es ruido.
   final int repeat;
 
+  /// Archivo de prompts propios, o `null` para los fijos.
+  final String? promptsFile;
+
+  /// Si se imprime también el texto generado.
+  final bool showText;
+
   /// Cómo se escribe [speculativeDecoding] en la salida: `auto`, `on` u `off`.
   String get speculativeLabel => switch (speculativeDecoding) {
         null => 'auto',
@@ -197,6 +240,8 @@ class BenchOptions {
     bool? speculative;
     var maxOutputTokens = defaultMaxOutputTokens;
     var repeat = 1;
+    String? promptsFile;
+    var showText = false;
 
     for (final argument in arguments) {
       final separator = argument.indexOf('=');
@@ -212,6 +257,10 @@ class BenchOptions {
           maxOutputTokens = _parsePositive(name, value);
         case '--bench-repeat':
           repeat = _parsePositive(name, value);
+        case '--bench-prompts':
+          promptsFile = value;
+        case '--bench-show-text':
+          showText = _parseOnOff(name, value);
         default:
           throw FormatException('opción desconocida: $name');
       }
@@ -222,8 +271,16 @@ class BenchOptions {
       speculativeDecoding: speculative,
       maxOutputTokens: maxOutputTokens,
       repeat: repeat,
+      promptsFile: promptsFile,
+      showText: showText,
     );
   }
+
+  static bool _parseOnOff(String name, String value) => switch (value) {
+        'on' => true,
+        'off' => false,
+        _ => throw FormatException('$name sólo acepta on u off (recibido: $value)'),
+      };
 
   static LocalLlmBackend? _parseBackend(String value) {
     if (value == 'auto') return null;
@@ -262,13 +319,20 @@ Future<int> runLocalModelBench(
   BenchEngineFactory? engineFactory,
   StringSink? out,
   StringSink? err,
+  String Function(String path)? readFile,
 }) async {
   final output = out ?? stdout;
   final errors = err ?? stderr;
 
   final BenchOptions options;
+  final List<BenchPrompt> prompts;
   try {
     options = BenchOptions.parse(arguments);
+    final file = options.promptsFile;
+    prompts = file == null
+        ? benchPrompts
+        : parseBenchPrompts(
+            (readFile ?? (path) => File(path).readAsStringSync())(file));
   } on FormatException catch (error) {
     errors.writeln('lifeos --bench: ${error.message}');
     errors.writeln(benchUsage);
@@ -307,10 +371,19 @@ Future<int> runLocalModelBench(
 
     var failures = 0;
     for (var round = 1; round <= options.repeat; round++) {
-      for (final prompt in benchPrompts) {
+      for (final prompt in prompts) {
         try {
-          final result = await engine.generate(prompt.text);
+          final result = await engine.generate(
+            prompt.text,
+            temperature: prompt.temperature,
+          );
           output.writeln(_line(prompt, round, options, result.metrics));
+          if (options.showText) {
+            output
+              ..writeln('--- ${prompt.id}')
+              ..writeln(result.text)
+              ..writeln('---');
+          }
         } catch (error) {
           failures++;
           errors.writeln(

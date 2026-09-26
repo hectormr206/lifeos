@@ -52,6 +52,7 @@ flutter build apk --release \
   --dart-define=TTS_MODEL_BASE_URL="${TTS_MODEL_BASE_URL:-$UPDATE_BASE_URL/tts}" \
   --dart-define=EMBED_MODEL_BASE_URL="${EMBED_MODEL_BASE_URL:-$UPDATE_BASE_URL/embed}" \
   --dart-define=BRAIN_MODEL_BASE_URL="${BRAIN_MODEL_BASE_URL:-$UPDATE_BASE_URL/model}" \
+  --dart-define=PRON_MODEL_BASE_URL="${PRON_MODEL_BASE_URL:-$UPDATE_BASE_URL/pron}" \
   --dart-define=SYNC_RELAY_URL="${SYNC_RELAY_URL:-}" \
   --dart-define=LIFEOS_SEARCH_BASE_URL="${LIFEOS_SEARCH_BASE_URL:-}" \
   --dart-define=LIFEOS_SEARCH_KEY="${LIFEOS_SEARCH_KEY:-}"
@@ -118,11 +119,13 @@ if [[ "$VPS_SSH" == "local" ]] || ota_volume_present; then
   ota_put "$MANIFEST" "manifest.json"
   ota_link "$FN" "current.apk"
 else
-  echo "→ Subiendo a $VPS_SSH:$VPS_DIR/ …"
-  scp -o ConnectTimeout=20 "$LOCAL_COPY" "$VPS_SSH:$VPS_DIR/$FN"
-  scp -o ConnectTimeout=20 "$MANIFEST"  "$VPS_SSH:$VPS_DIR/manifest.json"
-  # current.apk is a symlink the server serves at /download; repoint it atomically.
-  ssh "$VPS_SSH" "cd '$VPS_DIR' && ln -sfn '$FN' current.apk"
+  # There is no other route. The store is a Docker volume on the VPS; the old
+  # fallback copied into ~/lifeos-updates, which nothing has served since the
+  # move into Coolify (it would "succeed" into a directory nobody reads).
+  echo "✗ El volumen OTA no es alcanzable desde esta máquina." >&2
+  echo "  Publica desde el VPS (VPS_SSH=local) o desde el devbox, cuyo" >&2
+  echo "  ~/.buildenv.sh apunta DOCKER_HOST al Docker del VPS." >&2
+  exit 1
 fi
 rm -f "$MANIFEST"
 

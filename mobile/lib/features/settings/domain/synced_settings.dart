@@ -37,6 +37,10 @@ const Set<String> kSyncedSettingKeys = {
   // La zona que ELIGIÓ a mano. La detectada automáticamente no: describe
   // dónde está cada aparato, que puede ser otro país.
   'timezone.override',
+  // Para qué quiere el inglés. Una decisión sobre su vida, no sobre el aparato.
+  'english.goal',
+  // El ritmo que aceptó (15, 30 o 45 minutos): también una decisión suya.
+  'english.phase',
 };
 
 /// True cuando [key] debe viajar entre dispositivos.

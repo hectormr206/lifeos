@@ -1,0 +1,157 @@
+// Choosing a practice, and writing with a short review.
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/features/english/data/activity_log.dart';
+import 'package:lifeos/features/english/data/practice_service.dart';
+import 'package:lifeos/features/english/domain/daily_plan.dart';
+import 'package:lifeos/features/english/domain/english_goal.dart';
+import 'package:lifeos/features/english/presentation/english_practice_screen.dart';
+import 'package:lifeos/features/english/presentation/english_providers.dart';
+import 'package:lifeos/l10n/app_localizations.dart';
+
+import '../support/fake_goal_store.dart';
+
+import '../../local_model/support/fake_local_llm_engine.dart';
+
+class _MemoryLog implements ActivityLog {
+  final List<StudyActivity> recorded = [];
+  @override
+  Future<void> record(StudyActivity activity) async => recorded.add(activity);
+  @override
+  Future<List<StudyActivity>> all() async => recorded;
+}
+
+Widget _app({
+  EnglishGoal? goal,
+  String Function(String)? reply,
+  _MemoryLog? log,
+  FakeGoalStore? goals,
+}) =>
+    ProviderScope(
+      overrides: [
+        if (log != null) activityLogProvider.overrideWith((ref) async => log),
+        if (goals != null)
+          englishGoalStoreProvider.overrideWith((ref) async => goals)
+        else
+          englishGoalProvider.overrideWith((ref) async => goal),
+        practiceServiceProvider.overrideWithValue(PracticeService(
+            FakeLocalLlmEngine(reply: reply ?? (_) => 'NO MISTAKES'))),
+      ],
+      child: const MaterialApp(
+        locale: Locale('es'),
+        localizationsDelegates: AppLocalizations.localizationsDelegates,
+        supportedLocales: AppLocalizations.supportedLocales,
+        home: EnglishPracticeScreen(),
+      ),
+    );
+
+Future<void> _write(WidgetTester tester, String text) async {
+  await tester.scrollUntilVisible(find.text('Propuesta para un cliente'), 200);
+  await tester.tap(find.text('Propuesta para un cliente'));
+  await tester.pumpAndSettle();
+  await tester.enterText(find.byType(TextField), text);
+  await tester.pumpAndSettle();
+  // Below the text field: scroll to it, or the tap lands outside the screen.
+  await tester.ensureVisible(find.text('Revisar'));
+  await tester.tap(find.text('Revisar'));
+  await tester.pumpAndSettle();
+}
+
+void main() {
+  testWidgets('without a goal it asks for it right here', (tester) async {
+    final goals = FakeGoalStore();
+    await tester.pumpWidget(_app(goals: goals));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('Viajes'));
+    await tester.pumpAndSettle();
+
+    expect(goals.written, [EnglishGoal.travel]);
+    expect(find.text('Conversar'), findsOneWidget,
+        reason: 'the practice for that goal appears');
+  });
+
+  testWidgets('the goal decides what there is to practise', (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Primera llamada con un cliente'), findsOneWidget);
+    expect(find.text('Propuesta para un cliente'), findsOneWidget);
+    expect(find.text('En un restaurante'), findsNothing);
+    expect(find.text('Correo a la escuela'), findsNothing);
+  });
+
+  testWidgets('writing: the task is in English, and a review shows the fix',
+      (tester) async {
+    await tester.pumpWidget(_app(
+      goal: EnglishGoal.work,
+      reply: (_) => 'WRONG: I can to make it.\n'
+          'RIGHT: I can make it.\n'
+          'WHY: Después de "can" no va "to".',
+    ));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can to make it.');
+
+    expect(find.textContaining('bakery'), findsOneWidget,
+        reason: 'reading the task is practice too');
+    expect(find.text('I can make it.'), findsOneWidget);
+    expect(find.textContaining('no va "to"'), findsOneWidget);
+  });
+
+  testWidgets('reviewing puts the keyboard away, so the review is in view',
+      (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can to make it.');
+
+    expect(tester.testTextInput.isVisible, isFalse);
+  });
+
+  testWidgets('no mistakes is said as good news', (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can build your website in three weeks.');
+
+    expect(find.textContaining('Sin errores importantes'), findsOneWidget);
+  });
+
+  testWidgets('a review that could not be done is said, not faked',
+      (tester) async {
+    await tester.pumpWidget(
+        _app(goal: EnglishGoal.work, reply: (_) => 'Great job!'));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'Hello.');
+
+    expect(find.textContaining('No se pudo revisar'), findsOneWidget);
+  });
+
+  testWidgets('nothing written, nothing to review', (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    await tester.scrollUntilVisible(find.text('Propuesta para un cliente'), 200);
+    await tester.tap(find.text('Propuesta para un cliente'));
+    await tester.pumpAndSettle();
+
+    final button = tester.widget<FilledButton>(
+        find.ancestor(of: find.text('Revisar'), matching: find.byType(FilledButton)));
+    expect(button.onPressed, isNull);
+  });
+
+  testWidgets('a reviewed text counts as writing practice today',
+      (tester) async {
+    final log = _MemoryLog();
+    await tester.pumpWidget(_app(goal: EnglishGoal.work, log: log));
+    await tester.pumpAndSettle();
+
+    await _write(tester, 'I can build it.');
+
+    expect(log.recorded.single.kind, ActivityKind.write);
+    expect(log.recorded.single.minutes, greaterThanOrEqualTo(1));
+  });
+}

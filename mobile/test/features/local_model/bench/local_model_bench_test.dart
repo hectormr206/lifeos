@@ -29,7 +29,11 @@ void main() {
 
   /// Corre el arnés con un motor falso, capturando la config con la que se
   /// construyó.
-  Future<int> run(List<String> arguments, {FakeLocalLlmEngine? engine}) {
+  Future<int> run(
+    List<String> arguments, {
+    FakeLocalLlmEngine? engine,
+    Map<String, String> files = const {},
+  }) {
     final fake = engine ?? FakeLocalLlmEngine(installed: true);
     return runLocalModelBench(
       arguments,
@@ -39,6 +43,8 @@ void main() {
       },
       out: out,
       err: err,
+      readFile: (path) =>
+          files[path] ?? (throw FormatException('no existe: $path')),
     );
   }
 
@@ -238,5 +244,64 @@ void main() {
     final engine = FakeLocalLlmEngine(installed: true, generateShouldFail: true);
     await run(const ['--bench'], engine: engine);
     expect(engine.disposeCount, greaterThanOrEqualTo(1));
+  });
+
+  group('prompts propios, para medir la CALIDAD de un prompt y no sólo la velocidad', () {
+    // Un prompt nuevo (la glosa en contexto, la revisión del inglés) hay que
+    // verlo contra el modelo de verdad: una prueba con motor falso sólo dice
+    // que el analizador entiende la respuesta que uno imagina.
+    const file = '[{"id": "glosa", "text": "¿Qué significa bank?", '
+        '"temperature": 0.2}, {"id": "libre", "text": "Hola"}]';
+
+    test('lee los prompts del archivo en vez de los fijos', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+
+      expect(
+        await run(const ['--bench', '--bench-prompts=/p.json'],
+            engine: engine, files: const {'/p.json': file}),
+        0,
+      );
+
+      expect(engine.prompts, ['¿Qué significa bank?', 'Hola']);
+      expect(benchLines().map((l) => fields(l)['prompt']), ['glosa', 'libre']);
+    });
+
+    test('la temperatura de cada prompt llega al motor', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+
+      await run(const ['--bench', '--bench-prompts=/p.json'],
+          engine: engine, files: const {'/p.json': file});
+
+      expect(engine.generateSampling.first.$1, 0.2);
+      expect(engine.generateSampling.last.$1, isNull);
+    });
+
+    test('--bench-show-text=on imprime lo que respondió el modelo', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (p) => 'R:$p');
+
+      await run(const ['--bench', '--bench-prompts=/p.json', '--bench-show-text=on'],
+          engine: engine, files: const {'/p.json': file});
+
+      expect(out.toString(), contains('R:Hola'));
+    });
+
+    test('sin --bench-show-text la salida sigue siendo sólo de métricas', () async {
+      final engine = FakeLocalLlmEngine(installed: true, reply: (p) => 'R:$p');
+
+      await run(const ['--bench', '--bench-prompts=/p.json'],
+          engine: engine, files: const {'/p.json': file});
+
+      expect(out.toString(), isNot(contains('R:Hola')));
+    });
+
+    test('un archivo que no se entiende PARA antes de cargar nada', () async {
+      final engine = FakeLocalLlmEngine(installed: true);
+
+      final code = await run(const ['--bench', '--bench-prompts=/p.json'],
+          engine: engine, files: const {'/p.json': '{"no": "una lista"}'});
+
+      expect(code, benchUsageExitCode);
+      expect(engine.prompts, isEmpty);
+    });
   });
 }

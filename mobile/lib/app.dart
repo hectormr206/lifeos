@@ -64,6 +64,13 @@ import 'theme/theme_providers.dart';
 import 'package:lifeos/core/graph/graph_providers.dart';
 import 'package:lifeos/core/sync/keys.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
+import 'package:lifeos/features/english/presentation/english_hub_screen.dart';
+import 'package:lifeos/features/english/presentation/english_listening_screen.dart';
+import 'package:lifeos/features/english/presentation/english_placement_screen.dart';
+import 'package:lifeos/features/english/presentation/english_practice_screen.dart';
+import 'package:lifeos/features/english/presentation/english_reading_list_screen.dart';
+import 'package:lifeos/features/english/presentation/english_recordings_screen.dart';
+import 'package:lifeos/features/english/presentation/english_review_screen.dart';
 import 'package:lifeos/features/memory/data/birthday_notifications.dart';
 import 'package:lifeos/features/memory/data/birthday_scheduling.dart';
 import 'package:lifeos/features/settings/data/settings_sync.dart';
@@ -174,6 +181,35 @@ final goRouterProvider = Provider<GoRouter>((ref) {
       // Desahogo: say it, be heard, let it go. Nothing it receives is stored
       // anywhere — see features/confession.
       GoRoute(path: '/desahogo', builder: (context, state) => const ConfessionScreen()),
+      // English: its home (level + goal) and the vocabulary placement. Word
+      // bank bundled, results and goal in the local graph: NOT pairing-gated.
+      GoRoute(path: '/english', builder: (context, state) => const EnglishHubScreen()),
+      GoRoute(
+        path: '/english/placement',
+        builder: (context, state) => const EnglishPlacementScreen(),
+      ),
+      // Reading needs the internet to FETCH passages (Wikimedia), not a paired
+      // engine: still not pairing-gated.
+      GoRoute(
+        path: '/english/read',
+        builder: (context, state) => const EnglishReadingListScreen(),
+      ),
+      GoRoute(
+        path: '/english/review',
+        builder: (context, state) => const EnglishReviewScreen(),
+      ),
+      GoRoute(
+        path: '/english/recordings',
+        builder: (context, state) => const EnglishRecordingsScreen(),
+      ),
+      GoRoute(
+        path: '/english/practice',
+        builder: (context, state) => const EnglishPracticeScreen(),
+      ),
+      GoRoute(
+        path: '/english/listening',
+        builder: (context, state) => const EnglishListeningScreen(),
+      ),
       // App-shell slice: `/settings` is now the offline-reachable Settings hub
       // (appearance, model, updates, about). Deliberately NOT pairing-gated (the
       // exact-match `loc == '/settings'` was removed from the gate above) so the
@@ -729,6 +765,13 @@ const List<String> kLifeosRoutePaths = [
   '/mi-vida',
   '/reminders',
   '/desahogo',
+  '/english',
+  '/english/placement',
+  '/english/read',
+  '/english/review',
+  '/english/recordings',
+  '/english/practice',
+  '/english/listening',
   '/settings',
   '/settings/local-model',
   '/settings/dictation',

@@ -2137,6 +2137,1302 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Yesterday'**
   String get chatDayYesterday;
+
+  /// No description provided for @homeSectionLearn.
+  ///
+  /// In en, this message translates to:
+  /// **'Learn'**
+  String get homeSectionLearn;
+
+  /// No description provided for @homeEnglish.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get homeEnglish;
+
+  /// No description provided for @englishPlacementTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'English vocabulary'**
+  String get englishPlacementTitle;
+
+  /// No description provided for @englishPlacementIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'You will see English words one at a time. Mark only the ones you know, meaning you know what they mean.'**
+  String get englishPlacementIntro;
+
+  /// Shown BEFORE the first word. A trap nobody was told about feels like a trick.
+  ///
+  /// In en, this message translates to:
+  /// **'Some words are invented. If you say you know them, the result will notice.'**
+  String get englishPlacementWarning;
+
+  /// No description provided for @englishPlacementLength.
+  ///
+  /// In en, this message translates to:
+  /// **'It takes a few minutes and stops by itself once more words would tell nothing new.'**
+  String get englishPlacementLength;
+
+  /// No description provided for @englishPlacementStart.
+  ///
+  /// In en, this message translates to:
+  /// **'Start'**
+  String get englishPlacementStart;
+
+  /// No description provided for @englishPlacementLast.
+  ///
+  /// In en, this message translates to:
+  /// **'Your last result: {level} · about {words} words'**
+  String englishPlacementLast(String level, int words);
+
+  /// No description provided for @englishPlacementKnow.
+  ///
+  /// In en, this message translates to:
+  /// **'I know it'**
+  String get englishPlacementKnow;
+
+  /// No description provided for @englishPlacementDontKnow.
+  ///
+  /// In en, this message translates to:
+  /// **'I don\'t know it'**
+  String get englishPlacementDontKnow;
+
+  /// No description provided for @englishPlacementProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Word {count}'**
+  String englishPlacementProgress(int count);
+
+  /// No description provided for @englishPlacementWords.
+  ///
+  /// In en, this message translates to:
+  /// **'About {words} words'**
+  String englishPlacementWords(int words);
+
+  /// Below one full frequency band the count is noise, and "about 0 words" is a discouraging first message.
+  ///
+  /// In en, this message translates to:
+  /// **'Fewer than {words} words'**
+  String englishPlacementFewWords(int words);
+
+  /// No description provided for @englishPlacementLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Estimated vocabulary level: {level}'**
+  String englishPlacementLevel(String level);
+
+  /// No description provided for @englishPlacementScope.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures the vocabulary you recognize when reading. It does not measure how you speak or how you understand spoken English.'**
+  String get englishPlacementScope;
+
+  /// No description provided for @englishPlacementUnreliable.
+  ///
+  /// In en, this message translates to:
+  /// **'You marked several invented words as known, so this result is not reliable. Take it again, marking only the words whose meaning you know.'**
+  String get englishPlacementUnreliable;
+
+  /// No description provided for @englishPlacementRetake.
+  ///
+  /// In en, this message translates to:
+  /// **'Take it again'**
+  String get englishPlacementRetake;
+
+  /// No description provided for @englishPlacementDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get englishPlacementDone;
+
+  /// No description provided for @englishPlacementSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Your result could not be saved. It is still shown here, but it will not appear next time.'**
+  String get englishPlacementSaveFailed;
+
+  /// No description provided for @englishPlacementLoadError.
+  ///
+  /// In en, this message translates to:
+  /// **'The word list could not be loaded.'**
+  String get englishPlacementLoadError;
+
+  /// No description provided for @englishHubTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get englishHubTitle;
+
+  /// No description provided for @englishHubLevelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your level'**
+  String get englishHubLevelTitle;
+
+  /// No description provided for @englishHubNoLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'You don\'t know your vocabulary level yet. The test takes a few minutes.'**
+  String get englishHubNoLevel;
+
+  /// No description provided for @englishHubTakePlacement.
+  ///
+  /// In en, this message translates to:
+  /// **'Take the level test'**
+  String get englishHubTakePlacement;
+
+  /// No description provided for @englishHubLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Vocabulary level: {level}'**
+  String englishHubLevel(String level);
+
+  /// No description provided for @englishGoalQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'What do you want English for?'**
+  String get englishGoalQuestion;
+
+  /// No description provided for @englishGoalHint.
+  ///
+  /// In en, this message translates to:
+  /// **'It changes what you read and practise. Your level and your review stay the same.'**
+  String get englishGoalHint;
+
+  /// No description provided for @englishGoalWork.
+  ///
+  /// In en, this message translates to:
+  /// **'Work and clients'**
+  String get englishGoalWork;
+
+  /// No description provided for @englishGoalWorkDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Technology, proposals, calls with clients.'**
+  String get englishGoalWorkDesc;
+
+  /// No description provided for @englishGoalEveryday.
+  ///
+  /// In en, this message translates to:
+  /// **'Everyday life'**
+  String get englishGoalEveryday;
+
+  /// No description provided for @englishGoalEverydayDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Shopping, health, school, conversations.'**
+  String get englishGoalEverydayDesc;
+
+  /// No description provided for @englishGoalTravel.
+  ///
+  /// In en, this message translates to:
+  /// **'Travel'**
+  String get englishGoalTravel;
+
+  /// No description provided for @englishGoalTravelDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Transport, hotels, places, asking for help.'**
+  String get englishGoalTravelDesc;
+
+  /// No description provided for @englishFitEasy.
+  ///
+  /// In en, this message translates to:
+  /// **'Easy'**
+  String get englishFitEasy;
+
+  /// No description provided for @englishFitAtLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'At your level'**
+  String get englishFitAtLevel;
+
+  /// No description provided for @englishFitHard.
+  ///
+  /// In en, this message translates to:
+  /// **'Hard'**
+  String get englishFitHard;
+
+  /// No description provided for @englishFitLine.
+  ///
+  /// In en, this message translates to:
+  /// **'{fit} · you know {percent}% of the words'**
+  String englishFitLine(String fit, int percent);
+
+  /// No description provided for @englishReaderHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Tap any word to see what it means here. Underlined words are probably new.'**
+  String get englishReaderHint;
+
+  /// CC BY-SA requires crediting the source with the text.
+  ///
+  /// In en, this message translates to:
+  /// **'Text: {title} ({site}), {license}'**
+  String englishReaderCredit(String title, String site, String license);
+
+  /// No description provided for @englishReaderLooking.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking up what it means here…'**
+  String get englishReaderLooking;
+
+  /// No description provided for @englishReaderNoGloss.
+  ///
+  /// In en, this message translates to:
+  /// **'I couldn\'t get the meaning. Is the local model downloaded?'**
+  String get englishReaderNoGloss;
+
+  /// No description provided for @englishReaderSave.
+  ///
+  /// In en, this message translates to:
+  /// **'Save for review'**
+  String get englishReaderSave;
+
+  /// No description provided for @englishReaderSaved.
+  ///
+  /// In en, this message translates to:
+  /// **'Saved for review'**
+  String get englishReaderSaved;
+
+  /// No description provided for @englishReaderSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The word could not be saved.'**
+  String get englishReaderSaveFailed;
+
+  /// No description provided for @englishReadTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Read at your level'**
+  String get englishReadTitle;
+
+  /// The only part of the English feature that leaves the device; say so.
+  ///
+  /// In en, this message translates to:
+  /// **'Readings come from Simple English Wikipedia and Wikivoyage: fetching them needs the internet.'**
+  String get englishReadNote;
+
+  /// No description provided for @englishReadNeedsPlacement.
+  ///
+  /// In en, this message translates to:
+  /// **'First take the level test: that is how I know which texts suit you.'**
+  String get englishReadNeedsPlacement;
+
+  /// No description provided for @englishReadLoading.
+  ///
+  /// In en, this message translates to:
+  /// **'Looking for readings at your level…'**
+  String get englishReadLoading;
+
+  /// No description provided for @englishReadRateLimited.
+  ///
+  /// In en, this message translates to:
+  /// **'Wikipedia asked to wait {seconds} seconds. Try again in a moment.'**
+  String englishReadRateLimited(int seconds);
+
+  /// No description provided for @englishReadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'I couldn\'t fetch readings. Is there an internet connection?'**
+  String get englishReadFailed;
+
+  /// No description provided for @englishReadEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'I found no passages this time.'**
+  String get englishReadEmpty;
+
+  /// No description provided for @englishReadAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Find others'**
+  String get englishReadAgain;
+
+  /// No description provided for @englishReadNewWords.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =0{No new words} =1{1 word probably new} other{{count} words probably new}}'**
+  String englishReadNewWords(int count);
+
+  /// No description provided for @englishListen.
+  ///
+  /// In en, this message translates to:
+  /// **'Listen'**
+  String get englishListen;
+
+  /// No description provided for @englishListenStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Stop'**
+  String get englishListenStop;
+
+  /// No description provided for @englishListenSlow.
+  ///
+  /// In en, this message translates to:
+  /// **'Slower'**
+  String get englishListenSlow;
+
+  /// No description provided for @englishListenNoVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening needs an English voice. It downloads here, and Axi\'s voice stays the same.'**
+  String get englishListenNoVoice;
+
+  /// No description provided for @englishListenGetVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Download an English voice'**
+  String get englishListenGetVoice;
+
+  /// No description provided for @englishListenFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be read aloud.'**
+  String get englishListenFailed;
+
+  /// No description provided for @englishReviewTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words'**
+  String get englishReviewTitle;
+
+  /// No description provided for @englishReviewEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nothing to review right now. Save words while you read and they will show up here.'**
+  String get englishReviewEmpty;
+
+  /// No description provided for @englishReviewQuestion.
+  ///
+  /// In en, this message translates to:
+  /// **'What does it mean here?'**
+  String get englishReviewQuestion;
+
+  /// No description provided for @englishReviewShow.
+  ///
+  /// In en, this message translates to:
+  /// **'Show'**
+  String get englishReviewShow;
+
+  /// No description provided for @englishReviewNoGloss.
+  ///
+  /// In en, this message translates to:
+  /// **'No meaning saved.'**
+  String get englishReviewNoGloss;
+
+  /// No description provided for @englishReviewAgain.
+  ///
+  /// In en, this message translates to:
+  /// **'Again'**
+  String get englishReviewAgain;
+
+  /// No description provided for @englishReviewHard.
+  ///
+  /// In en, this message translates to:
+  /// **'Hard'**
+  String get englishReviewHard;
+
+  /// No description provided for @englishReviewGood.
+  ///
+  /// In en, this message translates to:
+  /// **'Good'**
+  String get englishReviewGood;
+
+  /// No description provided for @englishReviewEasy.
+  ///
+  /// In en, this message translates to:
+  /// **'Easy'**
+  String get englishReviewEasy;
+
+  /// No description provided for @englishReviewAnswer.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} · {when}'**
+  String englishReviewAnswer(String label, String when);
+
+  /// No description provided for @englishIntervalMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} min'**
+  String englishIntervalMinutes(int count);
+
+  /// No description provided for @englishIntervalHours.
+  ///
+  /// In en, this message translates to:
+  /// **'{count} h'**
+  String englishIntervalHours(int count);
+
+  /// No description provided for @englishIntervalDays.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 day} other{{count} days}}'**
+  String englishIntervalDays(int count);
+
+  /// No description provided for @englishIntervalMonths.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 month} other{{count} months}}'**
+  String englishIntervalMonths(int count);
+
+  /// No description provided for @englishIntervalYears.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{1 year} other{{count} years}}'**
+  String englishIntervalYears(int count);
+
+  /// No description provided for @englishReviewDone.
+  ///
+  /// In en, this message translates to:
+  /// **'{count, plural, =1{Done for today. You reviewed 1 word.} other{Done for today. You reviewed {count} words.}}'**
+  String englishReviewDone(int count);
+
+  /// No description provided for @englishReviewSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'This review could not be saved. Try again.'**
+  String get englishReviewSaveFailed;
+
+  /// No description provided for @englishReviewBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Back'**
+  String get englishReviewBack;
+
+  /// No description provided for @englishReviewButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words ({count})'**
+  String englishReviewButton(int count);
+
+  /// No description provided for @englishSpeakTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Read aloud'**
+  String get englishSpeakTitle;
+
+  /// No description provided for @englishSpeakHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Listen to the sentence and say it along or right after (shadowing), or read it yourself first.'**
+  String get englishSpeakHint;
+
+  /// No description provided for @englishSpeakRecord.
+  ///
+  /// In en, this message translates to:
+  /// **'Record'**
+  String get englishSpeakRecord;
+
+  /// No description provided for @englishSpeakStop.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish'**
+  String get englishSpeakStop;
+
+  /// No description provided for @englishSpeakListening.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening to what you said…'**
+  String get englishSpeakListening;
+
+  /// No description provided for @englishSpeakScore.
+  ///
+  /// In en, this message translates to:
+  /// **'{percent}% of the words were understood'**
+  String englishSpeakScore(int percent);
+
+  /// No description provided for @englishSpeakHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'Heard: “{text}”'**
+  String englishSpeakHeard(String text);
+
+  /// Whisper leans towards the right words for a known text: never claim this is a pronunciation score.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures whether you were understood, not your accent.'**
+  String get englishSpeakCaveat;
+
+  /// No description provided for @englishSpeakNoMic.
+  ///
+  /// In en, this message translates to:
+  /// **'Using the microphone needs permission.'**
+  String get englishSpeakNoMic;
+
+  /// No description provided for @englishSpeakSttFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be transcribed. Is the voice model downloaded?'**
+  String get englishSpeakSttFailed;
+
+  /// No description provided for @englishSpeakNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next sentence'**
+  String get englishSpeakNext;
+
+  /// No description provided for @englishRecordingsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your recordings'**
+  String get englishRecordingsTitle;
+
+  /// No description provided for @englishRecordingsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No recordings yet. In the reader, tap “Read aloud”.'**
+  String get englishRecordingsEmpty;
+
+  /// No description provided for @englishRecordingsProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'First month: {first}% · Last month: {last}%'**
+  String englishRecordingsProgress(int first, int last);
+
+  /// No description provided for @englishRecordingsPlay.
+  ///
+  /// In en, this message translates to:
+  /// **'Play'**
+  String get englishRecordingsPlay;
+
+  /// No description provided for @englishRecordingsElsewhere.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio is on the other device where you recorded it.'**
+  String get englishRecordingsElsewhere;
+
+  /// No description provided for @englishPracticeTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Practice'**
+  String get englishPracticeTitle;
+
+  /// No description provided for @englishPracticeWrite.
+  ///
+  /// In en, this message translates to:
+  /// **'Write'**
+  String get englishPracticeWrite;
+
+  /// No description provided for @englishWriteHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Write in English. Then review it: I point out at most two mistakes, the ones that matter most.'**
+  String get englishWriteHint;
+
+  /// No description provided for @englishWriteReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Review'**
+  String get englishWriteReview;
+
+  /// No description provided for @englishReviewing.
+  ///
+  /// In en, this message translates to:
+  /// **'Reviewing…'**
+  String get englishReviewing;
+
+  /// No description provided for @englishFeedbackNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No important mistakes. Well done!'**
+  String get englishFeedbackNone;
+
+  /// No description provided for @englishFeedbackFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be reviewed this time. Is the local model downloaded? Try again.'**
+  String get englishFeedbackFailed;
+
+  /// No description provided for @englishPracticeTalk.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk'**
+  String get englishPracticeTalk;
+
+  /// No description provided for @englishTalkGoal.
+  ///
+  /// In en, this message translates to:
+  /// **'Your goal: {task}'**
+  String englishTalkGoal(String task);
+
+  /// No description provided for @englishTalkHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Write or say your answer in English. The character does not correct you: when you finish, I point out what matters most.'**
+  String get englishTalkHint;
+
+  /// No description provided for @englishTalkSend.
+  ///
+  /// In en, this message translates to:
+  /// **'Send'**
+  String get englishTalkSend;
+
+  /// No description provided for @englishTalkSpeak.
+  ///
+  /// In en, this message translates to:
+  /// **'Speak'**
+  String get englishTalkSpeak;
+
+  /// No description provided for @englishTalkDoneSpeaking.
+  ///
+  /// In en, this message translates to:
+  /// **'Done'**
+  String get englishTalkDoneSpeaking;
+
+  /// No description provided for @englishTalkFinish.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish and review'**
+  String get englishTalkFinish;
+
+  /// No description provided for @englishTalkNoReply.
+  ///
+  /// In en, this message translates to:
+  /// **'The character did not answer. Is the local model downloaded? Try again.'**
+  String get englishTalkNoReply;
+
+  /// No description provided for @englishTodayTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Today · {minutes} min'**
+  String englishTodayTitle(int minutes);
+
+  /// No description provided for @englishTodayProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'{done} of {target} minutes so far.'**
+  String englishTodayProgress(int done, int target);
+
+  /// No description provided for @englishTodayDone.
+  ///
+  /// In en, this message translates to:
+  /// **'Day done: {minutes} minutes. Well done!'**
+  String englishTodayDone(int minutes);
+
+  /// No description provided for @englishTodayFloor.
+  ///
+  /// In en, this message translates to:
+  /// **'Yesterday had no practice. Today 5 minutes are enough so you never miss twice.'**
+  String get englishTodayFloor;
+
+  /// No description provided for @englishTodayWeek.
+  ///
+  /// In en, this message translates to:
+  /// **'This week: {days} of 7 days.'**
+  String englishTodayWeek(int days);
+
+  /// No description provided for @englishStepReview.
+  ///
+  /// In en, this message translates to:
+  /// **'Review words'**
+  String get englishStepReview;
+
+  /// No description provided for @englishStepRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Read and listen to a passage'**
+  String get englishStepRead;
+
+  /// No description provided for @englishStepSpeak.
+  ///
+  /// In en, this message translates to:
+  /// **'Read aloud (from a passage)'**
+  String get englishStepSpeak;
+
+  /// No description provided for @englishStepTalk.
+  ///
+  /// In en, this message translates to:
+  /// **'Talk'**
+  String get englishStepTalk;
+
+  /// No description provided for @englishStepWrite.
+  ///
+  /// In en, this message translates to:
+  /// **'Write'**
+  String get englishStepWrite;
+
+  /// No description provided for @englishStepMinutes.
+  ///
+  /// In en, this message translates to:
+  /// **'{label} · {minutes} min'**
+  String englishStepMinutes(String label, int minutes);
+
+  /// No description provided for @englishProposeBuild.
+  ///
+  /// In en, this message translates to:
+  /// **'Two steady weeks. Shall we go up to 30 minutes a day?'**
+  String get englishProposeBuild;
+
+  /// No description provided for @englishProposeCruise.
+  ///
+  /// In en, this message translates to:
+  /// **'It is a habit now (day 66). Shall we go up to 45 minutes a day?'**
+  String get englishProposeCruise;
+
+  /// No description provided for @englishProposeYes.
+  ///
+  /// In en, this message translates to:
+  /// **'Yes, go up'**
+  String get englishProposeYes;
+
+  /// No description provided for @englishStepBack.
+  ///
+  /// In en, this message translates to:
+  /// **'Lower the pace'**
+  String get englishStepBack;
+
+  /// No description provided for @englishReassess.
+  ///
+  /// In en, this message translates to:
+  /// **'A month since your last test: take it again to see your progress.'**
+  String get englishReassess;
+
+  /// No description provided for @englishMilestonesTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Milestones: {reached} of {total}'**
+  String englishMilestonesTitle(int reached, int total);
+
+  /// No description provided for @englishMilestonePlaced.
+  ///
+  /// In en, this message translates to:
+  /// **'You took your level test'**
+  String get englishMilestonePlaced;
+
+  /// No description provided for @englishMilestoneFirstReading.
+  ///
+  /// In en, this message translates to:
+  /// **'You read your first passage'**
+  String get englishMilestoneFirstReading;
+
+  /// No description provided for @englishMilestoneFirstRecording.
+  ///
+  /// In en, this message translates to:
+  /// **'You recorded yourself reading aloud'**
+  String get englishMilestoneFirstRecording;
+
+  /// No description provided for @englishMilestoneFirstConversation.
+  ///
+  /// In en, this message translates to:
+  /// **'You had your first conversation'**
+  String get englishMilestoneFirstConversation;
+
+  /// No description provided for @englishMilestoneFirstWriting.
+  ///
+  /// In en, this message translates to:
+  /// **'You wrote and reviewed your first text'**
+  String get englishMilestoneFirstWriting;
+
+  /// No description provided for @englishMilestoneWords25.
+  ///
+  /// In en, this message translates to:
+  /// **'You saved 25 words'**
+  String get englishMilestoneWords25;
+
+  /// No description provided for @englishMilestoneUnderstood90.
+  ///
+  /// In en, this message translates to:
+  /// **'90% understood when reading aloud'**
+  String get englishMilestoneUnderstood90;
+
+  /// No description provided for @englishMilestoneDays7.
+  ///
+  /// In en, this message translates to:
+  /// **'You practised on 7 days'**
+  String get englishMilestoneDays7;
+
+  /// No description provided for @englishMilestoneWords100.
+  ///
+  /// In en, this message translates to:
+  /// **'You saved 100 words'**
+  String get englishMilestoneWords100;
+
+  /// No description provided for @englishMilestoneDays30.
+  ///
+  /// In en, this message translates to:
+  /// **'You practised on 30 days'**
+  String get englishMilestoneDays30;
+
+  /// No description provided for @englishMilestoneDays66.
+  ///
+  /// In en, this message translates to:
+  /// **'Day 66: it is a habit now'**
+  String get englishMilestoneDays66;
+
+  /// No description provided for @englishReminderButton.
+  ///
+  /// In en, this message translates to:
+  /// **'Remind me every day'**
+  String get englishReminderButton;
+
+  /// No description provided for @englishReminderSet.
+  ///
+  /// In en, this message translates to:
+  /// **'I remind you every day at {time}.'**
+  String englishReminderSet(String time);
+
+  /// Also how an existing English reminder is recognised: keep it stable.
+  ///
+  /// In en, this message translates to:
+  /// **'English: today\'s practice'**
+  String get englishReminderText;
+
+  /// No description provided for @englishReminderFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The reminder could not be created.'**
+  String get englishReminderFailed;
+
+  /// No description provided for @englishRealTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'With real people'**
+  String get englishRealTitle;
+
+  /// No description provided for @englishRealIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'What the app does not replace: talking with people. Here you get ready before and learn after.'**
+  String get englishRealIntro;
+
+  /// No description provided for @englishRealSituation.
+  ///
+  /// In en, this message translates to:
+  /// **'What conversation are you going to have, or did you have?'**
+  String get englishRealSituation;
+
+  /// No description provided for @englishRealBefore.
+  ///
+  /// In en, this message translates to:
+  /// **'Before'**
+  String get englishRealBefore;
+
+  /// No description provided for @englishRealPrepare.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare'**
+  String get englishRealPrepare;
+
+  /// No description provided for @englishRealPhrases.
+  ///
+  /// In en, this message translates to:
+  /// **'Phrases you can use'**
+  String get englishRealPhrases;
+
+  /// No description provided for @englishRealQuestions.
+  ///
+  /// In en, this message translates to:
+  /// **'Questions you may be asked'**
+  String get englishRealQuestions;
+
+  /// No description provided for @englishRealRehearse.
+  ///
+  /// In en, this message translates to:
+  /// **'Rehearse the conversation'**
+  String get englishRealRehearse;
+
+  /// No description provided for @englishRealAfter.
+  ///
+  /// In en, this message translates to:
+  /// **'After'**
+  String get englishRealAfter;
+
+  /// No description provided for @englishRealWanted.
+  ///
+  /// In en, this message translates to:
+  /// **'What did you want to say and could not? One thing per line.'**
+  String get englishRealWanted;
+
+  /// No description provided for @englishRealHowToSay.
+  ///
+  /// In en, this message translates to:
+  /// **'How do I say it?'**
+  String get englishRealHowToSay;
+
+  /// No description provided for @englishRealFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'It could not be done this time. Is the local model downloaded?'**
+  String get englishRealFailed;
+
+  /// No description provided for @englishRealEntry.
+  ///
+  /// In en, this message translates to:
+  /// **'Prepare or review a real conversation'**
+  String get englishRealEntry;
+
+  /// No description provided for @englishListeningTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening test'**
+  String get englishListeningTitle;
+
+  /// No description provided for @englishListeningIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'You will hear sentences in English, harder and harder. Write what you understand; you can hear each one twice.'**
+  String get englishListeningIntro;
+
+  /// No description provided for @englishListeningSentence.
+  ///
+  /// In en, this message translates to:
+  /// **'Sentence {number}'**
+  String englishListeningSentence(int number);
+
+  /// No description provided for @englishListeningCheck.
+  ///
+  /// In en, this message translates to:
+  /// **'Check'**
+  String get englishListeningCheck;
+
+  /// No description provided for @englishListeningNext.
+  ///
+  /// In en, this message translates to:
+  /// **'Next'**
+  String get englishListeningNext;
+
+  /// No description provided for @englishListeningScore.
+  ///
+  /// In en, this message translates to:
+  /// **'{percent}% of the words came through.'**
+  String englishListeningScore(int percent);
+
+  /// No description provided for @englishListeningResult.
+  ///
+  /// In en, this message translates to:
+  /// **'Your estimated listening level: {level}'**
+  String englishListeningResult(String level);
+
+  /// No description provided for @englishListeningBeforeA1.
+  ///
+  /// In en, this message translates to:
+  /// **'You are not at A1 listening yet. It is the perfect starting point: with daily practice it improves fast.'**
+  String get englishListeningBeforeA1;
+
+  /// No description provided for @englishListeningCaveat.
+  ///
+  /// In en, this message translates to:
+  /// **'This measures a clear synthetic voice; real people are usually a little harder.'**
+  String get englishListeningCaveat;
+
+  /// No description provided for @englishListeningMeasure.
+  ///
+  /// In en, this message translates to:
+  /// **'Measure your listening'**
+  String get englishListeningMeasure;
+
+  /// No description provided for @englishListeningLevel.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening: {level}'**
+  String englishListeningLevel(String level);
+
+  /// No description provided for @englishImportTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Your audio or video'**
+  String get englishImportTitle;
+
+  /// No description provided for @englishImportAction.
+  ///
+  /// In en, this message translates to:
+  /// **'Import audio or video'**
+  String get englishImportAction;
+
+  /// No description provided for @englishImportIntro.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a podcast, a talk or a video in English. It is transcribed here, on your device: the file never leaves it. Up to 20 minutes are used.'**
+  String get englishImportIntro;
+
+  /// No description provided for @englishImportPick.
+  ///
+  /// In en, this message translates to:
+  /// **'Choose a file'**
+  String get englishImportPick;
+
+  /// No description provided for @englishImportPreparing.
+  ///
+  /// In en, this message translates to:
+  /// **'Preparing the audio…'**
+  String get englishImportPreparing;
+
+  /// No description provided for @englishImportProgress.
+  ///
+  /// In en, this message translates to:
+  /// **'Transcribing… {done} of {total}'**
+  String englishImportProgress(int done, int total);
+
+  /// No description provided for @englishImportSource.
+  ///
+  /// In en, this message translates to:
+  /// **'your file'**
+  String get englishImportSource;
+
+  /// No description provided for @englishImportLicense.
+  ///
+  /// In en, this message translates to:
+  /// **'transcribed on your device'**
+  String get englishImportLicense;
+
+  /// No description provided for @englishImportUnsupported.
+  ///
+  /// In en, this message translates to:
+  /// **'That file is not audio or video that can be read (mp3, m4a, mp4, ogg, flac, wav…).'**
+  String get englishImportUnsupported;
+
+  /// No description provided for @englishImportCannotDecode.
+  ///
+  /// In en, this message translates to:
+  /// **'The audio in that file could not be read.'**
+  String get englishImportCannotDecode;
+
+  /// No description provided for @englishImportNoModel.
+  ///
+  /// In en, this message translates to:
+  /// **'The voice model is missing. Download it in Settings → Voice.'**
+  String get englishImportNoModel;
+
+  /// No description provided for @englishImportNothingHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'No speech was heard in that file.'**
+  String get englishImportNothingHeard;
+
+  /// No description provided for @englishSoundsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Sounds to practise'**
+  String get englishSoundsTitle;
+
+  /// No description provided for @englishSoundsNone.
+  ///
+  /// In en, this message translates to:
+  /// **'No sound to practise in this sentence.'**
+  String get englishSoundsNone;
+
+  /// No description provided for @englishSoundsWorking.
+  ///
+  /// In en, this message translates to:
+  /// **'Listening to the sounds…'**
+  String get englishSoundsWorking;
+
+  /// No description provided for @englishSoundsHeard.
+  ///
+  /// In en, this message translates to:
+  /// **'In {words}: [{heard}] was heard instead of [{expected}].'**
+  String englishSoundsHeard(String words, String heard, String expected);
+
+  /// No description provided for @englishSoundsMissing.
+  ///
+  /// In en, this message translates to:
+  /// **'In {words}: [{expected}] was not heard.'**
+  String englishSoundsMissing(String words, String expected);
+
+  /// No description provided for @englishSoundsCaveat.
+  ///
+  /// In en, this message translates to:
+  /// **'A guide: the sound analysis makes mistakes too, especially with names.'**
+  String get englishSoundsCaveat;
+
+  /// No description provided for @englishSoundsDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Analyse the sounds (71 MB download, Wi-Fi only)'**
+  String get englishSoundsDownload;
+
+  /// No description provided for @englishSoundsDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the sound analysis… {percent}%'**
+  String englishSoundsDownloading(int percent);
+
+  /// No description provided for @englishSoundsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The sound analysis could not be downloaded.'**
+  String get englishSoundsFailed;
+
+  /// No description provided for @englishTipShortITitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The short i of ship'**
+  String get englishTipShortITitle;
+
+  /// No description provided for @englishTipShortIHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Relax your mouth: a short sound between i and e. \"ship\" is not \"sheep\".'**
+  String get englishTipShortIHow;
+
+  /// No description provided for @englishTipCatVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The a of cat'**
+  String get englishTipCatVowelTitle;
+
+  /// No description provided for @englishTipCatVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Open your mouth wide, between a and e, tongue low and forward.'**
+  String get englishTipCatVowelHow;
+
+  /// No description provided for @englishTipVAsBTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The v of very'**
+  String get englishTipVAsBTitle;
+
+  /// No description provided for @englishTipVAsBHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Rest your top teeth on your lower lip and let it buzz: do not close your lips.'**
+  String get englishTipVAsBHow;
+
+  /// No description provided for @englishTipThVoicelessTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The th of think'**
+  String get englishTipThVoicelessTitle;
+
+  /// No description provided for @englishTipThVoicelessHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Tongue tip between your teeth, and blow, without voice: not t, not s.'**
+  String get englishTipThVoicelessHow;
+
+  /// No description provided for @englishTipEBeforeSTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'No \"e\" before the s'**
+  String get englishTipEBeforeSTitle;
+
+  /// No description provided for @englishTipEBeforeSHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Start straight on the s: \"speak\", not \"espeak\". Stretching it helps: \"sss-peak\".'**
+  String get englishTipEBeforeSHow;
+
+  /// No description provided for @englishTipZAsSTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The buzzing z'**
+  String get englishTipZAsSTitle;
+
+  /// No description provided for @englishTipZAsSHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Like an s, with voice: touch your throat, it should vibrate.'**
+  String get englishTipZAsSHow;
+
+  /// No description provided for @englishTipThVoicedTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The th of the'**
+  String get englishTipThVoicedTitle;
+
+  /// No description provided for @englishTipThVoicedHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Tongue between your teeth, with voice, buzzing. Not d, not t.'**
+  String get englishTipThVoicedHow;
+
+  /// No description provided for @englishTipCupVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The vowel of cup'**
+  String get englishTipCupVowelTitle;
+
+  /// No description provided for @englishTipCupVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'A short, relaxed a in the middle of the mouth; do not read the u as u.'**
+  String get englishTipCupVowelHow;
+
+  /// No description provided for @englishTipBookVowelTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The short u of book'**
+  String get englishTipBookVowelTitle;
+
+  /// No description provided for @englishTipBookVowelHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Shorter and more relaxed than a Spanish u, lips less rounded.'**
+  String get englishTipBookVowelHow;
+
+  /// No description provided for @englishTipShSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The sh of shop'**
+  String get englishTipShSoundTitle;
+
+  /// No description provided for @englishTipShSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Lips pushed out and a steady breath, as when asking for silence: shhh. Not ch, not s.'**
+  String get englishTipShSoundHow;
+
+  /// No description provided for @englishTipJSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The j of job'**
+  String get englishTipJSoundTitle;
+
+  /// No description provided for @englishTipJSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'A voiced \"ch\", d plus sh: not a Spanish y or j.'**
+  String get englishTipJSoundHow;
+
+  /// No description provided for @englishTipHAsJotaTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The h of hello'**
+  String get englishTipHAsJotaTitle;
+
+  /// No description provided for @englishTipHAsJotaHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Only breath, soft, as when fogging a window; no scraping in the throat.'**
+  String get englishTipHAsJotaHow;
+
+  /// No description provided for @englishTipFinalSoundTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The final sound'**
+  String get englishTipFinalSoundTitle;
+
+  /// No description provided for @englishTipFinalSoundHow.
+  ///
+  /// In en, this message translates to:
+  /// **'Finish the word: the last sound changes the meaning (cat, cap, can).'**
+  String get englishTipFinalSoundHow;
+
+  /// No description provided for @englishTipSpanishRTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'The English r'**
+  String get englishTipSpanishRTitle;
+
+  /// No description provided for @englishTipSpanishRHow.
+  ///
+  /// In en, this message translates to:
+  /// **'The tongue does not touch the roof of the mouth: curl it back a little, no trill.'**
+  String get englishTipSpanishRHow;
+
+  /// No description provided for @englishVoiceDownloading.
+  ///
+  /// In en, this message translates to:
+  /// **'Downloading the English voice… {percent}%'**
+  String englishVoiceDownloading(int percent);
+
+  /// No description provided for @englishVoiceFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'The English voice could not be downloaded.'**
+  String get englishVoiceFailed;
 }
 
 class _AppLocalizationsDelegate

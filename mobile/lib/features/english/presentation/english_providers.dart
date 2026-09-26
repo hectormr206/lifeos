@@ -1,0 +1,420 @@
+library;
+
+import 'dart:io';
+
+import 'package:flutter/services.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+
+import '../../../core/graph/graph_providers.dart';
+import '../../settings/data/synced_settings_store.dart';
+import '../../tts/data/audioplayers_tts_playback.dart';
+import '../../tts/domain/tts_voice.dart';
+import '../../tts/presentation/tts_providers.dart';
+import '../../voice_settings/domain/voice_catalog.dart';
+import '../../voice_settings/presentation/voice_catalog_providers.dart';
+import '../data/activity_log.dart';
+import '../data/english_goal_store.dart';
+import '../data/english_reminder.dart';
+import '../data/listening_result_repository.dart';
+import '../data/audio_importer.dart';
+import '../data/platform_audio_import.dart';
+import '../data/pron_model.dart';
+import '../data/pronunciation_coach.dart';
+import '../data/sherpa_long_audio_recognizer.dart';
+import '../../stt/presentation/stt_providers.dart';
+import 'package:path_provider/path_provider.dart';
+import '../../reminders/presentation/local_reminders_providers.dart';
+import '../../../l10n/app_localizations.dart';
+import '../../../l10n/locale_providers.dart';
+import '../data/english_phase_store.dart';
+import '../data/passage_speaker.dart';
+import '../data/practice_service.dart';
+import '../data/real_talk_service.dart';
+import '../data/recordings_repository.dart';
+import '../data/english_placement_repository.dart';
+import '../data/vocab_bank_asset.dart';
+import '../data/wikimedia_reading.dart';
+import '../domain/daily_plan.dart';
+import '../domain/fsrs.dart';
+import '../domain/milestones.dart';
+import '../domain/review_queue.dart';
+import '../data/word_gloss.dart';
+import '../domain/lexical_coverage.dart';
+import '../domain/pron_lexicon.dart';
+import '../../local_model/presentation/local_model_providers.dart';
+import '../domain/english_goal.dart';
+import '../domain/vocab_placement_session.dart';
+
+/// The bundled word bank. Loaded once; it never changes while the app runs.
+final vocabBankProvider =
+    FutureProvider<VocabBank>((ref) => loadVocabBank(rootBundle));
+
+/// Placements live in the on-device encrypted graph, so they sync like
+/// everything else the learner owns.
+final placementHistoryProvider = FutureProvider<PlacementHistory>(
+  (ref) async =>
+      EnglishPlacementRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// The learner's goal lives in the synced settings, in the same graph.
+final englishGoalStoreProvider = FutureProvider<EnglishGoalStore>(
+  (ref) async => SyncedEnglishGoalStore(
+    SyncedSettingsStore(await ref.watch(localGraphStoreProvider.future)),
+  ),
+);
+
+/// The learner's current level, or null before any reliable placement.
+final latestPlacementProvider = FutureProvider<PlacementRecord?>(
+  (ref) async =>
+      (await ref.watch(placementHistoryProvider.future)).latestReliable(),
+);
+
+/// The goal as read from storage, refreshed after every choice.
+final englishGoalProvider = FutureProvider<EnglishGoal?>(
+  (ref) async => (await ref.watch(englishGoalStoreProvider.future)).read(),
+);
+
+/// Where passages come from: Wikimedia, one polite request at a time.
+final readingSelectorProvider = Provider<ReadingSelector>(
+  (ref) => ReadingSelector(WikimediaArticleSource(DioHttpGetter())),
+);
+
+/// Today's passages for the learner's goal, ranked against their placement.
+/// Only watched once both exist; the screen checks that first.
+final readingListProvider =
+    FutureProvider.autoDispose<List<PickedReading>>((ref) async {
+  final goal = await ref.watch(englishGoalProvider.future);
+  final placement = await ref.watch(latestPlacementProvider.future);
+  final index = await ref.watch(wordIndexProvider.future);
+  if (goal == null || placement == null) return const [];
+  return ref.read(readingSelectorProvider).pick(
+        goal,
+        index,
+        knownByBand: placement.result.knownByBand,
+      );
+});
+
+/// The word bank, searchable by any form of a word.
+final wordIndexProvider = FutureProvider<WordIndex>(
+  (ref) async => WordIndex(await ref.watch(vocabBankProvider.future)),
+);
+
+/// Glosses come from the same on-device model as everything else.
+final wordGlosserProvider = Provider<WordGlosser>(
+  (ref) => WordGlosser(ref.watch(localLlmEngineProvider)),
+);
+
+/// Saved words live in the encrypted graph, like placements.
+final wordSaverProvider = FutureProvider<WordSaver>(
+  (ref) async =>
+      SavedWordsRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// The English voices from the catalog that are installed on this device, by
+/// id. Empty when none is: the reader then says how to get one.
+final installedEnglishVoicesProvider =
+    FutureProvider.autoDispose<Map<String, TtsVoicePaths>>((ref) async {
+  final gateway = ref.watch(ttsVoiceGatewayProvider);
+  final installed = <String, TtsVoicePaths>{};
+  for (final voice in VoiceCatalog.all) {
+    if (!voice.languageTag.startsWith('en')) continue;
+    final paths = await gateway.installedVoice(voice.id);
+    if (paths != null) installed[voice.id] = paths;
+  }
+  return installed;
+});
+
+/// Reads passages aloud with its own player, so it never fights a chat reply
+/// being spoken. Stopped and released when the reader goes away.
+final passageSpeakerProvider = Provider.autoDispose<PassageSpeaker>((ref) {
+  final playback = AudioplayersTtsPlayback();
+  final speaker = PassageSpeaker(
+    synthesizer: ref.watch(piperSpeechSynthesizerProvider),
+    playback: playback,
+  );
+  ref.onDispose(() async {
+    await speaker.stop();
+    await playback.dispose();
+  });
+  return speaker;
+});
+
+/// Saved words and their reviews: the same repository as the reader's saver.
+final reviewStoreProvider = FutureProvider<ReviewStore>(
+  (ref) async =>
+      SavedWordsRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// FSRS with interval fuzz, as py-fsrs schedules by default.
+final fsrsSchedulerProvider = Provider<FsrsScheduler>(
+  (ref) => FsrsScheduler.fuzzed(),
+);
+
+/// Words waiting for review right now: the number the English home shows.
+final reviewDueCountProvider = FutureProvider.autoDispose<int>((ref) async {
+  final store = await ref.watch(reviewStoreProvider.future);
+  return buildReviewQueue(await store.all(), DateTime.now()).length;
+});
+
+/// Read-aloud attempts, in the encrypted graph like everything else.
+final recordingArchiveProvider = FutureProvider<RecordingArchive>(
+  (ref) async =>
+      RecordingsRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// Whether a recording's sealed audio is on THIS device. Audio is never
+/// synced; only the attempt's facts are.
+final recordingAudioExistsProvider = Provider<bool Function(String path)>(
+  (ref) => (path) => File(path).existsSync(),
+);
+
+/// Role-plays and reviews run on the same on-device model as everything else.
+final practiceServiceProvider = Provider<PracticeService>(
+  (ref) => PracticeService(ref.watch(localLlmEngineProvider)),
+);
+
+/// What the learner did and for how long: the plan and milestones read it.
+final activityLogProvider = FutureProvider<ActivityLog>(
+  (ref) async =>
+      ActivityLogRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// Everything practised so far, for today's plan and the milestones.
+final studyActivitiesProvider = FutureProvider.autoDispose<List<StudyActivity>>(
+  (ref) async => (await ref.watch(activityLogProvider.future)).all(),
+);
+
+/// The pace the learner accepted, a synced setting like the goal.
+final englishPhaseStoreProvider = FutureProvider<EnglishPhaseStore>(
+  (ref) async => SyncedEnglishPhaseStore(
+    SyncedSettingsStore(await ref.watch(localGraphStoreProvider.future)),
+  ),
+);
+
+/// The phase in force: the one accepted, or the start.
+final englishPhaseProvider = FutureProvider.autoDispose<StudyPhase>(
+  (ref) async =>
+      await (await ref.watch(englishPhaseStoreProvider.future)).read() ??
+      StudyPhase.start,
+);
+
+/// Opens an English screen and, back on the English home, refreshes what that
+/// screen may have changed: today's minutes, the words due, the level.
+Future<void> openEnglishScreen(
+  BuildContext context,
+  WidgetRef ref,
+  String route,
+) async {
+  await GoRouter.of(context).push(route);
+  if (!context.mounted) return;
+  ref
+    ..invalidate(studyActivitiesProvider)
+    ..invalidate(reviewDueCountProvider)
+    ..invalidate(latestPlacementProvider)
+    ..invalidate(latestListeningProvider);
+}
+
+/// The milestones reached, all measured (see domain/milestones.dart).
+final milestonesProvider = FutureProvider.autoDispose<Set<Milestone>>((ref) async {
+  final activities = await ref.watch(studyActivitiesProvider.future);
+  final words = await (await ref.watch(reviewStoreProvider.future)).all();
+  final recordings = await (await ref.watch(recordingArchiveProvider.future)).all();
+  final placement = await ref.watch(latestPlacementProvider.future);
+  return reachedMilestones(
+    activities: activities,
+    savedWords: words.length,
+    bestIntelligibility: recordings.fold(
+        0.0, (best, r) => r.intelligibility > best ? r.intelligibility : best),
+    placed: placement != null,
+  );
+});
+
+/// The daily English reminder, an ordinary LifeOS reminder.
+final englishReminderProvider = FutureProvider<EnglishReminder>((ref) async {
+  final service = await ref.watch(localRemindersServiceProvider.future);
+  return LocalEnglishReminder(
+    service,
+    text: lookupAppLocalizations(ref.watch(localeProvider)).englishReminderText,
+    knownTexts: {
+      for (final locale in AppLocalizations.supportedLocales)
+        lookupAppLocalizations(locale).englishReminderText,
+    },
+  );
+});
+
+/// Asks for a time; a seam so tests need no dialog.
+final reminderTimePickerProvider =
+    Provider<Future<TimeOfDay?> Function(BuildContext context)>(
+  (ref) => (context) => showTimePicker(
+        context: context,
+        initialTime: const TimeOfDay(hour: 20, minute: 0),
+      ),
+);
+
+/// Before and after a real conversation, on the same on-device model.
+final realTalkServiceProvider = Provider<RealTalkService>(
+  (ref) => RealTalkService(ref.watch(localLlmEngineProvider)),
+);
+
+/// Listening levels from the dictation placement, in the encrypted graph.
+final listeningResultsProvider = FutureProvider<ListeningResults>(
+  (ref) async =>
+      ListeningResultRepository(await ref.watch(localGraphStoreProvider.future)),
+);
+
+/// The latest listening level; null when never measured.
+final latestListeningProvider = FutureProvider.autoDispose<ListeningResult?>(
+  (ref) async => (await ref.watch(listeningResultsProvider.future)).latest(),
+);
+
+/// Where the bundled Silero VAD model is written so sherpa-onnx can open it:
+/// the native engine takes a file path, not asset bytes. Rewritten when the
+/// size differs, so an app update that changes the model replaces it.
+const String kVadModelAsset = 'assets/english/silero_vad.int8.onnx';
+
+final vadModelPathProvider = Provider<Future<String> Function()>(
+  (ref) => () async {
+    final bytes = await rootBundle.load(kVadModelAsset);
+    final dir = await getApplicationSupportDirectory();
+    final file = File('${dir.path}/english/silero_vad.int8.onnx');
+    if (!file.existsSync() || file.lengthSync() != bytes.lengthInBytes) {
+      await file.parent.create(recursive: true);
+      await file.writeAsBytes(bytes.buffer.asUint8List(), flush: true);
+    }
+    return file.path;
+  },
+);
+
+/// Voice activity detection plus Whisper over imported audio, in an isolate.
+final longAudioRecognizerProvider = Provider<SherpaLongAudioRecognizer>(
+  (ref) => SherpaLongAudioRecognizer(
+    ref.watch(sttModelGatewayProvider),
+    ref.watch(vadModelPathProvider),
+  ),
+);
+
+/// Picks an audio or video file from the device.
+final audioFilePickerProvider = Provider<AudioFilePicker>(
+  (ref) => FileSelectorAudioPicker(),
+);
+
+/// Imported audio: platform decoder, then VAD and Whisper in an isolate.
+final audioImporterProvider = Provider<AudioImporter>(
+  (ref) => AudioImporter(
+    decoder: PlatformAudioToWav(),
+    recognizer: ref.watch(longAudioRecognizerProvider),
+    workDirectory: getTemporaryDirectory,
+  ),
+);
+
+/// Expected sounds of ~64k English words (CMUdict, trimmed; see
+/// tool/english/build_pron_lexicon.py).
+const String kPronLexiconAsset = 'assets/english/pron_lexicon.txt';
+
+/// Parsed once, when pronunciation feedback is first needed. Entries are kept
+/// as ARPAbet text and converted per lookup, which keeps the map small.
+final pronLexiconProvider = FutureProvider<PronLexicon>(
+  (ref) async => PronLexicon.parse(await rootBundle.loadString(kPronLexiconAsset)),
+);
+
+enum PronModelState { checking, absent, downloading, ready, failed }
+
+class PronModelStatus {
+  const PronModelStatus(this.state, [this.progress = 0]);
+  final PronModelState state;
+
+  /// 0..1 while downloading.
+  final double progress;
+}
+
+/// The phone model files (ZIPA), fetched on first use.
+final pronModelGatewayProvider = Provider<PronModelGateway>(
+  (ref) => BackgroundDownloaderPronModelGateway(),
+);
+
+/// Whether sound tips can be given, and the download that enables them.
+/// Never throws: a failed download lands in [PronModelState.failed].
+final pronModelStatusProvider =
+    NotifierProvider<PronModelNotifier, PronModelStatus>(PronModelNotifier.new);
+
+class PronModelNotifier extends Notifier<PronModelStatus> {
+  Future<void>? _hydration;
+  bool _downloading = false;
+
+  /// Lets tests await the initial probe.
+  Future<void> get ready => _hydration ?? Future<void>.value();
+
+  @override
+  PronModelStatus build() {
+    _hydration = _hydrate();
+    return const PronModelStatus(PronModelState.checking);
+  }
+
+  Future<void> _hydrate() async {
+    final installed = await ref.read(pronModelGatewayProvider).installedModel();
+    if (!_downloading) {
+      state = PronModelStatus(
+          installed == null ? PronModelState.absent : PronModelState.ready);
+    }
+  }
+
+  Future<void> download() async {
+    if (_downloading || state.state == PronModelState.ready) return;
+    _downloading = true;
+    state = const PronModelStatus(PronModelState.downloading);
+    try {
+      await ref.read(pronModelGatewayProvider).download(
+            onProgress: (p) =>
+                state = PronModelStatus(PronModelState.downloading, p),
+          );
+      state = const PronModelStatus(PronModelState.ready);
+    } catch (_) {
+      state = const PronModelStatus(PronModelState.failed);
+    } finally {
+      _downloading = false;
+    }
+  }
+}
+
+/// Recording of a known sentence → sound tips.
+final pronunciationCoachProvider = Provider<PronunciationCoach>(
+  (ref) => PronunciationCoach(
+    ZipaPhoneRecognizer(ref.watch(pronModelGatewayProvider)),
+    () => ref.read(pronLexiconProvider.future),
+  ),
+);
+
+/// The English voice the practice screens fetch when none is installed. The
+/// same one on every device.
+const String kPracticeVoiceId = 'en_US-lessac';
+
+/// Downloads [kPracticeVoiceId] WITHOUT selecting it: the voice catalog's
+/// "download" also makes it Axi's voice, which on the Pixel turned Axi
+/// English. Returns whether the voice is now installed.
+Future<bool> downloadEnglishVoice(WidgetRef ref) async {
+  final catalog = ref.read(voiceCatalogControllerProvider.notifier);
+  await catalog.download(kPracticeVoiceId);
+  ref.invalidate(installedEnglishVoicesProvider);
+  return catalog.statusOf(kPracticeVoiceId) is TtsVoiceReady;
+}
+
+/// The "no English voice" notice with its download action, for the screens
+/// that play English through a snack bar.
+void showEnglishVoiceNotice(BuildContext context, WidgetRef ref) {
+  final l10n = AppLocalizations.of(context);
+  final messenger = ScaffoldMessenger.of(context);
+  messenger.showSnackBar(SnackBar(
+    content: Text(l10n.englishListenNoVoice),
+    action: SnackBarAction(
+      label: l10n.englishListenGetVoice,
+      onPressed: () async {
+        final ok = await downloadEnglishVoice(ref);
+        if (!ok) {
+          messenger.showSnackBar(SnackBar(content: Text(l10n.englishVoiceFailed)));
+        }
+      },
+    ),
+  ));
+}
