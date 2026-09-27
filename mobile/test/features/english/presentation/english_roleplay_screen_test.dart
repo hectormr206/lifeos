@@ -1,4 +1,6 @@
 // A role-play: talk with a character, then get the two things that matter.
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -32,8 +34,10 @@ class _Recorder implements AudioRecorderGateway {
 
 class _Stt implements SpeechToText {
   @override
-  Future<String> transcribe(String wavPath, {required String languageCode}) async =>
-      'A table for two, please.';
+  Future<String> transcribe(
+    String wavPath, {
+    required String languageCode,
+  }) async => 'A table for two, please.';
 }
 
 final _scenario = roleplaysFor(EnglishGoal.everyday).first;
@@ -60,11 +64,85 @@ Widget _app(FakeLocalLlmEngine engine, {PlacementRecord? placement}) =>
 
 Future<void> _say(WidgetTester tester, String text) async {
   await tester.enterText(find.byType(TextField), text);
+  await tester.pump(); // render the input-dependent button state
   await tester.tap(find.byTooltip('Enviar'));
   await tester.pumpAndSettle();
 }
 
+Finder get _sendButton => find
+    .ancestor(of: find.byIcon(Icons.send), matching: find.byType(IconButton))
+    .first;
+
 void main() {
+  testWidgets('Send needs a nonblank draft; Finish needs a submitted turn', (
+    tester,
+  ) async {
+    final engine = FakeLocalLlmEngine(reply: _engineReply);
+    await tester.pumpWidget(_app(engine));
+    await tester.pumpAndSettle();
+    final send = _sendButton;
+    final finish = find.widgetWithText(TextButton, 'Terminar y revisar');
+    expect(tester.widget<IconButton>(send).onPressed, isNull);
+    expect(tester.widget<TextButton>(finish).onPressed, isNull);
+
+    await tester.enterText(find.byType(TextField), '  ');
+    await tester.pump();
+    expect(tester.widget<IconButton>(send).onPressed, isNull);
+    expect(tester.widget<TextButton>(finish).onPressed, isNull);
+    expect(engine.prompts, isEmpty);
+
+    await tester.enterText(find.byType(TextField), '  Hello.  ');
+    await tester.pump();
+    expect(tester.widget<IconButton>(send).onPressed, isNotNull);
+    expect(tester.widget<TextButton>(finish).onPressed, isNull);
+    await tester.enterText(find.byType(TextField), ' \n ');
+    await tester.pump();
+    expect(tester.widget<IconButton>(send).onPressed, isNull);
+
+    await _say(tester, 'Hello.');
+    expect(engine.prompts, hasLength(1));
+    expect(tester.widget<IconButton>(send).onPressed, isNull);
+    expect(tester.widget<TextButton>(finish).onPressed, isNotNull);
+    await tester.tap(finish);
+    await tester.pumpAndSettle();
+    expect(engine.prompts, hasLength(2));
+  });
+
+  testWidgets('Send stays disabled while an accepted turn is being answered', (
+    tester,
+  ) async {
+    final gate = Completer<void>();
+    final engine = FakeLocalLlmEngine(reply: _engineReply, generateGate: gate);
+    await tester.pumpWidget(_app(engine));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Hello.');
+    await tester.pump();
+    await tester.tap(find.byTooltip('Enviar'));
+    await tester.pump();
+    expect(tester.widget<IconButton>(_sendButton).onPressed, isNull);
+    expect(
+      tester
+          .widget<TextButton>(
+            find.widgetWithText(TextButton, 'Terminar y revisar'),
+          )
+          .onPressed,
+      isNotNull,
+    );
+    gate.complete();
+    await tester.pumpAndSettle();
+    expect(engine.prompts, hasLength(1));
+  });
+
+  testWidgets('keyboard Send still submits a nonblank turn', (tester) async {
+    final engine = FakeLocalLlmEngine(reply: _engineReply);
+    await tester.pumpWidget(_app(engine));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), 'Hello.');
+    await tester.testTextInput.receiveAction(TextInputAction.send);
+    await tester.pumpAndSettle();
+    expect(engine.prompts.single, contains('Hello.'));
+  });
+
   testWidgets('the character opens, and the goal is in view', (tester) async {
     await tester.pumpWidget(_app(FakeLocalLlmEngine(reply: _engineReply)));
     await tester.pumpAndSettle();
@@ -73,10 +151,13 @@ void main() {
     expect(find.textContaining(_scenario.task), findsOneWidget);
   });
 
-  testWidgets('saying something gets an answer, at the learner level',
-      (tester) async {
+  testWidgets('saying something gets an answer, at the learner level', (
+    tester,
+  ) async {
     final engine = FakeLocalLlmEngine(reply: _engineReply);
-    await tester.pumpWidget(_app(engine,
+    await tester.pumpWidget(
+      _app(
+        engine,
         placement: PlacementRecord(
           takenAt: DateTime.utc(2026, 9, 1),
           result: const VocabPlacementResult(
@@ -87,7 +168,9 @@ void main() {
             cefr: CefrLevel.b1,
             reliable: true,
           ),
-        )));
+        ),
+      ),
+    );
     await tester.pumpAndSettle();
 
     await _say(tester, 'I want eat tacos.');
@@ -98,8 +181,9 @@ void main() {
     expect(engine.prompts.single, contains('I want eat tacos.'));
   });
 
-  testWidgets('without a placement it speaks at A2, simple rather than lost',
-      (tester) async {
+  testWidgets('without a placement it speaks at A2, simple rather than lost', (
+    tester,
+  ) async {
     final engine = FakeLocalLlmEngine(reply: _engineReply);
     await tester.pumpWidget(_app(engine));
     await tester.pumpAndSettle();
@@ -121,16 +205,22 @@ void main() {
 
     expect(engine.prompts.last, contains('Two people.'));
     expect(engine.prompts.last, contains('I want eat tacos.'));
-    await tester.scrollUntilVisible(find.text('I want to eat tacos.'), 200,
-        scrollable: find
-            .descendant(
-                of: find.byType(ListView), matching: find.byType(Scrollable))
-            .first);
+    await tester.scrollUntilVisible(
+      find.text('I want to eat tacos.'),
+      200,
+      scrollable: find
+          .descendant(
+            of: find.byType(ListView),
+            matching: find.byType(Scrollable),
+          )
+          .first,
+    );
     expect(find.text('I want to eat tacos.'), findsOneWidget);
   });
 
-  testWidgets('finishing puts the keyboard away, so the review is in view',
-      (tester) async {
+  testWidgets('finishing puts the keyboard away, so the review is in view', (
+    tester,
+  ) async {
     await tester.pumpWidget(_app(FakeLocalLlmEngine(reply: _engineReply)));
     await tester.pumpAndSettle();
     await _say(tester, 'I want eat tacos.');
@@ -143,8 +233,7 @@ void main() {
   });
 
   testWidgets('a character that does not answer is said', (tester) async {
-    await tester.pumpWidget(
-        _app(FakeLocalLlmEngine(generateShouldFail: true)));
+    await tester.pumpWidget(_app(FakeLocalLlmEngine(generateShouldFail: true)));
     await tester.pumpAndSettle();
 
     await _say(tester, 'Hello.');
@@ -164,5 +253,13 @@ void main() {
 
     final field = tester.widget<TextField>(find.byType(TextField));
     expect(field.controller!.text, 'A table for two, please.');
+    expect(
+      tester.widget<IconButton>(_sendButton).onPressed,
+      isNotNull,
+      reason: 'the microphone populates the controller, not keyboard input',
+    );
+    await tester.tap(find.byTooltip('Enviar'));
+    await tester.pumpAndSettle();
+    expect(find.text('A table for two, please.'), findsOneWidget);
   });
 }

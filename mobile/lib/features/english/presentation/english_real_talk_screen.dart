@@ -32,8 +32,10 @@ class EnglishRealTalkScreen extends ConsumerStatefulWidget {
 class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
   final _situation = TextEditingController();
   final _wanted = TextEditingController();
-  late final ActivityTimer _timer =
-      ActivityTimer(ActivityKind.write, ref.read(activityLogProvider.future));
+  late final ActivityTimer _timer = ActivityTimer(
+    ActivityKind.write,
+    ref.read(activityLogProvider.future),
+  );
 
   bool _busy = false;
   bool _failed = false;
@@ -45,7 +47,11 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
   void initState() {
     super.initState();
     _timer; // starts the clock when the screen opens
+    _situation.addListener(_draftChanged);
+    _wanted.addListener(_draftChanged);
   }
+
+  void _draftChanged() => setState(() {});
 
   @override
   void dispose() {
@@ -64,7 +70,7 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
     });
     final level =
         (await ref.read(latestPlacementProvider.future))?.result.cefr ??
-            CefrLevel.a2;
+        CefrLevel.a2;
     final prep = await ref
         .read(realTalkServiceProvider)
         .prepare(situation: _situationText, level: level);
@@ -86,8 +92,10 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
     final service = ref.read(realTalkServiceProvider);
     final said = <(String, String)>[];
     for (final wanted in lines) {
-      final say =
-          await service.rephrase(wanted: wanted, situation: _situationText);
+      final say = await service.rephrase(
+        wanted: wanted,
+        situation: _situationText,
+      );
       if (say != null) said.add((wanted, say));
     }
     if (!mounted) return;
@@ -137,7 +145,7 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
           Text(l10n.englishRealBefore, style: header),
           const SizedBox(height: 8),
           FilledButton(
-            onPressed: _busy ? null : _prepare,
+            onPressed: _busy || _situationText.isEmpty ? null : _prepare,
             child: Text(l10n.englishRealPrepare),
           ),
           if (prep != null) ...[
@@ -146,16 +154,24 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
             for (final p in prep.phrases) Text(p),
             if (prep.questions.isNotEmpty) ...[
               const SizedBox(height: 8),
-              Text(l10n.englishRealQuestions, style: theme.textTheme.titleSmall),
+              Text(
+                l10n.englishRealQuestions,
+                style: theme.textTheme.titleSmall,
+              ),
               for (final q in prep.questions) Text(q),
             ],
             const SizedBox(height: 8),
             OutlinedButton(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => EnglishRoleplayScreen(
-                  scenario: rehearsalScenario(situation: _situationText, prep: prep),
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute<void>(
+                  builder: (_) => EnglishRoleplayScreen(
+                    scenario: rehearsalScenario(
+                      situation: _situationText,
+                      prep: prep,
+                    ),
+                  ),
                 ),
-              )),
+              ),
               child: Text(l10n.englishRealRehearse),
             ),
           ],
@@ -174,7 +190,9 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
           ),
           const SizedBox(height: 8),
           FilledButton(
-            onPressed: _busy ? null : _rephraseAll,
+            onPressed: _busy || wantedLines(_wanted.text).isEmpty
+                ? null
+                : _rephraseAll,
             child: Text(l10n.englishRealHowToSay),
           ),
           for (final (wanted, say) in _said)
@@ -192,8 +210,10 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
             ),
           if (_busy) const LinearProgressIndicator(),
           if (_failed)
-            Text(l10n.englishRealFailed,
-                style: TextStyle(color: theme.colorScheme.error)),
+            Text(
+              l10n.englishRealFailed,
+              style: TextStyle(color: theme.colorScheme.error),
+            ),
         ],
       ),
     );

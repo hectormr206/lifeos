@@ -48,14 +48,19 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
   bool _reviewed = false;
   PracticeFeedback? _feedback;
 
-  late final ActivityTimer _timer =
-      ActivityTimer(ActivityKind.talk, ref.read(activityLogProvider.future));
+  late final ActivityTimer _timer = ActivityTimer(
+    ActivityKind.talk,
+    ref.read(activityLogProvider.future),
+  );
 
   @override
   void initState() {
     super.initState();
     _timer; // starts the clock when the conversation opens
+    _input.addListener(_draftChanged);
   }
+
+  void _draftChanged() => setState(() {});
 
   @override
   void dispose() {
@@ -76,7 +81,7 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
     });
     final level =
         (await ref.read(latestPlacementProvider.future))?.result.cefr ??
-            _defaultLevel;
+        _defaultLevel;
     final reply = await ref
         .read(practiceServiceProvider)
         .reply(scenario: widget.scenario, level: level, turns: _turns);
@@ -114,9 +119,14 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
 
   Future<void> _listen(String text) async {
     final voices = await ref.read(installedEnglishVoicesProvider.future);
-    final id = pickEnglishVoice(voices.keys.toList(), seed: widget.scenario.id.length);
+    final id = pickEnglishVoice(
+      voices.keys.toList(),
+      seed: widget.scenario.id.length,
+    );
     if (id == null) return;
-    await ref.read(passageSpeakerProvider).speak([text], voice: voices[id]!).drain<void>();
+    await ref.read(passageSpeakerProvider).speak([
+      text,
+    ], voice: voices[id]!).drain<void>();
   }
 
   Future<void> _finish() async {
@@ -150,7 +160,9 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
         title: Text(widget.scenario.title),
         actions: [
           TextButton(
-            onPressed: _reviewing ? null : _finish,
+            onPressed: _reviewing || !_turns.any((t) => t.fromLearner)
+                ? null
+                : _finish,
             child: Text(l10n.englishTalkFinish),
           ),
         ],
@@ -162,8 +174,10 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(l10n.englishTalkGoal(widget.scenario.task),
-                    style: theme.textTheme.titleSmall),
+                Text(
+                  l10n.englishTalkGoal(widget.scenario.task),
+                  style: theme.textTheme.titleSmall,
+                ),
                 Text(l10n.englishTalkHint, style: theme.textTheme.bodySmall),
               ],
             ),
@@ -200,8 +214,10 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
                   ),
                 if (_waiting) const LinearProgressIndicator(),
                 if (_noReply)
-                  Text(l10n.englishTalkNoReply,
-                      style: TextStyle(color: theme.colorScheme.error)),
+                  Text(
+                    l10n.englishTalkNoReply,
+                    style: TextStyle(color: theme.colorScheme.error),
+                  ),
                 if (_reviewing) Text(l10n.englishReviewing),
                 if (_reviewed) ...[
                   const SizedBox(height: 16),
@@ -232,7 +248,9 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
                   IconButton(
                     tooltip: l10n.englishTalkSend,
                     icon: const Icon(Icons.send),
-                    onPressed: _waiting ? null : _send,
+                    onPressed: _waiting || _input.text.trim().isEmpty
+                        ? null
+                        : _send,
                   ),
                 ],
               ),
