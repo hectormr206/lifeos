@@ -3086,6 +3086,24 @@ abstract class AppLocalizations {
   /// **'Check'**
   String get englishListeningCheck;
 
+  /// No description provided for @englishListeningDidNotUnderstand.
+  ///
+  /// In en, this message translates to:
+  /// **'I did not understand'**
+  String get englishListeningDidNotUnderstand;
+
+  /// No description provided for @englishListeningSaveFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Your listening result could not be saved. Please retry.'**
+  String get englishListeningSaveFailed;
+
+  /// No description provided for @englishListeningRetry.
+  ///
+  /// In en, this message translates to:
+  /// **'Retry'**
+  String get englishListeningRetry;
+
   /// No description provided for @englishListeningNext.
   ///
   /// In en, this message translates to:

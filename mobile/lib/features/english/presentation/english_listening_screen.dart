@@ -32,59 +32,140 @@ class EnglishListeningScreen extends ConsumerStatefulWidget {
       _EnglishListeningScreenState();
 }
 
-class _EnglishListeningScreenState extends ConsumerState<EnglishListeningScreen> {
+class _EnglishListeningScreenState
+    extends ConsumerState<EnglishListeningScreen> {
   final _session = ListeningPlacement();
   final _typed = TextEditingController();
-  late final ActivityTimer _timer =
-      ActivityTimer(ActivityKind.placement, ref.read(activityLogProvider.future));
+  late final PassageSpeaker _speaker;
+  late final ActivityTimer _timer = ActivityTimer(
+    ActivityKind.placement,
+    ref.read(activityLogProvider.future),
+  );
   int _number = 1;
   int _plays = 0;
   double? _score;
   bool _saved = false;
+  bool _playing = false;
+  bool _heard = false;
+  bool _advancing = false;
+  bool _saving = false;
+  bool _saveFailed = false;
+  bool _playFailed = false;
+  int _playEpoch = 0;
 
   @override
   void initState() {
     super.initState();
     _timer; // starts the clock when the test opens
+    _speaker = ref.read(passageSpeakerProvider);
   }
 
   @override
   void dispose() {
+    _playEpoch++;
+    // Stop the active player as the route leaves. Do not await from dispose.
+    _speaker.stop().catchError((Object _) {});
     _typed.dispose();
     super.dispose();
   }
 
   Future<void> _listen() async {
+    if (_playing ||
+        _plays >= _maxPlays ||
+        _score != null ||
+        _session.isFinished) {
+      return;
+    }
     final item = _session.current;
-    final voices = await ref.read(installedEnglishVoicesProvider.future);
-    final id = pickEnglishVoice(voices.keys.toList(), seed: _number);
-    if (item == null || id == null || !mounted) return;
-    setState(() => _plays++);
-    await ref
-        .read(passageSpeakerProvider)
-        .speak([item.sentence], voice: voices[id]!)
-        .drain<void>();
+    if (item == null) return;
+    final epoch = ++_playEpoch;
+    setState(() {
+      _playing = true;
+      _playFailed = false;
+    });
+    try {
+      final voices = await ref.read(installedEnglishVoicesProvider.future);
+      if (!mounted || epoch != _playEpoch) return;
+      final id = pickEnglishVoice(voices.keys.toList(), seed: _number);
+      if (id == null) throw StateError('English voice unavailable');
+      await _speaker.speak([item.sentence], voice: voices[id]!).drain<void>();
+      if (!mounted || epoch != _playEpoch) return;
+      setState(() {
+        _plays++;
+        _heard = true;
+      });
+    } catch (error) {
+      if (mounted && epoch == _playEpoch) {
+        setState(() => _playFailed = true);
+      }
+    } finally {
+      if (mounted && epoch == _playEpoch) {
+        setState(() => _playing = false);
+      }
+    }
   }
 
-  void _check() => setState(() => _score = scoreDictation(
-        target: _session.current!.sentence,
-        typed: _typed.text,
-      ));
+  void _check({bool understoodNothing = false}) {
+    if (!_heard ||
+        _playing ||
+        _score != null ||
+        _session.isFinished ||
+        (!understoodNothing && _typed.text.trim().isEmpty)) {
+      return;
+    }
+    FocusManager.instance.primaryFocus?.unfocus();
+    setState(
+      () => _score = understoodNothing
+          ? 0
+          : scoreDictation(
+              target: _session.current!.sentence,
+              typed: _typed.text.trim(),
+            ),
+    );
+  }
 
   Future<void> _next() async {
-    _session.answer(_score ?? 0);
+    if (_score == null || _playing || _advancing || _session.isFinished) return;
+    _advancing = true;
+    _session.answer(_score!);
+    FocusManager.instance.primaryFocus?.unfocus();
     setState(() {
       _number++;
       _plays = 0;
+      _heard = false;
+      _playFailed = false;
       _score = null;
       _typed.clear();
     });
-    if (_session.isFinished && !_saved) {
-      _saved = true;
+    if (_session.isFinished) {
+      await _save();
+    } else {
+      _advancing = false;
+    }
+  }
+
+  Future<void> _save() async {
+    if (_saved || _saving) return;
+    setState(() {
+      _saving = true;
+      _saveFailed = false;
+    });
+    try {
       final results = await ref.read(listeningResultsProvider.future);
       await results.save(_session.level, takenAt: DateTime.now());
+      if (!mounted) return;
       ref.invalidate(latestListeningProvider);
       _timer.finish();
+      setState(() => _saved = true);
+    } catch (error) {
+      if (mounted) setState(() => _saveFailed = true);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _saving = false;
+          _advancing = false;
+        });
+      }
     }
   }
 
@@ -101,7 +182,9 @@ class _EnglishListeningScreenState extends ConsumerState<EnglishListeningScreen>
     } else if ((voices.value ?? const {}).isEmpty) {
       // Downloaded here, never through the voice catalog: there, downloading
       // a voice also makes it Axi's voice.
-      final status = ref.watch(voiceCatalogControllerProvider)[kPracticeVoiceId];
+      final status = ref.watch(
+        voiceCatalogControllerProvider,
+      )[kPracticeVoiceId];
       body = Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
@@ -119,7 +202,7 @@ class _EnglishListeningScreenState extends ConsumerState<EnglishListeningScreen>
         ],
       );
     } else if (_session.isFinished) {
-      body = _result(l10n);
+      body = _saved ? _result(l10n) : _pendingSave(l10n);
     } else {
       body = _item(l10n);
     }
@@ -138,35 +221,69 @@ class _EnglishListeningScreenState extends ConsumerState<EnglishListeningScreen>
           Text(l10n.englishListeningIntro),
           const SizedBox(height: 16),
         ],
-        Text(l10n.englishListeningSentence(_number), style: theme.textTheme.titleMedium),
+        Text(
+          l10n.englishListeningSentence(_number),
+          style: theme.textTheme.titleMedium,
+        ),
         const SizedBox(height: 12),
         OutlinedButton.icon(
-          onPressed: _plays >= _maxPlays ? null : _listen,
+          onPressed: _playing || _plays >= _maxPlays || score != null
+              ? null
+              : _listen,
           icon: const Icon(Icons.volume_up),
           label: Text(l10n.englishListen),
         ),
+        if (_playing) const Center(child: CircularProgressIndicator()),
+        if (_playFailed) Text(l10n.englishListenFailed),
         const SizedBox(height: 12),
         TextField(
           controller: _typed,
+          onChanged: (_) => setState(() {}),
           enabled: score == null,
           minLines: 2,
           maxLines: 4,
           decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
         const SizedBox(height: 12),
-        if (score == null)
-          FilledButton(onPressed: _check, child: Text(l10n.englishListeningCheck))
-        else ...[
-          Text(l10n.englishListeningScore((score * 100).round()),
-              style: theme.textTheme.titleMedium),
+        if (score == null) ...[
+          FilledButton(
+            onPressed: _heard && !_playing && _typed.text.trim().isNotEmpty
+                ? _check
+                : null,
+            child: Text(l10n.englishListeningCheck),
+          ),
+          if (_heard && !_playing)
+            TextButton(
+              onPressed: () => _check(understoodNothing: true),
+              child: Text(l10n.englishListeningDidNotUnderstand),
+            ),
+        ] else ...[
+          Text(
+            l10n.englishListeningScore((score * 100).round()),
+            style: theme.textTheme.titleMedium,
+          ),
           const SizedBox(height: 4),
           Text(_session.current!.sentence),
           const SizedBox(height: 12),
-          FilledButton(onPressed: _next, child: Text(l10n.englishListeningNext)),
+          FilledButton(
+            onPressed: _advancing ? null : _next,
+            child: Text(l10n.englishListeningNext),
+          ),
         ],
       ],
     );
   }
+
+  Widget _pendingSave(AppLocalizations l10n) => Column(
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: [
+      if (_saving) const Center(child: CircularProgressIndicator()),
+      if (_saveFailed) ...[
+        Text(l10n.englishListeningSaveFailed),
+        FilledButton(onPressed: _save, child: Text(l10n.englishListeningRetry)),
+      ],
+    ],
+  );
 
   Widget _result(AppLocalizations l10n) {
     final level = _session.level;

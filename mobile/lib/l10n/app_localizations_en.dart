@@ -1762,6 +1762,16 @@ class AppLocalizationsEn extends AppLocalizations {
   String get englishListeningCheck => 'Check';
 
   @override
+  String get englishListeningDidNotUnderstand => 'I did not understand';
+
+  @override
+  String get englishListeningSaveFailed =>
+      'Your listening result could not be saved. Please retry.';
+
+  @override
+  String get englishListeningRetry => 'Retry';
+
+  @override
   String get englishListeningNext => 'Next';
 
   @override
