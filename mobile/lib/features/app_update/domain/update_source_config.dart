@@ -46,22 +46,56 @@ const String kUpdateAccessKey = String.fromEnvironment(
   defaultValue: 'PLACEHOLDER_UPDATE_ACCESS_KEY',
 );
 
+// A single compile-time constant from the existing release defines. The
+// environment constructor reads this exact frame at runtime; its presence in
+// AOT therefore attests the configured source, not an unused marker variable.
+const String _bakedUpdateConfig =
+    'LIFEOS_OTA_CONFIG_V1\n$kUpdateBaseUrl\n$kUpdateAccessKey\nEND_LIFEOS_OTA_CONFIG_V1';
+
 /// Immutable snapshot of the update source (base URL + access key). Injected
 /// into [AppUpdateService] / [ApkDownloadService] so tests can supply their
 /// own (configured or deliberately-unconfigured) values.
 class UpdateSourceConfig {
-  const UpdateSourceConfig({required this.baseUrl, required this.accessKey});
+  // Public named arguments remain stable; private nullable storage lets the
+  // environment constructor derive its getters from the baked frame instead.
+  const UpdateSourceConfig({required String baseUrl, required String accessKey})
+      // ignore: prefer_initializing_formals
+      : _baseUrl = baseUrl,
+        // ignore: prefer_initializing_formals
+        _accessKey = accessKey,
+        _frame = null;
 
   /// The build-time config (dart-define overrides, else the placeholders).
   const UpdateSourceConfig.fromEnvironment()
-      : baseUrl = kUpdateBaseUrl,
-        accessKey = kUpdateAccessKey;
+      : _baseUrl = null,
+        _accessKey = null,
+        _frame = _bakedUpdateConfig;
+
+  final String? _baseUrl;
+  final String? _accessKey;
+  final String? _frame;
+
+  // Reject broken delimiters or embedded line breaks without exposing either
+  // value. Invalid environment frames behave as unconfigured sources.
+  String _framedPart(int index) {
+    final parts = _frame!.split('\n');
+    if (parts.length != 4 ||
+        parts[0] != 'LIFEOS_OTA_CONFIG_V1' ||
+        parts[3] != 'END_LIFEOS_OTA_CONFIG_V1' ||
+        parts[1].isEmpty ||
+        parts[2].isEmpty ||
+        parts[1].codeUnits.any((unit) => unit < 0x21 || unit > 0x7e) ||
+        parts[2].codeUnits.any((unit) => unit < 0x21 || unit > 0x7e)) {
+      return '';
+    }
+    return parts[index];
+  }
 
   /// Public base URL for `<baseUrl>/manifest` and `<baseUrl>/download`.
-  final String baseUrl;
+  String get baseUrl => _frame == null ? _baseUrl! : _framedPart(1);
 
   /// Secret sent as [kUpdateAccessKeyHeader].
-  final String accessKey;
+  String get accessKey => _frame == null ? _accessKey! : _framedPart(2);
 
   /// True only once the placeholders have been replaced with real values.
   /// Guards the update check from firing against the placeholder host (which
