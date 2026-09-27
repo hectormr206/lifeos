@@ -24,12 +24,14 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # completamente distintas, y eso hace inútil lo único que la gente cita cuando
 # reporta un problema.
 #
-# El versionCode (el +N) NO se toca aquí: sale del número de commits, lo pone
-# `--build-number` en publish-to-vps.sh, y por eso sí se mueve solo.
+# Derive release build numbers from `git rev-list --count HEAD`.
+# Keep this suffix equal to the final release commit count too: Flutter 3.44.8
+# ignores --build-number when generating Linux version.json. Publishers must
+# still pass the same Git-derived number explicitly for platform metadata.
 #
 # Criterio: sube el MINOR (0.10 -> 0.11) en cada tanda con funciones nuevas o
 # cambios visibles; el PATCH para correcciones sueltas.
-version: 0.20.2+1024
+version: 0.20.2+1030
 
 environment:
   sdk: ^3.12.2
