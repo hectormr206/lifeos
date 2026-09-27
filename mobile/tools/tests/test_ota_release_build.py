@@ -9,7 +9,8 @@ import unittest
 
 
 ROOT = Path(__file__).resolve().parents[3]
-GATE = ROOT / "mobile/android/ota-release.gradle.kts"
+GATE = ROOT / "mobile/android/ota-release.gradle"
+APP_BUILD = ROOT / "mobile/android/app/build.gradle.kts"
 TEST_DIR = Path(__file__).resolve().parent
 URL = "https://updates.test.example/lifeos"
 KEY = "fixture-key=with-equals"
@@ -18,6 +19,14 @@ KEY = "fixture-key=with-equals"
 def defines(**values):
     return ",".join(base64.b64encode(f"{name}={value}".encode()).decode()
                     for name, value in values.items())
+
+
+class OtaReleaseWiringTest(unittest.TestCase):
+    def test_app_uses_non_kotlin_release_gate(self):
+        self.assertTrue(GATE.is_file(), f"Missing applied release gate: {GATE}")
+        build = APP_BUILD.read_text()
+        self.assertIn('apply(from = "../ota-release.gradle")', build)
+        self.assertNotIn("ota-release.gradle.kts", build)
 
 
 class OtaReleaseBuildTest(unittest.TestCase):

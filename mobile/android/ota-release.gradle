@@ -1,0 +1,73 @@
+// Standalone task-graph gate for Flutter's comma-separated Base64(name=value)
+// -Pdart-defines. A Groovy applied script avoids Kotlin UAST analysis of an
+// external compiled script during Android lintVitalAnalyzeRelease. As with the
+// other app graph checks, whenReady does not support configuration caching.
+import java.net.URI
+import java.nio.ByteBuffer
+import java.nio.charset.CodingErrorAction
+import java.nio.charset.StandardCharsets
+import java.util.Base64
+
+boolean validUpdateUrl(String value) {
+    for (int i = 0; i < value.length(); i++) {
+        int code = (int) value.charAt(i)
+        if (code < 0x21 || code > 0x7e) return false
+    }
+    if (value =~ /(?i)placeholder|change.?me|replace.?me|your.?url|[<>]/) return false
+    URI uri
+    try {
+        uri = new URI(value)
+    } catch (Exception ignored) {
+        return false
+    }
+    String host = uri.host
+    return uri.scheme == 'https' && host != null && uri.rawUserInfo == null &&
+        uri.rawQuery == null && uri.rawFragment == null &&
+        !value.contains('?') && !value.contains('#') &&
+        (uri.port == -1 || (uri.port >= 1 && uri.port <= 65535)) &&
+        host.length() <= 253 && host.split('\\.', -1).every {
+            it ==~ /[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?/
+        }
+}
+
+boolean validUpdateKey(String value) {
+    if (value.isEmpty()) return false
+    for (int i = 0; i < value.length(); i++) {
+        int code = (int) value.charAt(i)
+        if (code < 0x21 || code > 0x7e) return false
+    }
+    return !(value =~ /(?i)placeholder|change.?me|replace.?me|your.?access|dummy|[<>]/)
+}
+
+boolean validDartDefines(String raw) {
+    if (!raw) return false
+    Map<String, String> values = [:]
+    for (String token : raw.split(',', -1)) {
+        String decoded
+        try {
+            byte[] bytes = Base64.getDecoder().decode(token)
+            decoded = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .decode(ByteBuffer.wrap(bytes)).toString()
+        } catch (Exception ignored) {
+            return false
+        }
+        int separator = decoded.indexOf('=')
+        if (separator <= 0) return false
+        String name = decoded.substring(0, separator)
+        if (values.containsKey(name)) return false
+        values.put(name, decoded.substring(separator + 1))
+    }
+    return validUpdateUrl(values.getOrDefault('UPDATE_BASE_URL', '')) &&
+        validUpdateKey(values.getOrDefault('UPDATE_ACCESS_KEY', ''))
+}
+
+gradle.taskGraph.whenReady { graph ->
+    if (graph.allTasks.any { it.project == project && it.name.contains('Release') }) {
+        if (!validDartDefines(project.findProperty('dart-defines')?.toString())) {
+            throw new GradleException(
+                'Production release requires valid UPDATE_BASE_URL and UPDATE_ACCESS_KEY Dart defines.')
+        }
+    }
+}

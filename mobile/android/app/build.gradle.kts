@@ -8,7 +8,7 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
-apply(from = "../ota-release.gradle.kts")
+apply(from = "../ota-release.gradle")
 
 // Only exact, app-qualified probe targets may configure without release secrets.
 // Abbreviations, aggregate tasks, empty selections and mixed requests fail closed
