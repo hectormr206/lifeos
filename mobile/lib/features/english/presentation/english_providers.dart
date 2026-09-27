@@ -250,6 +250,19 @@ final reminderTimePickerProvider =
   (ref) => (context) => showTimePicker(
         context: context,
         initialTime: const TimeOfDay(hour: 20, minute: 0),
+        builder: (dialogContext, child) {
+          final media = MediaQuery.of(dialogContext);
+          final format = MaterialLocalizations.of(dialogContext).timeOfDayFormat(
+            alwaysUse24HourFormat: media.alwaysUse24HourFormat,
+          );
+          // The SDK input parser uses MediaQuery's flag, while the displayed
+          // hour uses the locale's format. Keep them in the same hour mode.
+          final use24Hours = hourFormat(of: format) != HourFormat.h;
+          return MediaQuery(
+            data: media.copyWith(alwaysUse24HourFormat: use24Hours),
+            child: child!,
+          );
+        },
       ),
 );
 

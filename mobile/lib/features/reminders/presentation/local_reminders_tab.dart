@@ -27,6 +27,10 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
   @override
   void initState() {
     super.initState();
+    // This notifier survives route exit. English (and other features) can
+    // create reminders through the shared service while its list is cached.
+    // Wait for the first load before refreshing to avoid a stale load winning.
+    _refreshOnEntry(ref.read(localRemindersNotifierProvider.notifier));
     // While the app is alive, a reminder-notification tap lands here (the
     // payload registry keeps one handler per payload; re-registering on each
     // open just refreshes it). Cold-start routing is a follow-up — see
@@ -38,6 +42,12 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
         ref.read(localRemindersNotifierProvider.notifier).refresh();
       });
     }
+  }
+
+  Future<void> _refreshOnEntry(LocalRemindersNotifier notifier) async {
+    await notifier.ready;
+    if (!mounted) return;
+    await notifier.refresh();
   }
 
   @override
