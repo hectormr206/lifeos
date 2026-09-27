@@ -62,7 +62,7 @@ APK="$MOBILE_DIR/build/app/outputs/flutter-apk/app-release.apk"
 
 # shellcheck source=lib/baked-config-guard.sh
 source "$MOBILE_DIR/tools/lib/baked-config-guard.sh"
-lifeos_guard_baked_config "$APK" "$UPDATE_BASE_URL"
+UPDATE_ACCESS_KEY="$UPDATE_ACCESS_KEY" lifeos_guard_baked_config "$APK" "$UPDATE_BASE_URL"
 
 # ── Metadata (versionCode/name from the APK itself via aapt) ─────────────────
 # El SDK no está en el mismo sitio en las dos máquinas: en el VPS cuelga de

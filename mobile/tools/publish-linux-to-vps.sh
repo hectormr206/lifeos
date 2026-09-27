@@ -114,7 +114,7 @@ BUNDLE="$MOBILE_DIR/build/linux/x64/release/bundle"
 
 # shellcheck source=lib/baked-config-guard.sh
 source "$MOBILE_DIR/tools/lib/baked-config-guard.sh"
-lifeos_guard_baked_config "$BUNDLE/lib/libapp.so" "$UPDATE_BASE_URL"
+UPDATE_ACCESS_KEY="$UPDATE_ACCESS_KEY" lifeos_guard_baked_config "$BUNDLE/lib/libapp.so" "$UPDATE_BASE_URL"
 
 # ── Stage the payload ───────────────────────────────────────────────────────
 # Everything the target machine needs ships inside the ONE artifact whose
