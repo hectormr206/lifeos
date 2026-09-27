@@ -110,6 +110,21 @@ jobs:
     runs-on: [self-hosted, laptop]
     steps:
       - uses: actions/checkout@v4
+      - name: OTA publication guard regressions
+        run: |
+          python3 --version
+          python3 -m unittest discover -s mobile/tools/tests -p 'test_*.py'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.1.0'
+      - name: Android OTA release graph regressions
+        env:
+          LIFEOS_TEST_GRADLE: gradle
+        run: python3 -m unittest mobile.tools.tests.test_ota_release_build
       # Must match the VPS-local SDK that mobile-ota-publish builds the shipped
       # APK with, otherwise the gate validates a different Flutter than we ship.
       - name: Set up Flutter 3.44.8
@@ -118,6 +133,11 @@ jobs:
           flutter-version: 3.44.8
           channel: stable
           cache: true
+      - name: Compile and verify framed OTA AOT config (fake defines)
+        env:
+          LIFEOS_TEST_DART: dart
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: python3 -m unittest discover -s mobile/tools/tests -p test_baked_config_guard.py
       - name: pub get
         working-directory: mobile
         run: flutter pub get
