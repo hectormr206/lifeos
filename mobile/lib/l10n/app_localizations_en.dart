@@ -490,6 +490,25 @@ class AppLocalizationsEn extends AppLocalizations {
   String get aboutLandingLink => 'lifeos.hectormr.com';
 
   @override
+  String get englishModelsTitle => 'English resources (optional)';
+
+  @override
+  String get englishModelsSubtitle =>
+      'For pronunciation feedback and English practice. Not needed for chat.';
+
+  @override
+  String get englishModelsPronunciation => 'ZIPA pronunciation';
+
+  @override
+  String get englishModelsPracticeVoice => 'Lessac (US) practice voice';
+
+  @override
+  String get englishModelsChecking => 'Checking on this device…';
+
+  @override
+  String get englishModelsDownload => 'Download';
+
+  @override
   String get requiredModelsSectionTitle => 'Required models';
 
   @override

@@ -114,9 +114,22 @@ final wordSaverProvider = FutureProvider<WordSaver>(
 
 /// The English voices from the catalog that are installed on this device, by
 /// id. Empty when none is: the reader then says how to get one.
+///
+/// Recomputed whenever an English voice lands or leaves in the catalog, from
+/// any screen: a watching screen may sit under the one that downloaded it.
 final installedEnglishVoicesProvider =
     FutureProvider.autoDispose<Map<String, TtsVoicePaths>>((ref) async {
   final gateway = ref.watch(ttsVoiceGatewayProvider);
+  ref.watch(
+    voiceCatalogControllerProvider.select(
+      (statuses) => [
+        for (final voice in VoiceCatalog.all)
+          if (voice.languageTag.startsWith('en') &&
+              statuses[voice.id] is TtsVoiceReady)
+            voice.id,
+      ].join(','),
+    ),
+  );
   final installed = <String, TtsVoicePaths>{};
   for (final voice in VoiceCatalog.all) {
     if (!voice.languageTag.startsWith('en')) continue;
@@ -405,11 +418,11 @@ const String kPracticeVoiceId = 'en_US-lessac';
 
 /// Downloads [kPracticeVoiceId] WITHOUT selecting it: the voice catalog's
 /// "download" also makes it Axi's voice, which on the Pixel turned Axi
-/// English. Returns whether the voice is now installed.
+/// English. Returns whether the voice is now installed. Safe to outlive the
+/// calling widget: [ref] is not touched after the download starts.
 Future<bool> downloadEnglishVoice(WidgetRef ref) async {
   final catalog = ref.read(voiceCatalogControllerProvider.notifier);
   await catalog.download(kPracticeVoiceId);
-  ref.invalidate(installedEnglishVoicesProvider);
   return catalog.statusOf(kPracticeVoiceId) is TtsVoiceReady;
 }
 

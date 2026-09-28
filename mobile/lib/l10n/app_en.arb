@@ -223,6 +223,12 @@
   "aboutAuthor": "Created by Héctor Martínez",
   "aboutLandingLink": "lifeos.hectormr.com",
 
+  "englishModelsTitle": "English resources (optional)",
+  "englishModelsSubtitle": "For pronunciation feedback and English practice. Not needed for chat.",
+  "englishModelsPronunciation": "ZIPA pronunciation",
+  "englishModelsPracticeVoice": "Lessac (US) practice voice",
+  "englishModelsChecking": "Checking on this device…",
+  "englishModelsDownload": "Download",
   "requiredModelsSectionTitle": "Required models",
   "requiredModelsSectionSubtitle": "LifeOS works fully offline once these four models are installed.",
   "requiredModelsDownloadAll": "Download all",

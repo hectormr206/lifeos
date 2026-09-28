@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../domain/local_llm_engine.dart';
+import 'english_models_manager.dart';
 import 'local_model_notifier.dart';
 import 'local_model_providers.dart';
 import 'required_models_manager.dart';
@@ -31,6 +32,7 @@ class LocalModelScreen extends ConsumerWidget {
           // "Descargar todo" that fetches the missing ones so the offline
           // experience is never half-broken.
           const RequiredModelsManager(),
+          const EnglishModelsManager(),
           // Brain-model OTA: offer the newer brain weights when the VPS manifest
           // advertises a higher versionCode than the installed build.
           // TODO(local-model): a future per-row "eliminar" control could let the

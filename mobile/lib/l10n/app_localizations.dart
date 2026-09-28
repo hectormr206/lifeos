@@ -962,6 +962,42 @@ abstract class AppLocalizations {
   /// **'lifeos.hectormr.com'**
   String get aboutLandingLink;
 
+  /// No description provided for @englishModelsTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'English resources (optional)'**
+  String get englishModelsTitle;
+
+  /// No description provided for @englishModelsSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'For pronunciation feedback and English practice. Not needed for chat.'**
+  String get englishModelsSubtitle;
+
+  /// No description provided for @englishModelsPronunciation.
+  ///
+  /// In en, this message translates to:
+  /// **'ZIPA pronunciation'**
+  String get englishModelsPronunciation;
+
+  /// No description provided for @englishModelsPracticeVoice.
+  ///
+  /// In en, this message translates to:
+  /// **'Lessac (US) practice voice'**
+  String get englishModelsPracticeVoice;
+
+  /// No description provided for @englishModelsChecking.
+  ///
+  /// In en, this message translates to:
+  /// **'Checking on this device…'**
+  String get englishModelsChecking;
+
+  /// No description provided for @englishModelsDownload.
+  ///
+  /// In en, this message translates to:
+  /// **'Download'**
+  String get englishModelsDownload;
+
   /// No description provided for @requiredModelsSectionTitle.
   ///
   /// In en, this message translates to:
