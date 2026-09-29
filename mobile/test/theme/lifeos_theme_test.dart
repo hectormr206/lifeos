@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/theme/lifeos_theme.dart';
+import 'package:lifeos/theme/lifeos_palette.dart';
 
 void main() {
   test('light theme is Material 3, light brightness, brand accents darkened',
@@ -36,6 +37,28 @@ void main() {
     expect(theme.colorScheme.primary, LifeOSColors.teal);
     expect(theme.colorScheme.secondary, LifeOSColors.pink);
     expect(theme.colorScheme.surface, LifeOSColors.dark);
+  });
+
+  test('both themes carry the design tokens and bundled type families', () {
+    expect(lifeosLightTheme.colorScheme.surface, const Color(0xFFFBF5F4));
+    for (final theme in [lifeosLightTheme, lifeosDarkTheme]) {
+      expect(theme.extension<LifeOSPalette>(), isNotNull);
+      for (final style in [
+        theme.textTheme.displayLarge,
+        theme.textTheme.headlineSmall,
+        theme.textTheme.titleLarge,
+      ]) {
+        expect(style?.fontFamily, 'BricolageGrotesque');
+      }
+      for (final style in [
+        theme.textTheme.bodyLarge,
+        theme.textTheme.labelMedium,
+      ]) {
+        expect(style?.fontFamily, 'AtkinsonHyperlegibleNext');
+      }
+      expect(theme.filledButtonTheme.style?.shape?.resolve({}),
+          isA<StadiumBorder>());
+    }
   });
 
   test('brand palette values match the axolotl mark', () {
