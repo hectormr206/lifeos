@@ -15,6 +15,8 @@ import 'package:lifeos/core/graph/graph_records.dart';
 import 'package:lifeos/core/graph/local_graph_store.dart';
 import 'package:lifeos/features/brain3d/presentation/brain3d_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/theme/lifeos_theme.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 import 'package:lifeos/features/brain3d/presentation/brain3d_view.dart';
 
 class _FakeLocalGraphStore implements LocalGraphStore {
@@ -303,6 +305,46 @@ void main() {
           reason: 'the panel covered the graph it is supposed to sit beside');
       expect(find.byType(Brain3dView), findsOneWidget);
     });
+  });
+
+  testWidgets('overlay chrome reads from the dark scheme inside a light app',
+      (tester) async {
+    tester.view.physicalSize = const Size(1080, 2400);
+    tester.view.devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+
+    final now = DateTime.now();
+    final store = _FakeLocalGraphStore(
+      nodes: [
+        for (var i = 0; i < 4; i++)
+          GraphNodeRecord(
+            uuid: 'n$i',
+            kind: 'fact',
+            label: 'memoria $i',
+            createdAt: now.subtract(Duration(hours: i)),
+            updatedAt: now,
+          ),
+      ],
+    );
+
+    await tester.pumpWidget(_app(store));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    final dark = lifeosDarkTheme.colorScheme;
+    final panel = tester.widget<Material>(find.byKey(const ValueKey('brain3d-panel')));
+    expect(panel.color, dark.surfaceContainer);
+    expect(
+      Theme.of(tester.element(find.byKey(const ValueKey('brain3d-panel'))))
+          .colorScheme
+          .brightness,
+      Brightness.dark,
+    );
+    final shape = panel.shape as RoundedRectangleBorder;
+    expect(
+      shape.borderRadius,
+      BorderRadius.vertical(top: Radius.circular(Radii.panel)),
+    );
   });
 
   testWidgets('the merge picker only offers nodes of the same kind',

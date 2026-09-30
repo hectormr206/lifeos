@@ -6,6 +6,7 @@ import 'package:go_router/go_router.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/presentation/chat_notifier.dart';
 import '../domain/dictation_status.dart';
 import 'dictate_controller.dart';
@@ -99,7 +100,7 @@ class _DictateScreenState extends ConsumerState<DictateScreen> {
       body: SafeArea(
         child: Center(
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(24),
+            padding: const EdgeInsets.all(Space.xl),
             child: ConstrainedBox(
               constraints: const BoxConstraints(maxWidth: 480),
               child: Column(
@@ -144,13 +145,23 @@ class _DictateScreenState extends ConsumerState<DictateScreen> {
 
       case DictationReady():
         return [
-          TextField(
-            controller: _textController,
-            maxLines: null,
-            autofocus: true,
-            decoration: InputDecoration(
-              border: const OutlineInputBorder(),
-              helperText: l10n.dictateReviewHint,
+          Card(
+            margin: EdgeInsets.zero,
+            child: Padding(
+              padding: const EdgeInsets.all(Space.lg),
+              child: TextField(
+                controller: _textController,
+                maxLines: null,
+                autofocus: true,
+                decoration: InputDecoration(
+                  filled: false,
+                  border: InputBorder.none,
+                  enabledBorder: InputBorder.none,
+                  focusedBorder: InputBorder.none,
+                  contentPadding: EdgeInsets.zero,
+                  helperText: l10n.dictateReviewHint,
+                ),
+              ),
             ),
           ),
           const SizedBox(height: 16),

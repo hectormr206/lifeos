@@ -28,8 +28,22 @@ class LocalModelScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Modelo local')),
-      body: PageBody(
-        children: [
+      // Short, fixed content: built eagerly (not a lazy ListView) so every
+      // section, including the developer controls below the fold, exists.
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              kPageGutter,
+              Space.sm,
+              kPageGutter,
+              Space.xxxl + MediaQuery.paddingOf(context).bottom,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
           // Unified model manager (option B): the four required models + a
           // "Descargar todo" that fetches the missing ones so the offline
           // experience is never half-broken.
@@ -46,7 +60,10 @@ class LocalModelScreen extends ConsumerWidget {
           // Misma herramienta, otra perilla: la decodificación especulativa
           // (MTP) del modelo, para poder medir si conviene en cada tarea.
           const _SpeculativeDecodingSection(),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
-import '../../../theme/lifeos_theme.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/biometric_authenticator.dart';
 import 'app_lock_providers.dart';
 
@@ -69,25 +70,32 @@ class _LockScreenState extends ConsumerState<LockScreen> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Container(
-                  width: 88,
-                  height: 88,
+                  key: const Key('lock-axi-mark'),
+                  width: 96,
+                  height: 96,
                   decoration: BoxDecoration(
-                    color: LifeOSColors.softPink.withValues(alpha: 0.2),
+                    color: LifeOSPalette.of(context).axiBubble,
                     shape: BoxShape.circle,
                   ),
-                  child: Icon(
-                    unavailable ? Icons.lock_outline : Icons.fingerprint,
-                    size: 44,
-                    color: LifeOSColors.pink,
+                  clipBehavior: Clip.antiAlias,
+                  padding: const EdgeInsets.all(Space.md),
+                  child: Image.asset(
+                    'assets/branding/axi-512.png',
+                    fit: BoxFit.contain,
+                    errorBuilder: (context, error, stack) => Icon(
+                      unavailable ? Icons.lock_outline : Icons.fingerprint,
+                      size: 44,
+                      color: scheme.secondary,
+                    ),
                   ),
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: Space.xl),
                 Text(
                   l10n.appLockLockedTitle,
-                  style: Theme.of(context).textTheme.titleLarge,
+                  style: Theme.of(context).textTheme.headlineMedium,
                   textAlign: TextAlign.center,
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: Space.md),
                 Text(
                   unavailable ? l10n.appLockUnavailableBody : l10n.appLockLockedBody,
                   style: Theme.of(context).textTheme.bodyMedium?.copyWith(

@@ -5,6 +5,8 @@ import '../../../core/graph/graph_providers.dart';
 import '../../../core/graph/domain_labels.dart';
 import '../../../core/graph/graph_records.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_theme.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../memory/domain/graph_cleanup.dart';
 import '../domain/brain3d_payload.dart';
 import '../domain/brain3d_filters.dart';
@@ -118,7 +120,11 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
     final l10n = AppLocalizations.of(context);
     final payload = ref.watch(brain3dPayloadProvider);
 
-    return Scaffold(
+    // The graph canvas is dark by design, so the chrome around it always reads
+    // from the dark scheme, whatever theme the rest of the app is in.
+    return Theme(
+      data: lifeosDarkTheme,
+      child: Builder(builder: (context) => Scaffold(
       backgroundColor: const Color(0xFF0B0E13),
       appBar: AppBar(
         title: Text(l10n.brain3dTitle),
@@ -132,7 +138,9 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
               child: Center(
                 child: Text(
                   '${value.nodes.length} · ${value.edges.length}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 13),
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
             ),
@@ -173,10 +181,16 @@ class _Brain3dScreenState extends ConsumerState<Brain3dScreen> {
           },
         ),
         AsyncError(:final error) => Center(
-          child: Text('$error', style: const TextStyle(color: Colors.white70)),
+          child: Text(
+            '$error',
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            ),
+          ),
         ),
         _ => const Center(child: CircularProgressIndicator()),
       },
+    )),
     );
   }
 }
@@ -351,6 +365,10 @@ class _Controls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final mutedLabel =
+        theme.textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
       child: Column(
@@ -358,27 +376,19 @@ class _Controls extends StatelessWidget {
         children: [
           TextField(
             controller: controller,
-            style: const TextStyle(color: Colors.white),
             onChanged: (q) => onFilter(filter.copyWith(query: q)),
             decoration: InputDecoration(
               hintText: 'Buscar en tu memoria…',
-              hintStyle: const TextStyle(color: Colors.white38),
-              prefixIcon: const Icon(Icons.search, color: Colors.white38),
+              prefixIcon: Icon(Icons.search, color: scheme.onSurfaceVariant),
               suffixIcon: controller.text.isEmpty
                   ? null
                   : IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white38),
+                      icon: Icon(Icons.close, color: scheme.onSurfaceVariant),
                       onPressed: () {
                         controller.clear();
                         onFilter(filter.copyWith(query: ''));
                       },
                     ),
-              filled: true,
-              fillColor: const Color(0xFF161A22),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
-                borderSide: BorderSide.none,
-              ),
               isDense: true,
             ),
           ),
@@ -387,7 +397,7 @@ class _Controls extends StatelessWidget {
             scrollDirection: Axis.horizontal,
             child: Row(
               children: [
-                const Text('Fecha:', style: TextStyle(color: Colors.white54)),
+                Text('Fecha:', style: mutedLabel),
                 const SizedBox(width: 8),
                 for (final entry in const [
                   (Brain3dDateRange.all, 'Todo'),
@@ -402,13 +412,12 @@ class _Controls extends StatelessWidget {
                       selected: filter.range == entry.$1,
                       onSelected: (_) =>
                           onFilter(filter.copyWith(range: entry.$1)),
-                      backgroundColor: const Color(0xFF161A22),
-                      selectedColor: const Color(0xFF12D6A0),
-                      labelStyle: TextStyle(
+                      backgroundColor: scheme.surfaceContainer,
+                      selectedColor: scheme.primary,
+                      labelStyle: theme.textTheme.labelMedium?.copyWith(
                         color: filter.range == entry.$1
-                            ? Colors.black
-                            : Colors.white70,
-                        fontSize: 12,
+                            ? scheme.onPrimary
+                            : scheme.onSurfaceVariant,
                       ),
                       side: BorderSide.none,
                       showCheckmark: false,
@@ -430,7 +439,7 @@ class _Controls extends StatelessWidget {
                   shown == total
                       ? '$total nodos · $relations relaciones'
                       : '$shown de $total nodos · $relations relaciones',
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
+                  style: mutedLabel,
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -442,9 +451,9 @@ class _Controls extends StatelessWidget {
               TextButton.icon(
                 onPressed: onCleanUp,
                 icon: const Icon(Icons.cleaning_services_outlined, size: 15),
-                label: const Text('Limpiar', style: TextStyle(fontSize: 12)),
+                label: Text('Limpiar', style: theme.textTheme.labelMedium),
                 style: TextButton.styleFrom(
-                  foregroundColor: Colors.white54,
+                  foregroundColor: scheme.onSurfaceVariant,
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   minimumSize: const Size(0, 32),
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
@@ -472,11 +481,13 @@ class _DomainList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
       decoration: BoxDecoration(
-        color: const Color(0xCC161A22),
-        borderRadius: BorderRadius.circular(10),
+        color: scheme.surfaceContainer.withValues(alpha: 0.85),
+        borderRadius: BorderRadius.circular(Radii.card),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -484,11 +495,10 @@ class _DomainList extends StatelessWidget {
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 'Dominio',
-                style: TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.bold,
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: scheme.onSurfaceVariant,
                 ),
               ),
               const SizedBox(width: 8),
@@ -496,10 +506,10 @@ class _DomainList extends StatelessWidget {
                 onTap: () => onPick(null),
                 child: Text(
                   'Todos',
-                  style: TextStyle(
+                  style: theme.textTheme.bodyMedium?.copyWith(
                     color: selected == null
-                        ? const Color(0xFF12D6A0)
-                        : Colors.white54,
+                        ? scheme.primary
+                        : scheme.onSurfaceVariant,
                   ),
                 ),
               ),
@@ -512,10 +522,8 @@ class _DomainList extends StatelessWidget {
                 padding: const EdgeInsets.only(top: 4),
                 child: Text(
                   '· ${domainLabel(d)}',
-                  style: TextStyle(
-                    color: selected == d
-                        ? const Color(0xFF12D6A0)
-                        : Colors.white70,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: selected == d ? scheme.primary : scheme.onSurface,
                   ),
                 ),
               ),
@@ -533,15 +541,17 @@ class _Hint extends StatelessWidget {
   Widget build(BuildContext context) => Container(
     padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
     decoration: BoxDecoration(
-      color: const Color(0xAA161A22),
-      borderRadius: BorderRadius.circular(8),
+      color: Theme.of(context).colorScheme.surfaceContainer.withValues(alpha: 0.7),
+      borderRadius: BorderRadius.circular(Radii.chip),
     ),
-    child: const Text(
+    child: Text(
       // Both ways named, because both work and the app runs on both kinds of
       // device. Naming only the pinch told a laptop user to do something their
       // machine cannot do.
       'Orbitar: arrastrar · Zoom: rueda o pellizco · Toca: seleccionar',
-      style: TextStyle(color: Colors.white38, fontSize: 11),
+      style: Theme.of(context).textTheme.labelSmall?.copyWith(
+        color: Theme.of(context).colorScheme.onSurfaceVariant,
+      ),
     ),
   );
 }
@@ -571,7 +581,9 @@ class _Sparse extends StatelessWidget {
             : 'Por ahora Axi recuerda $count cosa(s). Un cerebro '
                   'necesita al menos tres para dibujar relaciones — '
                   'contale un par más y esta pantalla cobra vida.',
-        style: const TextStyle(color: Colors.white70, fontSize: 16),
+        style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
+        ),
         textAlign: TextAlign.center,
       ),
     ),
@@ -603,11 +615,17 @@ class _Details extends StatelessWidget {
   Widget build(BuildContext context) {
     final n = node;
     final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    const panelShape = RoundedRectangleBorder(
+      borderRadius: BorderRadius.vertical(top: Radius.circular(Radii.panel)),
+    );
 
     if (n == null) {
       return Material(
         key: const ValueKey('brain3d-panel'),
-        color: const Color(0xFF11151C),
+        color: scheme.surfaceContainer,
+        shape: panelShape,
+        clipBehavior: Clip.antiAlias,
         child: SafeArea(
           top: false,
           child: Padding(
@@ -620,7 +638,7 @@ class _Details extends StatelessWidget {
                   news.isEmpty
                       ? 'Toca un nodo para ver sus detalles'
                       : 'Novedades de la semana',
-                  style: text.titleSmall?.copyWith(color: Colors.white70),
+                  style: text.titleSmall?.copyWith(color: scheme.onSurfaceVariant),
                 ),
                 const SizedBox(height: 8),
                 // Bounded: on a phone this panel floats over the graph, and a
@@ -645,13 +663,12 @@ class _Details extends StatelessWidget {
                             item.label,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(color: Colors.white),
+                            style: text.bodyMedium,
                           ),
                           subtitle: Text(
                             _day(item.occurredAt ?? item.createdAt),
-                            style: const TextStyle(
-                              color: Colors.white38,
-                              fontSize: 12,
+                            style: text.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
                             ),
                           ),
                           onTap: () => onSelect(item.uuid),
@@ -668,7 +685,9 @@ class _Details extends StatelessWidget {
 
     return Material(
       key: const ValueKey('brain3d-panel'),
-      color: const Color(0xFF161A22),
+      color: scheme.surfaceContainer,
+      shape: panelShape,
+      clipBehavior: Clip.antiAlias,
       child: SafeArea(
         top: false,
         // Scrollable, because the panel is capped so it cannot eat the graph:
@@ -686,11 +705,11 @@ class _Details extends StatelessWidget {
                   Expanded(
                     child: Text(
                       n.label,
-                      style: text.titleMedium?.copyWith(color: Colors.white),
+                      style: text.titleMedium,
                     ),
                   ),
                   IconButton(
-                    icon: const Icon(Icons.close, color: Colors.white54),
+                    icon: Icon(Icons.close, color: scheme.onSurfaceVariant),
                     onPressed: onClose,
                   ),
                 ],
@@ -703,10 +722,9 @@ class _Details extends StatelessWidget {
                     Chip(
                       label: Text(domainLabel(tag)),
                       visualDensity: VisualDensity.compact,
-                      backgroundColor: const Color(0xFF222833),
-                      labelStyle: const TextStyle(
-                        color: Colors.white70,
-                        fontSize: 12,
+                      backgroundColor: scheme.surfaceContainerHigh,
+                      labelStyle: text.labelMedium?.copyWith(
+                        color: scheme.onSurfaceVariant,
                       ),
                       side: BorderSide.none,
                     ),
@@ -715,12 +733,12 @@ class _Details extends StatelessWidget {
               const SizedBox(height: 8),
               Text(
                 'Creado: ${_day(n.createdAt)}',
-                style: text.bodySmall?.copyWith(color: Colors.white54),
+                style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
               ),
               if (n.occurredAt != null)
                 Text(
                   'Fecha: ${_day(n.occurredAt!)}',
-                  style: text.bodySmall?.copyWith(color: Colors.white54),
+                  style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
                 ),
               const SizedBox(height: 12),
               Wrap(
@@ -737,7 +755,7 @@ class _Details extends StatelessWidget {
                     icon: const Icon(Icons.delete_outline, size: 18),
                     label: const Text('Olvidar este nodo'),
                     style: TextButton.styleFrom(
-                      foregroundColor: Colors.redAccent,
+                      foregroundColor: scheme.error,
                     ),
                     onPressed: () => _confirmForget(context, n),
                   ),
@@ -756,7 +774,7 @@ class _Details extends StatelessWidget {
   Future<void> _pickMerge(BuildContext context, GraphNodeRecord keep) async {
     final loser = await showModalBottomSheet<String>(
       context: context,
-      backgroundColor: const Color(0xFF161A22),
+      backgroundColor: Theme.of(context).colorScheme.surfaceContainer,
       isScrollControlled: true,
       builder: (context) => SafeArea(
         child: Column(
@@ -766,7 +784,9 @@ class _Details extends StatelessWidget {
               padding: const EdgeInsets.all(16),
               child: Text(
                 '¿Cuál es el mismo que "${keep.label}"?',
-                style: const TextStyle(color: Colors.white70),
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
             Flexible(
@@ -777,7 +797,7 @@ class _Details extends StatelessWidget {
                     ListTile(
                       title: Text(
                         other.label,
-                        style: const TextStyle(color: Colors.white),
+                        style: Theme.of(context).textTheme.bodyMedium,
                       ),
                       onTap: () => Navigator.of(context).pop(other.uuid),
                     ),
@@ -808,7 +828,7 @@ class _Details extends StatelessWidget {
             child: const Text('Cancelar'),
           ),
           TextButton(
-            style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
+            style: TextButton.styleFrom(foregroundColor: Theme.of(context).colorScheme.error),
             onPressed: () => Navigator.of(context).pop(true),
             child: const Text('Olvidar'),
           ),
