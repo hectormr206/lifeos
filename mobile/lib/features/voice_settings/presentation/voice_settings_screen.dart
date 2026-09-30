@@ -2,7 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/platform/app_platform.dart';
+import '../../../core/platform/platform_providers.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../tts/domain/voice_test_outcome.dart';
@@ -35,7 +39,8 @@ class VoiceSettingsScreen extends ConsumerStatefulWidget {
   const VoiceSettingsScreen({super.key});
 
   @override
-  ConsumerState<VoiceSettingsScreen> createState() => _VoiceSettingsScreenState();
+  ConsumerState<VoiceSettingsScreen> createState() =>
+      _VoiceSettingsScreenState();
 }
 
 class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
@@ -72,104 +77,134 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
     final settings = ref.watch(voiceSettingsProvider);
     final selectedVoice = ref.watch(selectedVoiceProvider);
     final voiceStatus =
-        ref.watch(voiceCatalogControllerProvider)[selectedVoice] ?? const TtsVoiceAbsent();
+        ref.watch(voiceCatalogControllerProvider)[selectedVoice] ??
+        const TtsVoiceAbsent();
     final rate = _dragRate ?? settings.rate;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.voiceScreenTitle)),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+      body: PageBody(
         children: [
-          // Desktop only; renders as nothing on the phones, where a global
-          // shortcut does not exist (the assistant gesture is that surface).
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: DictationHotkeyTile(),
+          GroupedList(
+            children: [
+              // Desktop only; renders as nothing on the phones, where a global
+              // shortcut does not exist (the assistant gesture is that surface).
+              if (supportsGlobalHotkeys(ref.watch(hostOperatingSystemProvider)))
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: Space.lg),
+                  child: DictationHotkeyTile(),
+                ),
+              SwitchListTile(
+                secondary: const Icon(Icons.record_voice_over_outlined),
+                title: Text(l10n.voiceAutoSpeakTitle),
+                subtitle: Text(l10n.voiceAutoSpeakSubtitle),
+                value: autoSpeak,
+                onChanged: (value) => ref
+                    .read(voiceReplyEnabledProvider.notifier)
+                    .setEnabled(value),
+              ),
+            ],
           ),
-          SwitchListTile(
-            secondary: const Icon(Icons.record_voice_over_outlined),
-            title: Text(l10n.voiceAutoSpeakTitle),
-            subtitle: Text(l10n.voiceAutoSpeakSubtitle),
-            value: autoSpeak,
-            onChanged: (value) =>
-                ref.read(voiceReplyEnabledProvider.notifier).setEnabled(value),
+          const SizedBox(height: Space.lg),
+          GroupedList(
+            children: [
+              _VoiceStatusCard(status: voiceStatus),
+              ListTile(
+                leading: const Icon(Icons.tune_outlined),
+                title: Text(l10n.voiceCatalogNavTitle),
+                subtitle: Text(
+                  '${VoiceCatalog.byId(selectedVoice)?.displayName ?? selectedVoice} · '
+                  '${l10n.voiceCatalogNavSubtitle}',
+                ),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.push('/settings/voice/catalog'),
+              ),
+            ],
           ),
-          const Divider(),
-          _VoiceStatusCard(status: voiceStatus),
-          ListTile(
-            leading: const Icon(Icons.tune_outlined),
-            title: Text(l10n.voiceCatalogNavTitle),
-            subtitle: Text(
-              '${VoiceCatalog.byId(selectedVoice)?.displayName ?? selectedVoice} · '
-              '${l10n.voiceCatalogNavSubtitle}',
-            ),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => context.push('/settings/voice/catalog'),
-          ),
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-            child: Text(
-              l10n.voiceRateLabel,
-              style: Theme.of(context).textTheme.titleMedium,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Row(
-              children: [
-                Text(l10n.voiceRateSlow, style: Theme.of(context).textTheme.bodySmall),
-                Expanded(
-                  child: Slider(
-                    value: rate.clamp(VoiceSettings.minRate, VoiceSettings.maxRate),
-                    min: VoiceSettings.minRate,
-                    max: VoiceSettings.maxRate,
-                    divisions: 6,
-                    onChanged: (value) => setState(() => _dragRate = value),
-                    onChangeEnd: (value) {
-                      ref.read(voiceSettingsProvider.notifier).setRate(value);
-                      setState(() => _dragRate = null);
-                    },
+          SectionHeader(l10n.voiceRateLabel),
+          GroupedList(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Space.lg,
+                  Space.sm,
+                  Space.lg,
+                  0,
+                ),
+                child: Row(
+                  children: [
+                    Text(
+                      l10n.voiceRateSlow,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: rate.clamp(
+                          VoiceSettings.minRate,
+                          VoiceSettings.maxRate,
+                        ),
+                        min: VoiceSettings.minRate,
+                        max: VoiceSettings.maxRate,
+                        divisions: 6,
+                        onChanged: (value) => setState(() => _dragRate = value),
+                        onChangeEnd: (value) {
+                          ref
+                              .read(voiceSettingsProvider.notifier)
+                              .setRate(value);
+                          setState(() => _dragRate = null);
+                        },
+                      ),
+                    ),
+                    Text(
+                      l10n.voiceRateFast,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                  Space.lg,
+                  Space.xs,
+                  Space.lg,
+                  Space.md,
+                ),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: FilledButton.tonalIcon(
+                    // Disabled while speaking: a second tap does not "hurry it up",
+                    // it queues another full synthesis.
+                    onPressed: _testing ? null : _testVoice,
+                    icon: _testing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.play_arrow),
+                    label: Text(l10n.voiceTestButton),
                   ),
                 ),
-                Text(l10n.voiceRateFast, style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.tonalIcon(
-                // Disabled while speaking: a second tap does not "hurry it up",
-                // it queues another full synthesis.
-                onPressed: _testing ? null : _testVoice,
-                icon: _testing
-                    ? const SizedBox(
-                        width: 18,
-                        height: 18,
-                        child: CircularProgressIndicator(strokeWidth: 2),
-                      )
-                    : const Icon(Icons.play_arrow),
-                label: Text(l10n.voiceTestButton),
               ),
-            ),
+            ],
           ),
-          const Divider(),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+            padding: const EdgeInsets.only(top: Space.lg),
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.translate_outlined,
-                    size: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
-                const SizedBox(width: 8),
+                Icon(
+                  Icons.translate_outlined,
+                  size: 18,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
+                const SizedBox(width: Space.sm),
                 Expanded(
                   child: Text(
                     l10n.voiceLanguageNote,
-                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ],
@@ -194,7 +229,9 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
 
     VoiceTestOutcome outcome;
     try {
-      outcome = await ref.read(textToSpeechGatewayProvider).speakDiagnostic(l10n.voiceSampleText);
+      outcome = await ref
+          .read(textToSpeechGatewayProvider)
+          .speakDiagnostic(l10n.voiceSampleText);
     } catch (e) {
       // The contract says implementations do not throw; if one does, that is
       // still a failure we could not attribute — never a silent success.
@@ -213,35 +250,38 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
 
     final (String message, VoiceTestRecovery recovery) = switch (outcome) {
       VoiceTestSpoke(engine: VoiceTestEngine.neural) => (
-          l10n.voiceTestSpokeNeural,
-          VoiceTestRecovery.none,
-        ),
+        l10n.voiceTestSpokeNeural,
+        VoiceTestRecovery.none,
+      ),
       // The system voice answered. Say so, and say why — the neural download is
       // Wi-Fi-only, so "pending" can last forever without a word.
       VoiceTestSpoke(:final neuralFailure) => (
-          neuralFailure == VoiceTestFailure.voiceMissing
-              ? l10n.voiceTestSpokeSystemVoiceMissing
-              : l10n.voiceTestSpokeSystem,
-          neuralFailure?.recovery ?? VoiceTestRecovery.none,
-        ),
-      VoiceTestFailed(:final failure) => (_failureMessage(failure, l10n), failure.recovery),
+        neuralFailure == VoiceTestFailure.voiceMissing
+            ? l10n.voiceTestSpokeSystemVoiceMissing
+            : l10n.voiceTestSpokeSystem,
+        neuralFailure?.recovery ?? VoiceTestRecovery.none,
+      ),
+      VoiceTestFailed(:final failure) => (
+        _failureMessage(failure, l10n),
+        failure.recovery,
+      ),
     };
 
     final action = switch (recovery) {
       VoiceTestRecovery.downloadVoice => SnackBarAction(
-          label: l10n.voiceDownloadButton,
-          onPressed: () => ref
-              .read(voiceCatalogControllerProvider.notifier)
-              .download(ref.read(selectedVoiceProvider)),
-        ),
+        label: l10n.voiceDownloadButton,
+        onPressed: () => ref
+            .read(voiceCatalogControllerProvider.notifier)
+            .download(ref.read(selectedVoiceProvider)),
+      ),
       VoiceTestRecovery.chooseAnotherVoice => SnackBarAction(
-          label: l10n.voiceCatalogNavTitle,
-          onPressed: () => context.push('/settings/voice/catalog'),
-        ),
+        label: l10n.voiceCatalogNavTitle,
+        onPressed: () => context.push('/settings/voice/catalog'),
+      ),
       VoiceTestRecovery.retry => SnackBarAction(
-          label: l10n.voiceRetryButton,
-          onPressed: _testVoice,
-        ),
+        label: l10n.voiceRetryButton,
+        onPressed: _testVoice,
+      ),
       VoiceTestRecovery.none => null,
     };
 
@@ -252,9 +292,11 @@ class _VoiceSettingsScreenState extends ConsumerState<VoiceSettingsScreen> {
 
   /// One sentence per observed cause. Exhaustive on purpose: a new failure must
   /// be given its own words, not folded into a generic "inténtalo de nuevo".
-  String _failureMessage(VoiceTestFailure failure, AppLocalizations l10n) => switch (failure) {
+  String _failureMessage(VoiceTestFailure failure, AppLocalizations l10n) =>
+      switch (failure) {
         VoiceTestFailure.voiceMissing => l10n.voiceTestFailedVoiceMissing,
-        VoiceTestFailure.voiceIncompatible => l10n.voiceTestFailedVoiceIncompatible,
+        VoiceTestFailure.voiceIncompatible =>
+          l10n.voiceTestFailedVoiceIncompatible,
         VoiceTestFailure.synthesisFailed => l10n.voiceTestFailedSynthesis,
         VoiceTestFailure.emptySynthesis => l10n.voiceTestFailedEmpty,
         VoiceTestFailure.playbackFailed => l10n.voiceTestFailedPlayback,
@@ -276,59 +318,69 @@ class _VoiceStatusCard extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     final scheme = Theme.of(context).colorScheme;
 
-    final (IconData icon, Color color, String title, String detail) = switch (status) {
+    final (
+      IconData icon,
+      Color color,
+      String title,
+      String detail,
+    ) = switch (status) {
       TtsVoiceReady() => (
-          Icons.graphic_eq,
-          scheme.primary,
-          l10n.voiceStatusReady,
-          l10n.voiceStatusReadyDetail,
-        ),
+        Icons.graphic_eq,
+        scheme.primary,
+        l10n.voiceStatusReady,
+        l10n.voiceStatusReadyDetail,
+      ),
       TtsVoiceDownloading(:final progress) => (
-          Icons.downloading_outlined,
-          scheme.primary,
-          l10n.voiceStatusDownloading((progress.clamp(0.0, 1.0) * 100).round()),
-          l10n.voiceStatusReadyDetail,
-        ),
+        Icons.downloading_outlined,
+        scheme.primary,
+        l10n.voiceStatusDownloading((progress.clamp(0.0, 1.0) * 100).round()),
+        l10n.voiceStatusReadyDetail,
+      ),
       TtsVoiceFailed() => (
-          Icons.error_outline,
-          scheme.error,
-          l10n.voiceStatusFailed,
-          l10n.voiceStatusAbsentDetail,
-        ),
+        Icons.error_outline,
+        scheme.error,
+        l10n.voiceStatusFailed,
+        l10n.voiceStatusAbsentDetail,
+      ),
       TtsVoiceAbsent() => (
-          Icons.speaker_notes_outlined,
-          scheme.onSurfaceVariant,
-          l10n.voiceStatusAbsent,
-          l10n.voiceStatusAbsentDetail,
-        ),
+        Icons.speaker_notes_outlined,
+        scheme.onSurfaceVariant,
+        l10n.voiceStatusAbsent,
+        l10n.voiceStatusAbsentDetail,
+      ),
     };
 
     final downloading = status is TtsVoiceDownloading;
     final canDownload = status is TtsVoiceAbsent || status is TtsVoiceFailed;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(Space.lg),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
               Icon(icon, color: color),
-              const SizedBox(width: 12),
+              const SizedBox(width: Space.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(title, style: Theme.of(context).textTheme.titleMedium),
                     const SizedBox(height: 2),
-                    Text(detail, style: Theme.of(context).textTheme.bodySmall),
+                    Text(
+                      detail,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
                   ],
                 ),
               ),
             ],
           ),
           if (downloading) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Space.md),
             LinearProgressIndicator(
               value: switch (status) {
                 TtsVoiceDownloading(:final progress) when progress >= 0 =>
@@ -338,7 +390,7 @@ class _VoiceStatusCard extends ConsumerWidget {
             ),
           ],
           if (canDownload) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Align(
               alignment: Alignment.centerLeft,
               child: FilledButton.tonalIcon(
@@ -347,7 +399,9 @@ class _VoiceStatusCard extends ConsumerWidget {
                     .download(ref.read(selectedVoiceProvider)),
                 icon: const Icon(Icons.download_outlined),
                 label: Text(
-                  status is TtsVoiceFailed ? l10n.voiceRetryButton : l10n.voiceDownloadButton,
+                  status is TtsVoiceFailed
+                      ? l10n.voiceRetryButton
+                      : l10n.voiceDownloadButton,
                 ),
               ),
             ),

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../domain/voice_catalog.dart';
 import 'voice_catalog_providers.dart';
@@ -50,33 +52,42 @@ class VoiceCatalogScreen extends ConsumerWidget {
       }
       final expanded = group.contains(selectedVoice);
       children.add(
-        ExpansionTile(
-          // Re-key on whether this section should be open so a pick in another
-          // region auto-expands that region (and folds the old one).
-          key: ValueKey('${group.languageTag}:$expanded'),
-          initiallyExpanded: expanded,
-          shape: const Border(),
-          collapsedShape: const Border(),
-          title: Text(_regionLabel(l10n, group.languageTag)),
-          childrenPadding: const EdgeInsets.only(bottom: 8),
+        GroupedList(
           children: [
-            for (final voice in group.voices)
-              _VoiceRow(
-                voice: voice,
-                status: statuses[voice.id] ?? const TtsVoiceAbsent(),
-                selected: voice.id == selectedVoice,
-              ),
+            ExpansionTile(
+              // Re-key on whether this section should be open so a pick in another
+              // region auto-expands that region (and folds the old one).
+              key: ValueKey('${group.languageTag}:$expanded'),
+              initiallyExpanded: expanded,
+              shape: const Border(),
+              collapsedShape: const Border(),
+              title: Text(_regionLabel(l10n, group.languageTag)),
+              childrenPadding: const EdgeInsets.only(bottom: Space.sm),
+              children: [
+                for (final (index, voice) in group.voices.indexed) ...[
+                  if (index > 0)
+                    const Divider(
+                      height: Space.md,
+                      indent: Space.lg,
+                      endIndent: Space.lg,
+                    ),
+                  _VoiceRow(
+                    voice: voice,
+                    status: statuses[voice.id] ?? const TtsVoiceAbsent(),
+                    selected: voice.id == selectedVoice,
+                  ),
+                ],
+              ],
+            ),
           ],
         ),
       );
+      children.add(const SizedBox(height: Space.md));
     }
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.voiceCatalogTitle)),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: children,
-      ),
+      body: PageBody(children: children),
     );
   }
 
@@ -91,7 +102,7 @@ class VoiceCatalogScreen extends ConsumerWidget {
       };
 }
 
-/// The non-collapsible language super-header shown above each language's region
+/// The non-collapsible language header shown above each language's region
 /// sections (Español, then Inglés).
 class _LanguageHeader extends StatelessWidget {
   const _LanguageHeader({required this.languageCode});
@@ -101,17 +112,10 @@ class _LanguageHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final label =
-        languageCode == 'en' ? l10n.voiceCatalogGroupEnglish : l10n.voiceCatalogGroupSpanish;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-            ),
-      ),
-    );
+    final label = languageCode == 'en'
+        ? l10n.voiceCatalogGroupEnglish
+        : l10n.voiceCatalogGroupSpanish;
+    return SectionHeader(label);
   }
 }
 
@@ -119,7 +123,11 @@ class _LanguageHeader extends StatelessWidget {
 /// action (or the "Selected" badge), a progress bar while downloading, and —
 /// once downloaded — a delete action.
 class _VoiceRow extends ConsumerWidget {
-  const _VoiceRow({required this.voice, required this.status, required this.selected});
+  const _VoiceRow({
+    required this.voice,
+    required this.status,
+    required this.selected,
+  });
 
   final VoiceDescriptor voice;
   final TtsVoiceStatus status;
@@ -132,7 +140,12 @@ class _VoiceRow extends ConsumerWidget {
     final downloading = status is TtsVoiceDownloading;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      padding: const EdgeInsets.fromLTRB(
+        Space.lg,
+        Space.xs,
+        Space.lg,
+        Space.xs,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -142,18 +155,23 @@ class _VoiceRow extends ConsumerWidget {
                 selected ? Icons.check_circle : Icons.circle_outlined,
                 color: selected ? scheme.primary : scheme.onSurfaceVariant,
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: Space.md),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(voice.displayName, style: Theme.of(context).textTheme.titleMedium),
+                    Text(
+                      voice.displayName,
+                      style: Theme.of(context).textTheme.titleMedium,
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       _statusLabel(l10n),
                       style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: status is TtsVoiceFailed ? scheme.error : scheme.onSurfaceVariant,
-                          ),
+                        color: status is TtsVoiceFailed
+                            ? scheme.error
+                            : scheme.onSurfaceVariant,
+                      ),
                     ),
                   ],
                 ),
@@ -170,16 +188,17 @@ class _VoiceRow extends ConsumerWidget {
                 onPressed: downloading
                     ? null
                     : () => ref
-                        .read(voiceCatalogControllerProvider.notifier)
-                        .preview(voice.id, _sampleText(l10n)),
+                          .read(voiceCatalogControllerProvider.notifier)
+                          .preview(voice.id, _sampleText(l10n)),
               ),
             ],
           ),
           if (downloading) ...[
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             LinearProgressIndicator(
               value: switch (status) {
-                TtsVoiceDownloading(:final progress) when progress >= 0 => progress.clamp(0.0, 1.0),
+                TtsVoiceDownloading(:final progress) when progress >= 0 =>
+                  progress.clamp(0.0, 1.0),
                 _ => null,
               },
             ),
@@ -233,14 +252,17 @@ class _VoiceRow extends ConsumerWidget {
       return Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(Icons.check, size: 16, color: Theme.of(context).colorScheme.primary),
-          const SizedBox(width: 6),
+          Icon(
+            Icons.check,
+            size: 16,
+            color: Theme.of(context).colorScheme.primary,
+          ),
+          const SizedBox(width: Space.xs),
           Text(
             l10n.voiceCatalogSelectedBadge,
-            style: Theme.of(context)
-                .textTheme
-                .labelLarge
-                ?.copyWith(color: Theme.of(context).colorScheme.primary),
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: Theme.of(context).colorScheme.primary,
+            ),
           ),
         ],
       );
@@ -255,21 +277,27 @@ class _VoiceRow extends ConsumerWidget {
       onPressed: downloading
           ? null
           : () => ref.read(selectedVoiceProvider.notifier).select(voice.id),
-      icon: Icon(status is TtsVoiceReady ? Icons.record_voice_over_outlined : Icons.download_outlined),
+      icon: Icon(
+        status is TtsVoiceReady
+            ? Icons.record_voice_over_outlined
+            : Icons.download_outlined,
+      ),
       label: Text(label),
     );
   }
 
   String _statusLabel(AppLocalizations l10n) => switch (status) {
-        TtsVoiceReady() => l10n.voiceCatalogStatusInstalled,
-        TtsVoiceDownloading(:final progress) =>
-          l10n.voiceCatalogStatusDownloading((progress.clamp(0.0, 1.0) * 100).round()),
-        TtsVoiceFailed() => l10n.voiceCatalogStatusFailed,
-        TtsVoiceAbsent() => l10n.voiceCatalogStatusAbsent,
-      };
+    TtsVoiceReady() => l10n.voiceCatalogStatusInstalled,
+    TtsVoiceDownloading(:final progress) => l10n.voiceCatalogStatusDownloading(
+      (progress.clamp(0.0, 1.0) * 100).round(),
+    ),
+    TtsVoiceFailed() => l10n.voiceCatalogStatusFailed,
+    TtsVoiceAbsent() => l10n.voiceCatalogStatusAbsent,
+  };
 
   /// The preview sentence in the voice's own language (Spanish for es_*,
   /// English for en_*).
-  String _sampleText(AppLocalizations l10n) =>
-      voice.languageCode == 'en' ? l10n.voiceCatalogSampleEn : l10n.voiceCatalogSampleEs;
+  String _sampleText(AppLocalizations l10n) => voice.languageCode == 'en'
+      ? l10n.voiceCatalogSampleEn
+      : l10n.voiceCatalogSampleEs;
 }

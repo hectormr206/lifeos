@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/platform/platform_providers.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/app_permission.dart';
 import 'permission_request_helper.dart';
 import 'permissions_onboarding_screen.dart';
@@ -66,26 +68,30 @@ class _PermissionsScreenState extends ConsumerState<PermissionsScreen>
 
   @override
   Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Permisos')),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+      body: PageBody(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 12),
+            padding: const EdgeInsets.only(top: Space.sm, bottom: Space.lg),
             child: Text(
               'Estos son los permisos que LifeOS puede usar. Toca uno para '
               'cambiarlo.',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
+              style: theme.textTheme.bodyMedium?.copyWith(
+                color: theme.colorScheme.onSurfaceVariant,
+              ),
             ),
           ),
-          for (final permission in _permissions)
-            _PermissionTile(
-              permission: permission,
-              onTap: () => _onTap(permission),
-            ),
+          GroupedList(
+            children: [
+              for (final permission in _permissions)
+                _PermissionTile(
+                  permission: permission,
+                  onTap: () => _onTap(permission),
+                ),
+            ],
+          ),
         ],
       ),
     );
@@ -102,10 +108,11 @@ class _PermissionTile extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final async = ref.watch(permissionStatusProvider(permission));
     final state = async.asData?.value;
-    return ListTile(
-      leading: Icon(iconForPermission(permission)),
-      title: Text(permission.title),
-      subtitle: Text(permission.rationale),
+    return GroupedRow(
+      icon: iconForPermission(permission),
+      title: permission.title,
+      subtitle: permission.rationale,
+      subtitleMaxLines: null,
       trailing: state == null
           ? const SizedBox(
               width: 16,
@@ -128,9 +135,15 @@ class _StatusChip extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     final (color, icon) = switch (state) {
       PermissionState.granted => (scheme.primary, Icons.check_circle_outline),
-      PermissionState.denied => (scheme.onSurfaceVariant, Icons.remove_circle_outline),
+      PermissionState.denied => (
+        scheme.onSurfaceVariant,
+        Icons.remove_circle_outline,
+      ),
       PermissionState.permanentlyDenied => (scheme.error, Icons.block_outlined),
-      PermissionState.unsupported => (scheme.onSurfaceVariant, Icons.help_outline),
+      PermissionState.unsupported => (
+        scheme.onSurfaceVariant,
+        Icons.help_outline,
+      ),
     };
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -139,7 +152,9 @@ class _StatusChip extends StatelessWidget {
         const SizedBox(width: 6),
         Text(
           permissionStateLabel(state),
-          style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color),
+          style: Theme.of(
+            context,
+          ).textTheme.labelMedium?.copyWith(color: color),
         ),
       ],
     );

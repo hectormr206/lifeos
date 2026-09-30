@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../stt/domain/stt_model.dart';
 import '../../stt/presentation/stt_providers.dart';
 import 'dictation_providers.dart';
@@ -20,7 +23,8 @@ class DictationSetupScreen extends ConsumerStatefulWidget {
   const DictationSetupScreen({super.key});
 
   @override
-  ConsumerState<DictationSetupScreen> createState() => _DictationSetupScreenState();
+  ConsumerState<DictationSetupScreen> createState() =>
+      _DictationSetupScreenState();
 }
 
 class _DictationSetupScreenState extends ConsumerState<DictationSetupScreen>
@@ -52,43 +56,53 @@ class _DictationSetupScreenState extends ConsumerState<DictationSetupScreen>
     final enabled = imeStatus.asData?.value.enabled ?? false;
     final selected = imeStatus.asData?.value.selected ?? false;
 
+    final theme = Theme.of(context);
+    final noteStyle = theme.textTheme.bodyMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
+
     return Scaffold(
       appBar: AppBar(title: const Text('Teclado Axi')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: PageBody(
         children: [
-          const Text(
+          Text(
             'Dicta en cualquier app con la voz. El teclado Axi transcribe '
             'EN TU TELÉFONO con el modelo de voz local: el audio y el texto '
             'nunca salen del dispositivo.',
+            style: noteStyle,
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.xl),
           _StepCard(
             done: enabled,
             title: '1. Activa el teclado Axi',
-            subtitle: 'Enciende «Axi · Dictado LifeOS» en los ajustes del sistema.',
+            subtitle:
+                'Enciende «Axi · Dictado LifeOS» en los ajustes del sistema.',
             buttonLabel: 'Abrir ajustes de teclado',
-            onPressed: () => ref.read(dictationChannelProvider).openImeSettings(),
+            onPressed: () =>
+                ref.read(dictationChannelProvider).openImeSettings(),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: Space.md),
           _StepCard(
             done: selected,
             title: '2. Cambia al teclado Axi',
-            subtitle: 'Elige «Axi» en el selector de teclados. Puedes volver a tu '
+            subtitle:
+                'Elige «Axi» en el selector de teclados. Puedes volver a tu '
                 'teclado normal con el botón 🌐 del propio teclado Axi.',
             buttonLabel: 'Elegir teclado',
             onPressed: enabled
                 ? () => ref.read(dictationChannelProvider).showImePicker()
                 : null,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: Space.md),
           _ModelCard(status: modelStatus),
-          const SizedBox(height: 16),
-          const Text(
+          const SizedBox(height: Space.xl),
+          Text(
             'Cómo se usa: en cualquier campo de texto, toca el micrófono para '
             'empezar a dictar y tócalo de nuevo para terminar. En dictados '
             'largos el texto va apareciendo por frases mientras hablas.',
-            style: TextStyle(fontSize: 13),
+            style: theme.textTheme.bodySmall?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ],
       ),
@@ -114,31 +128,41 @@ class _StepCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  done ? Icons.check_circle : Icons.radio_button_unchecked,
-                  color: done ? Colors.teal : null,
+    final theme = Theme.of(context);
+    return GroupedList(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(Space.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    done ? Icons.check_circle : Icons.radio_button_unchecked,
+                    color: done
+                        ? LifeOSPalette.of(context).success
+                        : theme.colorScheme.outline,
+                  ),
+                  const SizedBox(width: Space.sm),
+                  Expanded(
+                    child: Text(title, style: theme.textTheme.titleMedium),
+                  ),
+                ],
+              ),
+              const SizedBox(height: Space.sm),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(subtitle),
-            const SizedBox(height: 12),
-            FilledButton(onPressed: onPressed, child: Text(buttonLabel)),
-          ],
+              ),
+              const SizedBox(height: Space.md),
+              FilledButton(onPressed: onPressed, child: Text(buttonLabel)),
+            ],
+          ),
         ),
-      ),
+      ],
     );
   }
 }
@@ -152,43 +176,55 @@ class _ModelCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final scheme = Theme.of(context).colorScheme;
     final (icon, color, text) = switch (status) {
-      SttModelReady() => (Icons.check_circle, Colors.teal, 'Modelo de voz listo'),
-      SttModelDownloading(:final progress) => (
-          Icons.downloading,
-          null,
-          'Descargando modelo de voz… ${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
-        ),
-      SttModelFailed() => (Icons.error_outline, Colors.redAccent, 'La descarga falló'),
-      SttModelAbsent() => (
-          Icons.mic_off,
-          null,
-          'Modelo de voz no descargado (el teclado lo necesita)',
-        ),
-    };
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(icon, color: color),
-                const SizedBox(width: 8),
-                Expanded(child: Text(text)),
-              ],
-            ),
-            if (status is SttModelAbsent || status is SttModelFailed) ...[
-              const SizedBox(height: 12),
-              FilledButton(
-                onPressed: () => ref.read(sttModelDownloadProvider.notifier).download(),
-                child: const Text('Descargar modelo de voz'),
-              ),
-            ],
-          ],
-        ),
+      SttModelReady() => (
+        Icons.check_circle,
+        LifeOSPalette.of(context).success,
+        'Modelo de voz listo',
       ),
+      SttModelDownloading(:final progress) => (
+        Icons.downloading,
+        scheme.onSurfaceVariant,
+        'Descargando modelo de voz… ${(progress * 100).clamp(0, 100).toStringAsFixed(0)}%',
+      ),
+      SttModelFailed() => (
+        Icons.error_outline,
+        scheme.error,
+        'La descarga falló',
+      ),
+      SttModelAbsent() => (
+        Icons.mic_off,
+        scheme.onSurfaceVariant,
+        'Modelo de voz no descargado (el teclado lo necesita)',
+      ),
+    };
+    return GroupedList(
+      children: [
+        Padding(
+          padding: const EdgeInsets.all(Space.lg),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(icon, color: color),
+                  const SizedBox(width: Space.sm),
+                  Expanded(child: Text(text)),
+                ],
+              ),
+              if (status is SttModelAbsent || status is SttModelFailed) ...[
+                const SizedBox(height: Space.md),
+                FilledButton(
+                  onPressed: () =>
+                      ref.read(sttModelDownloadProvider.notifier).download(),
+                  child: const Text('Descargar modelo de voz'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
