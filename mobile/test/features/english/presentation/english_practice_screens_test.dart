@@ -6,6 +6,7 @@ import 'package:lifeos/features/english/data/activity_log.dart';
 import 'package:lifeos/features/english/data/practice_service.dart';
 import 'package:lifeos/features/english/domain/daily_plan.dart';
 import 'package:lifeos/features/english/domain/english_goal.dart';
+import 'package:lifeos/features/english/domain/practice.dart';
 import 'package:lifeos/features/english/presentation/english_practice_screen.dart';
 import 'package:lifeos/features/english/presentation/english_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
@@ -82,6 +83,23 @@ void main() {
     expect(find.text('Propuesta para un cliente'), findsOneWidget);
     expect(find.text('En un restaurante'), findsNothing);
     expect(find.text('Correo a la escuela'), findsNothing);
+  });
+
+  testWidgets('conversation and writing descriptions have no line limit',
+      (tester) async {
+    await tester.pumpWidget(_app(goal: EnglishGoal.work));
+    await tester.pumpAndSettle();
+
+    for (final description in [
+      for (final scenario in roleplaysFor(EnglishGoal.work)) scenario.task,
+      for (final task in writingTasksFor(EnglishGoal.work)) task.prompt,
+    ]) {
+      final subtitle = find.text(description);
+      await tester.scrollUntilVisible(subtitle, 100);
+      final text = tester.widget<Text>(subtitle);
+      expect(text.maxLines, isNull);
+      expect(text.overflow, isNot(TextOverflow.ellipsis));
+    }
   });
 
   testWidgets('writing: the task is in English, and a review shows the fix',

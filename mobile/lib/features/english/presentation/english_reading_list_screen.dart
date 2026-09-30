@@ -148,6 +148,7 @@ class _ReadingTile extends StatelessWidget {
         l10n.englishFitLine(fit, (report.coverage * 100).round()),
         l10n.englishReadNewWords(report.unknownLemmas.length),
       ].join('\n'),
+      subtitleMaxLines: 3,
       onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
         builder: (_) => EnglishReaderScreen(reading: reading),
       )),

@@ -41,11 +41,11 @@ final _placement = PlacementRecord(
   ),
 );
 
-PickedReading _reading(String title, String text) => PickedReading(
+PickedReading _reading(String title, String text, {String section = ''}) => PickedReading(
       article: ReadingArticle(
           site: 'simple.wikipedia.org', title: title, license: 'CC BY-SA'),
       ranked: RankedPassage(
-        passage: Passage(text: text, section: ''),
+        passage: Passage(text: text, section: section),
         report: measureCoverage(text, _index, knownByBand: const [1.0, 0.0]),
       ),
     );
@@ -156,6 +156,27 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.textContaining('Toca cualquier palabra'), findsOneWidget);
+  });
+
+  testWidgets('section, fit and new words remain visible on three lines',
+      (tester) async {
+    await tester.pumpWidget(_app(
+      placement: _placement,
+      goal: EnglishGoal.everyday,
+      list: () async => [
+        _reading('Dog', 'Dogs sniffed the ground.', section: 'Dogs and humans'),
+      ],
+    ));
+    await tester.pumpAndSettle();
+
+    final l10n = AppLocalizations.of(tester.element(find.text('Dog')));
+    final subtitle = find.text([
+      'Dogs and humans',
+      l10n.englishFitLine(l10n.englishFitHard, 75),
+      l10n.englishReadNewWords(1),
+    ].join('\n'));
+    expect(subtitle, findsOneWidget);
+    expect(tester.widget<Text>(subtitle).maxLines, greaterThanOrEqualTo(3));
   });
 
   testWidgets('nothing found is said, with a way to try again',

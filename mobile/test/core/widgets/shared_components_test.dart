@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/core/widgets/widgets.dart';
 import 'package:lifeos/theme/lifeos_palette.dart';
@@ -77,6 +78,26 @@ void main() {
     expect(find.byIcon(Icons.chevron_right), findsOneWidget);
     await tester.tap(find.text('Axi'));
     expect(taps, 1);
+  });
+
+  testWidgets('GroupedRow defaults to a two-line subtitle', (tester) async {
+    const subtitle = 'First\nSecond\nThird\nFourth';
+    await show(tester, const GroupedRow(title: 'Default', subtitle: subtitle));
+    final text = tester.widget<Text>(find.text(subtitle));
+    expect(text.maxLines, 2);
+    expect(text.overflow, TextOverflow.ellipsis);
+  });
+
+  testWidgets('GroupedRow can show all four subtitle lines', (tester) async {
+    const subtitle = 'First\nSecond\nThird\nFourth';
+    await show(tester, const GroupedRow(
+      title: 'Unlimited', subtitle: subtitle, subtitleMaxLines: null,
+    ));
+    final text = tester.widget<Text>(find.text(subtitle));
+    expect(text.maxLines, isNull);
+    expect(text.overflow, isNot(TextOverflow.ellipsis));
+    final paragraph = tester.renderObject<RenderParagraph>(find.text(subtitle));
+    expect(paragraph.didExceedMaxLines, isFalse);
   });
 
   testWidgets('GroupedRow chevron only appears for actions without trailing', (tester) async {

@@ -12,6 +12,7 @@ class GroupedRow extends StatelessWidget {
     super.key,
     required this.title,
     this.subtitle,
+    this.subtitleMaxLines = 2,
     this.icon,
     this.tone = RowTone.neutral,
     this.trailing,
@@ -22,6 +23,9 @@ class GroupedRow extends StatelessWidget {
 
   final String title;
   final String? subtitle;
+
+  /// Maximum subtitle lines; null keeps the full subtitle without ellipsis.
+  final int? subtitleMaxLines;
   final IconData? icon;
   final RowTone tone;
   final Widget? trailing;
@@ -66,8 +70,8 @@ class GroupedRow extends StatelessWidget {
           ? null
           : Text(
               subtitle!,
-              maxLines: 2,
-              overflow: TextOverflow.ellipsis,
+              maxLines: subtitleMaxLines,
+              overflow: subtitleMaxLines == null ? TextOverflow.visible : TextOverflow.ellipsis,
               style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
       trailing: trailing ??

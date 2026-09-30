@@ -52,6 +52,7 @@ class EnglishPracticeScreen extends ConsumerWidget {
               GroupedRow(
                 title: scenario.title,
                 subtitle: scenario.task,
+                subtitleMaxLines: null,
                 onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                   builder: (_) => EnglishRoleplayScreen(scenario: scenario),
                 )),
@@ -63,6 +64,7 @@ class EnglishPracticeScreen extends ConsumerWidget {
               GroupedRow(
                 title: task.title,
                 subtitle: task.prompt,
+                subtitleMaxLines: null,
                 onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
                   builder: (_) => EnglishWritingScreen(task: task),
                 )),
