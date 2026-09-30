@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../connectivity/connectivity_status.dart';
+import 'status_banner.dart';
 
 /// Reusable "offline / showing cached data" banner (M3 slice 1). Renders
 /// nothing unless [connectivityStatusProvider] is
@@ -21,23 +22,10 @@ class OfflineBanner extends ConsumerWidget {
     final lastSyncAt = status.lastSyncAt;
     final suffix = lastSyncAt != null ? ' (actualizado ${formatRelativeTime(lastSyncAt)})' : '';
 
-    return Material(
-      color: Colors.amber.shade100,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            const Icon(Icons.cloud_off, size: 18, color: Colors.black54),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                'Sin conexión: mostrando datos guardados$suffix',
-                style: const TextStyle(color: Colors.black87, fontSize: 13),
-              ),
-            ),
-          ],
-        ),
-      ),
+    return StatusBanner(
+      tone: BannerTone.warning,
+      icon: Icons.cloud_off,
+      message: Text('Sin conexión: mostrando datos guardados$suffix'),
     );
   }
 }

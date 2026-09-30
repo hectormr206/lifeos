@@ -63,6 +63,22 @@ In feature widgets, avoid hardcoded `Colors.*`: use the color scheme or palette.
 Use sentence-case section headers, no tracked uppercase eyebrow labels. Group
 related rows rather than stacking identical cards or outlined buttons.
 
+## Components
+
+Import `package:lifeos/core/widgets/widgets.dart` for shared page elements:
+
+| Widget | When to use | Example |
+| --- | --- | --- |
+| `PageBody` | Readable, centered page content with optional scrolling | `PageBody(children: [const Text('Today')])` |
+| `ScrollableCenter` | Center a short loading/empty state inside a pull-to-refresh area | `ScrollableCenter(child: CircularProgressIndicator())` |
+| `SectionHeader` | Sentence-case label for a group | `SectionHeader('Your records')` |
+| `GroupedList` | Inset collection of related rows | `GroupedList(children: [GroupedRow(title: 'Health')])` |
+| `GroupedRow` | A settings/navigation row with optional icon tone and action | `GroupedRow(title: 'Talk to Axi', tone: RowTone.axi, icon: Icons.chat, onTap: openChat)` |
+| `EmptyState` | Explain a blank collection and suggest a next step | `EmptyState(icon: Icons.inbox, title: 'Nothing yet')` |
+| `StatusBanner` | Semantic inline info, warning, success or error notice | `StatusBanner(tone: BannerTone.info, icon: Icons.info, message: Text('Saved'))` |
+| `OfflineBanner` | Show the cached-data notice only while offline with cache | `OfflineBanner()` |
+| `PendingSyncBanner` | Show a queued-mutation count only when nonzero | `PendingSyncBanner()` |
+
 ## Golden updates
 
 On a machine with Flutter, sync the mobile package to a dedicated devbox
