@@ -10,7 +10,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
 import 'package:lifeos/features/embedding/embedding_providers.dart';
+import 'package:lifeos/features/local_model/presentation/english_models_manager.dart';
 import 'package:lifeos/features/local_model/domain/local_llm_engine.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_providers.dart';
 import 'package:lifeos/features/local_model/presentation/local_model_screen.dart';
@@ -19,6 +21,7 @@ import 'package:lifeos/features/stt/presentation/stt_providers.dart';
 import 'package:lifeos/features/tts/presentation/tts_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
+import 'package:lifeos/theme/lifeos_palette.dart';
 
 import '../../embedding/embed_model_warmup_test.dart' show FakeEmbedModelGateway;
 import '../../stt/support/fake_stt.dart';
@@ -100,6 +103,40 @@ void main() {
   testWidgets('renders the unified required-models manager', (tester) async {
     await _pump(tester, installed: false);
     expect(find.byType(RequiredModelsManager), findsOneWidget);
+  });
+
+  testWidgets('model rows sit inside grouped lists and use the success colour',
+      (tester) async {
+    await _pump(tester, installed: true);
+
+    expect(
+      find.descendant(
+        of: find.byType(RequiredModelsManager),
+        matching: find.byType(GroupedList),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(EnglishModelsManager),
+        matching: find.byType(GroupedList),
+      ),
+      findsOneWidget,
+    );
+    expect(
+      find.descendant(
+        of: find.byType(GroupedList),
+        matching: find.text('Instalado'),
+      ),
+      findsWidgets,
+    );
+    final icon = tester.widget<Icon>(find
+        .descendant(
+          of: find.byType(RequiredModelsManager),
+          matching: find.byIcon(Icons.check_circle),
+        )
+        .first);
+    expect(icon.color, LifeOSPalette.light.success);
   });
 
   testWidgets('no longer shows the removed legacy single-brain controls', (tester) async {

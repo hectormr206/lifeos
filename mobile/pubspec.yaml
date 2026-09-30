@@ -31,7 +31,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 #
 # Criterio: sube el MINOR (0.10 -> 0.11) en cada tanda con funciones nuevas o
 # cambios visibles; el PATCH para correcciones sueltas.
-version: 0.21.0+1032
+version: 0.22.1+1052
 
 environment:
   sdk: ^3.12.2
@@ -364,6 +364,29 @@ flutter:
 
   # For details regarding adding assets from package dependencies, see
   # https://flutter.dev/to/asset-from-package
+
+  fonts:
+    - family: BricolageGrotesque
+      fonts:
+        - asset: assets/fonts/BricolageGrotesque-600.ttf
+          weight: 600
+        - asset: assets/fonts/BricolageGrotesque-700.ttf
+          weight: 700
+        - asset: assets/fonts/BricolageGrotesque-800.ttf
+          weight: 800
+    - family: AtkinsonHyperlegibleNext
+      fonts:
+        - asset: assets/fonts/AtkinsonHyperlegibleNext-400.ttf
+          weight: 400
+        - asset: assets/fonts/AtkinsonHyperlegibleNext-500.ttf
+          weight: 500
+        - asset: assets/fonts/AtkinsonHyperlegibleNext-600.ttf
+          weight: 600
+        - asset: assets/fonts/AtkinsonHyperlegibleNext-700.ttf
+          weight: 700
+        - asset: assets/fonts/AtkinsonHyperlegibleNext-400Italic.ttf
+          weight: 400
+          style: italic
 
   # To add custom fonts to your application, add a fonts section here,
   # in this "flutter" section. Each entry in this list should have a

@@ -17,6 +17,8 @@ import 'package:lifeos/features/domains/domain/domain_descriptor.dart';
 import 'package:lifeos/features/domains/domain/local_entry_config.dart';
 import 'package:lifeos/features/domains/presentation/local_domain_tab.dart';
 import 'package:lifeos/features/memory/data/memory_writer.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 
 /// In-memory [LocalGraphStore] covering exactly what the local domain
 /// repository (+ its MemoryWriter) touches. IN-MEMORY, not the ffi backend
@@ -152,6 +154,18 @@ void main() {
   }
 
   LocalEntryType type(String domain, String t) => localEntryTypeFor(domain, t)!;
+
+  testWidgets('domain records and filters stay within the desktop content column', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(1280, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await repository.create('health', type('health', 'blood_pressure'),
+        {'systolic': 120, 'diastolic': 80, 'ts': DateTime.now()});
+    await tester.pumpWidget(host('health'));
+    await tester.pumpAndSettle();
+    expect(find.ancestor(of: find.text('Presión 120/80'), matching: find.byType(GroupedList)), findsOneWidget);
+    expect(tester.getSize(find.byType(TextField)).width, lessThanOrEqualTo(kContentMaxWidth - 2 * kPageGutter));
+    expect(tester.takeException(), isNull);
+  });
 
   testWidgets('lists local entries with day grouping, chips and period selector', (tester) async {
     await repository.create('health', type('health', 'blood_pressure'),

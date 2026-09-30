@@ -20,6 +20,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../dictation/domain/dictation_status.dart';
 import '../../dictation/presentation/dictate_controller.dart';
@@ -159,108 +162,107 @@ class _ConfessionScreenState extends ConsumerState<ConfessionScreen> {
           TextSelection.collapsed(offset: _controller.text.length);
     });
 
+    final scheme = Theme.of(context).colorScheme;
+    final palette = LifeOSPalette.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Desahogo')),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // What this is FOR, before anything is typed. It leads with the
-              // one thing it offers — someone listening — and keeps the single
-              // promise a person needs before they start: where the words go.
-              Card(
-                margin: EdgeInsets.zero,
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Alguien que te escucha', style: text.titleMedium),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Dilo con todas sus palabras: eso que traes cargando y '
-                        'que no le has contado a nadie. Escríbelo o cuéntalo '
-                        'en voz alta, todo el tiempo que necesites. Axi te va '
-                        'a escuchar y a responder, y después lo sueltas.',
-                        style: text.bodyMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Nada de esto se guarda: ni en este dispositivo, ni en '
-                        'los otros, ni en el servidor. No entra en tu memoria '
-                        'de LifeOS ni aparece en el Cerebro. Cuando lo sueltes, '
-                        'desaparece.',
-                        style: text.bodySmall
-                            ?.copyWith(color: Theme.of(context).hintColor),
-                      ),
-                    ],
+        child: PageBody(
+          padding: const EdgeInsets.fromLTRB(
+              kPageGutter, Space.md, kPageGutter, Space.xl),
+          children: [
+            // What this is FOR, before anything is typed. It leads with the
+            // one thing it offers — someone listening — and keeps the single
+            // promise a person needs before they start: where the words go.
+            StatusBanner(
+              tone: BannerTone.info,
+              icon: Icons.lock_outline,
+              margin: EdgeInsets.zero,
+              message: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Alguien que te escucha',
+                    style: text.titleMedium
+                        ?.copyWith(color: palette.onInfoContainer),
                   ),
-                ),
+                  const SizedBox(height: Space.sm),
+                  const Text(
+                    'Dilo con todas sus palabras: eso que traes cargando y '
+                    'que no le has contado a nadie. Escríbelo o cuéntalo '
+                    'en voz alta, todo el tiempo que necesites. Axi te va '
+                    'a escuchar y a responder, y después lo sueltas.',
+                  ),
+                  const SizedBox(height: Space.sm),
+                  Text(
+                    'Nada de esto se guarda: ni en este dispositivo, ni en '
+                    'los otros, ni en el servidor. No entra en tu memoria '
+                    'de LifeOS ni aparece en el Cerebro. Cuando lo sueltes, '
+                    'desaparece.',
+                    style: text.bodySmall
+                        ?.copyWith(color: palette.onInfoContainer),
+                  ),
+                ],
               ),
-              const SizedBox(height: 16),
-              AnimatedOpacity(
-                opacity: _opacity,
-                duration: const Duration(milliseconds: 900),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _controller,
-                      minLines: 5,
-                      maxLines: 12,
-                      decoration: const InputDecoration(
-                        hintText: 'Aquí, con tus palabras…',
-                        border: OutlineInputBorder(),
+            ),
+            const SizedBox(height: Space.lg),
+            AnimatedOpacity(
+              opacity: _opacity,
+              duration: const Duration(milliseconds: 900),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: _controller,
+                    minLines: 5,
+                    maxLines: 12,
+                    decoration: const InputDecoration(
+                      hintText: 'Aquí, con tus palabras…',
+                    ),
+                  ),
+                  if (_reply != null) ...[
+                    const SizedBox(height: Space.lg),
+                    Card(
+                      color: scheme.surfaceContainerHighest,
+                      margin: EdgeInsets.zero,
+                      child: Padding(
+                        padding: const EdgeInsets.all(Space.lg),
+                        child: Text(_reply!, style: text.bodyLarge),
                       ),
                     ),
-                    if (_reply != null) ...[
-                      const SizedBox(height: 16),
-                      Card(
-                        color: Theme.of(context)
-                            .colorScheme
-                            .surfaceContainerHighest,
-                        margin: EdgeInsets.zero,
-                        child: Padding(
-                          padding: const EdgeInsets.all(16),
-                          child: Text(_reply!, style: text.bodyLarge),
-                        ),
-                      ),
-                    ],
                   ],
-                ),
+                ],
               ),
-              const SizedBox(height: 16),
-              if (_thinking)
-                const Center(child: CircularProgressIndicator())
-              else if (_reply == null) ...[
-                _MicRow(status: dictation, onTap: () => _toggleMic(dictation)),
-                const SizedBox(height: 12),
-                FilledButton.icon(
-                  icon: const Icon(Icons.hearing),
-                  label: const Text('Decirlo'),
-                  onPressed: _say,
-                ),
-              ] else
-                Column(
-                  children: [
-                    Text(
-                      confessionClosing(languageCode: language),
-                      textAlign: TextAlign.center,
-                      style: text.bodySmall
-                          ?.copyWith(color: Theme.of(context).hintColor),
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton.icon(
-                      icon: const Icon(Icons.auto_awesome),
-                      label: const Text('Soltarlo'),
-                      onPressed: _release,
-                    ),
-                  ],
-                ),
-            ],
-          ),
+            ),
+            const SizedBox(height: Space.lg),
+            if (_thinking)
+              const Center(child: CircularProgressIndicator())
+            else if (_reply == null) ...[
+              _MicRow(status: dictation, onTap: () => _toggleMic(dictation)),
+              const SizedBox(height: Space.md),
+              FilledButton.icon(
+                icon: const Icon(Icons.hearing),
+                label: const Text('Decirlo'),
+                onPressed: _say,
+              ),
+            ] else
+              Column(
+                children: [
+                  Text(
+                    confessionClosing(languageCode: language),
+                    textAlign: TextAlign.center,
+                    style: text.bodySmall
+                        ?.copyWith(color: scheme.onSurfaceVariant),
+                  ),
+                  const SizedBox(height: Space.md),
+                  FilledButton.icon(
+                    icon: const Icon(Icons.auto_awesome),
+                    label: const Text('Soltarlo'),
+                    onPressed: _release,
+                  ),
+                ],
+              ),
+          ],
         ),
       ),
     );

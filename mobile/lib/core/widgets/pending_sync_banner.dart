@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../outbox/outbox.dart';
+import 'status_banner.dart';
 
 /// Reusable "N pendientes por sincronizar" indicator (M3 slice 2). Renders
 /// nothing while the outbox is empty; otherwise shows the current queued
@@ -21,20 +22,10 @@ class PendingSyncBanner extends ConsumerWidget {
 
     final label = count == 1 ? '1 pendiente por sincronizar' : '$count pendientes por sincronizar';
 
-    return Material(
-      color: Colors.blueGrey.shade50,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            const Icon(Icons.sync, size: 18, color: Colors.black54),
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(label, style: const TextStyle(color: Colors.black87, fontSize: 13)),
-            ),
-          ],
-        ),
-      ),
+    return StatusBanner(
+      tone: BannerTone.info,
+      icon: Icons.sync,
+      message: Text(label),
     );
   }
 }

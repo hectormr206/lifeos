@@ -43,6 +43,19 @@ Widget _app({
     );
 
 void main() {
+  // The screen is a lazy scrolling list of grouped sections; give tests a tall
+  // viewport so the rate slider and "Probar voz" below the fold are built.
+  setUp(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.physicalSize = const Size(800, 1400);
+    view.devicePixelRatio = 1.0;
+  });
+  tearDown(() {
+    final view = TestWidgetsFlutterBinding.ensureInitialized().platformDispatcher.views.first;
+    view.resetPhysicalSize();
+    view.resetDevicePixelRatio();
+  });
+
   testWidgets('auto-speak switch reflects the shared preference (default ON)', (tester) async {
     final voiceReply = FakeVoiceReplyPreferences(enabled: true);
     await tester.pumpWidget(_app(

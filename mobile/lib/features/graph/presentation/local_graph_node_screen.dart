@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/graph/graph_records.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import 'local_graph_browser_screen.dart' show localGraphKindLabel, localGraphFormatDate;
 import 'local_graph_notifier.dart';
 
@@ -61,16 +63,20 @@ class _DetailBody extends StatelessWidget {
       localGraphFormatDate(node.createdAt),
     ].join(' · ');
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    final theme = Theme.of(context);
+    return PageBody(
       children: [
         Text(
           node.label.isNotEmpty ? node.label : '(sin título)',
-          style: Theme.of(context).textTheme.headlineSmall,
+          style: theme.textTheme.headlineSmall,
         ),
-        const SizedBox(height: 4),
-        Text(meta, style: Theme.of(context).textTheme.bodySmall),
-        const SizedBox(height: 16),
+        const SizedBox(height: Space.xs),
+        Text(
+          meta,
+          style: theme.textTheme.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
+        ),
         _Section(
           title: 'Detalles',
           empty: 'Sin detalles.',
@@ -81,13 +87,10 @@ class _DetailBody extends StatelessWidget {
           empty: 'Sin relaciones.',
           children: [
             for (final rel in detail.relations)
-              ListTile(
-                leading: Icon(
-                  rel.outgoing ? Icons.arrow_forward : Icons.arrow_back,
-                  size: 20,
-                ),
-                title: Text('${rel.relation} · ${rel.otherLabel}'),
-                subtitle: Text(localGraphKindLabel(rel.otherKind)),
+              GroupedRow(
+                icon: rel.outgoing ? Icons.arrow_forward : Icons.arrow_back,
+                title: '${rel.relation} · ${rel.otherLabel}',
+                subtitle: localGraphKindLabel(rel.otherKind),
                 onTap: () => context.push('/settings/graph/${rel.otherUuid}'),
               ),
           ],
@@ -101,10 +104,10 @@ class _DetailBody extends StatelessWidget {
     if (node.data.isEmpty) return const [];
     return [
       for (final entry in node.data.entries)
-        ListTile(
-          dense: true,
-          title: Text(entry.key),
-          subtitle: Text(_stringify(entry.value)),
+        GroupedRow(
+          title: entry.key,
+          subtitle: _stringify(entry.value),
+          subtitleMaxLines: null,
         ),
     ];
   }
@@ -129,15 +132,21 @@ class _Section extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(title, style: Theme.of(context).textTheme.titleMedium),
-          if (children.isEmpty) Text(empty) else ...children,
-        ],
-      ),
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SectionHeader(title),
+        if (children.isEmpty)
+          Text(
+            empty,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
+          )
+        else
+          GroupedList(children: children),
+      ],
     );
   }
 }

@@ -4,6 +4,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../daily_digest/domain/daily_digest.dart';
 import '../../daily_digest/presentation/daily_digest_notifier.dart';
 import '../../domains/domain/domain_descriptor.dart';
@@ -42,10 +45,10 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
       isScrollControlled: true,
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+          left: kPageGutter,
+          right: kPageGutter,
+          top: Space.lg,
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + Space.lg,
         ),
         child: SingleChildScrollView(
           child: Column(
@@ -54,7 +57,7 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
             children: [
               Text('Editar: ${type.label}',
                   style: Theme.of(sheetContext).textTheme.titleMedium),
-              const SizedBox(height: 8),
+              const SizedBox(height: Space.sm),
               DomainEntryForm(
                 spec: type.fields,
                 initialValues: {...entry.data, 'ts': entry.timestamp.toLocal()},
@@ -103,10 +106,10 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
               '${two(dueAt.day)}/${two(dueAt.month)}/${dueAt.year} ${two(dueAt.hour)}:${two(dueAt.minute)}';
           return Padding(
             padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 16,
-              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+              left: kPageGutter,
+              right: kPageGutter,
+              top: Space.lg,
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + Space.lg,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -114,15 +117,14 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
               children: [
                 Text('Editar recordatorio',
                     style: Theme.of(sheetContext).textTheme.titleMedium),
-                const SizedBox(height: 12),
+                const SizedBox(height: Space.md),
                 TextField(
                   controller: controller,
                   decoration: const InputDecoration(
                     labelText: '¿Qué te recuerdo?',
-                    border: OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: Space.md),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.schedule),
@@ -147,7 +149,7 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
                         DateTime(date.year, date.month, date.day, time.hour, time.minute));
                   },
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Space.sm),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -155,7 +157,7 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
                       onPressed: () => Navigator.of(sheetContext).pop(false),
                       child: const Text('Cancelar'),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: Space.sm),
                     FilledButton(
                       onPressed: () => Navigator.of(sheetContext).pop(true),
                       child: const Text('Guardar cambios'),
@@ -189,70 +191,74 @@ class _MiVidaScreenState extends ConsumerState<MiVidaScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mi vida')),
-      body: RefreshIndicator(
-        onRefresh: notifier.refresh,
-        child: ListView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          padding: const EdgeInsets.only(bottom: 32),
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
-              child: TextField(
-                controller: _searchController,
-                decoration: InputDecoration(
-                  hintText: 'Buscar en todo…',
-                  prefixIcon: const Icon(Icons.search),
-                  border: const OutlineInputBorder(),
-                  isDense: true,
-                  suffixIcon: state.query.isEmpty
-                      ? null
-                      : IconButton(
-                          icon: const Icon(Icons.clear),
-                          onPressed: () {
-                            _searchController.clear();
-                            notifier.setQuery('');
-                          },
-                        ),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: RefreshIndicator(
+            onRefresh: notifier.refresh,
+            child: ListView(
+              physics: const AlwaysScrollableScrollPhysics(),
+              padding: const EdgeInsets.fromLTRB(
+                  kPageGutter, Space.sm, kPageGutter, Space.xxxl),
+              children: [
+                TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar en todo…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: state.query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              notifier.setQuery('');
+                            },
+                          ),
+                  ),
+                  onChanged: notifier.setQuery,
                 ),
-                onChanged: notifier.setQuery,
-              ),
+                if (state.error != null)
+                  Padding(
+                    padding: const EdgeInsets.all(Space.lg),
+                    child: Text(state.error!,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: Theme.of(context).colorScheme.error)),
+                  ),
+                const SizedBox(height: Space.lg),
+                const _DigestCard(),
+                _NotificationsSection(
+                  reminders: state.reminders,
+                  onToggle: notifier.setReminderEnabled,
+                  onEdit: _editReminder,
+                  onDelete: notifier.deleteReminder,
+                ),
+                if (state.loading)
+                  const Padding(
+                    padding: EdgeInsets.all(Space.xxxl),
+                    child: Center(child: CircularProgressIndicator()),
+                  )
+                else if (state.sections.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(Space.xxl),
+                    child: Text(
+                      'Aún no hay datos guardados en este dispositivo.\n'
+                      'Cuéntale algo a Axi en el chat, o entra a una categoría '
+                      '(Salud, Ejercicio, Finanzas…) para registrarlo ahí.',
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                else
+                  for (final section in state.sections)
+                    _DomainSection(
+                      section: section,
+                      onEditEntry: _editEntry,
+                      onDeleteEntry: _deleteEntry,
+                    ),
+              ],
             ),
-            if (state.error != null)
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text(state.error!,
-                    style: TextStyle(color: Theme.of(context).colorScheme.error)),
-              ),
-            const _DigestCard(),
-            _NotificationsSection(
-              reminders: state.reminders,
-              onToggle: notifier.setReminderEnabled,
-              onEdit: _editReminder,
-              onDelete: notifier.deleteReminder,
-            ),
-            if (state.loading)
-              const Padding(
-                padding: EdgeInsets.all(32),
-                child: Center(child: CircularProgressIndicator()),
-              )
-            else if (state.sections.isEmpty)
-              const Padding(
-                padding: EdgeInsets.all(24),
-                child: Text(
-                  'Aún no hay datos guardados en este dispositivo.\n'
-                  'Cuéntale algo a Axi en el chat, o entra a una categoría '
-                  '(Salud, Ejercicio, Finanzas…) para registrarlo ahí.',
-                  textAlign: TextAlign.center,
-                ),
-              )
-            else
-              for (final section in state.sections)
-                _DomainSection(
-                  section: section,
-                  onEditEntry: _editEntry,
-                  onDeleteEntry: _deleteEntry,
-                ),
-          ],
+          ),
         ),
       ),
     );
@@ -272,16 +278,31 @@ class _DigestCard extends ConsumerWidget {
     final schedule = state.schedule;
     final DailyDigest? digest = state.digest;
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Radii.panel),
+        side: Theme.of(context).brightness == Brightness.dark
+            ? BorderSide.none
+            : BorderSide(color: LifeOSPalette.of(context).hairline),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(Space.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
-                const Icon(Icons.auto_awesome),
-                const SizedBox(width: 8),
+                Container(
+                  width: 36,
+                  height: 36,
+                  decoration: BoxDecoration(
+                    color: LifeOSPalette.of(context).axiBubble,
+                    borderRadius: BorderRadius.circular(Radii.chip),
+                  ),
+                  child: Icon(Icons.auto_awesome, size: 20,
+                      color: LifeOSPalette.of(context).onAxiBubble),
+                ),
+                const SizedBox(width: Space.md),
                 Expanded(
                   child: Text('Resumen del día',
                       style: Theme.of(context).textTheme.titleMedium),
@@ -296,17 +317,19 @@ class _DigestCard extends ConsumerWidget {
               schedule.enabled
                   ? 'Automático a las ${two(schedule.hour)}:${two(schedule.minute)} (integrado, no se elimina).'
                   : 'Desactivado. Puedes reactivarlo cuando quieras.',
-              style: Theme.of(context).textTheme.bodySmall,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
             if (digest != null && (digest.wrapUp.isNotEmpty || digest.deterministicText.isNotEmpty)) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: Space.sm),
               Text(
                 digest.wrapUp.isNotEmpty ? digest.wrapUp : digest.deterministicText,
                 maxLines: 3,
                 overflow: TextOverflow.ellipsis,
               ),
             ],
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: [
@@ -314,7 +337,7 @@ class _DigestCard extends ConsumerWidget {
                   onPressed: state.isGenerating ? null : notifier.generate,
                   child: Text(state.isGenerating ? 'Preparando…' : 'Generar ahora'),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: Space.sm),
                 FilledButton.tonal(
                   onPressed: () => context.push('/settings/daily-digest'),
                   child: const Text('Ver / gestionar'),
@@ -347,25 +370,25 @@ class _NotificationsSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Padding(
-          padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
-          child: Text('Recordatorios',
-              style: TextStyle(fontWeight: FontWeight.bold)),
-        ),
-        if (reminders.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Text('No tienes recordatorios en este dispositivo.'),
-          )
-        else
-          for (final reminder in reminders)
-            _ReminderRow(
-              reminder: reminder,
-              onToggle: (v) => onToggle(reminder, v),
-              onEdit: () => onEdit(reminder),
-              onDelete: () => onDelete(reminder),
-            ),
-        const Divider(height: 24),
+        const SectionHeader('Recordatorios'),
+        GroupedList(children: [
+          if (reminders.isEmpty)
+            Padding(
+              padding: const EdgeInsets.all(Space.lg),
+              child: Text('No tienes recordatorios en este dispositivo.',
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  )),
+            )
+          else
+            for (final reminder in reminders)
+              _ReminderRow(
+                reminder: reminder,
+                onToggle: (v) => onToggle(reminder, v),
+                onEdit: () => onEdit(reminder),
+                onDelete: () => onDelete(reminder),
+              ),
+        ]),
       ],
     );
   }
@@ -386,7 +409,6 @@ class _ReminderRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     String two(int n) => n.toString().padLeft(2, '0');
     final d = reminder.dueAt;
     final base = reminder.recurrence == ReminderRecurrence.daily
@@ -395,14 +417,11 @@ class _ReminderRow extends StatelessWidget {
     final subtitle = reminder.isDisabled
         ? '$base · desactivado'
         : (reminder.status == LocalReminderStatus.fired ? '$base · ya sonó' : base);
-    return ListTile(
-      leading: Icon(
-        reminder.isDisabled ? Icons.notifications_off_outlined : Icons.alarm,
-        color: reminder.isDisabled ? scheme.outline : null,
-      ),
-      title: Text(reminder.text,
-          style: reminder.isDisabled ? TextStyle(color: scheme.outline) : null),
-      subtitle: Text(subtitle),
+    return GroupedRow(
+      icon: reminder.isDisabled ? Icons.notifications_off_outlined : Icons.alarm,
+      title: reminder.text,
+      subtitle: subtitle,
+      showChevron: false,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -442,32 +461,44 @@ class _DomainSection extends StatelessWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+        const SizedBox(height: Space.xxl),
+        Semantics(
+          header: true,
+          label: '${section.domainTitle} · ${section.count}',
+          excludeSemantics: true,
           child: Row(
             children: [
-              Icon(descriptor.icon, size: 20),
-              const SizedBox(width: 8),
-              Text('${section.domainTitle} · ${section.count}',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Icon(descriptor.icon, size: 20,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant),
+              const SizedBox(width: Space.sm),
+              Flexible(child: Text(section.domainTitle,
+                  style: Theme.of(context).textTheme.titleLarge)),
+              const SizedBox(width: Space.sm),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: Space.sm, vertical: Space.xs),
+                decoration: ShapeDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHigh,
+                  shape: const StadiumBorder(),
+                ),
+                child: Text('${section.count}',
+                    style: Theme.of(context).textTheme.labelMedium),
+              ),
             ],
           ),
         ),
         for (final group in section.people) ...[
-          Padding(
-            padding: const EdgeInsets.fromLTRB(24, 4, 16, 0),
-            child: Text(group.personLabel,
-                style: Theme.of(context).textTheme.labelLarge),
-          ),
-          for (final entry in group.entries)
-            _EntryRow(
-              entry: entry,
-              editType: localEntryTypeFor(section.domainKey, entry.type),
-              onEdit: (type) => onEditEntry(section.domainKey, entry, type),
-              onDelete: () => onDeleteEntry(entry),
-            ),
+          SectionHeader(group.personLabel,
+              padding: const EdgeInsets.fromLTRB(Space.xs, Space.md, Space.xs, Space.sm)),
+          GroupedList(children: [
+            for (final entry in group.entries)
+              _EntryRow(
+                entry: entry,
+                editType: localEntryTypeFor(section.domainKey, entry.type),
+                onEdit: (type) => onEditEntry(section.domainKey, entry, type),
+                onDelete: () => onDeleteEntry(entry),
+              ),
+          ]),
         ],
-        const Divider(height: 24),
       ],
     );
   }
@@ -493,11 +524,10 @@ class _EntryRow extends StatelessWidget {
     final when =
         '${two(local.day)}/${two(local.month)}/${local.year} ${two(local.hour)}:${two(local.minute)}';
     final origin = editType != null ? editType!.label : 'Desde el chat';
-    return ListTile(
-      dense: true,
-      contentPadding: const EdgeInsets.only(left: 32, right: 8),
-      title: Text(entry.label),
-      subtitle: Text('$origin · $when'),
+    return GroupedRow(
+      title: entry.label,
+      subtitle: '$origin · $when',
+      showChevron: false,
       trailing: PopupMenuButton<String>(
         tooltip: 'Acciones',
         onSelected: (action) {

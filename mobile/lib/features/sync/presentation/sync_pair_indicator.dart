@@ -16,6 +16,7 @@
 //     configured.
 import 'package:flutter/material.dart';
 
+import '../../../theme/lifeos_tokens.dart';
 import '../data/sync_status_store.dart';
 
 class SyncPairIndicator extends StatelessWidget {
@@ -75,7 +76,7 @@ class SyncPairIndicator extends StatelessWidget {
             : scheme.outline;
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 20, 16, 12),
+      padding: const EdgeInsets.symmetric(vertical: Space.lg),
       child: Column(
         children: [
           Row(
@@ -105,7 +106,7 @@ class SyncPairIndicator extends StatelessWidget {
               padding: const EdgeInsets.only(top: 8),
               child: Text(
                 pairingProblem!,
-                style: text.bodySmall?.copyWith(color: scheme.error),
+                style: text.bodyMedium?.copyWith(color: scheme.error),
                 textAlign: TextAlign.center,
               ),
             ),
@@ -119,7 +120,7 @@ class SyncPairIndicator extends StatelessWidget {
             Text(
               'Los dos dispositivos deben mostrar el mismo. Si no coincide, '
               'están usando frases distintas y nunca se van a encontrar.',
-              style: text.bodySmall,
+              style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
               textAlign: TextAlign.center,
             ),
           ],

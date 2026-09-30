@@ -302,12 +302,12 @@ class SyncSettingsRoute extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 20, 16, 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
               child: Text(
                 '¿Es tu primer dispositivo con LifeOS, o ya tienes otro '
                 'sincronizando?',
-                style: TextStyle(fontSize: 16),
+                style: Theme.of(sheet).textTheme.titleMedium,
               ),
             ),
             ListTile(

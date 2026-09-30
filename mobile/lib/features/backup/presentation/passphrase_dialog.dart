@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../theme/lifeos_tokens.dart';
+
 /// Asks for the passphrase that seals (or opens) a backup.
 ///
 /// When [confirm] is set the phrase must be typed twice. That is not
@@ -75,11 +77,14 @@ class _PassphraseDialogState extends State<PassphraseDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           if (widget.confirm)
-            const Padding(
-              padding: EdgeInsets.only(bottom: 12),
+            Padding(
+              padding: const EdgeInsets.only(bottom: Space.md),
               child: Text(
                 'Esta frase es lo único que abre el respaldo. No se guarda en '
                 'ningún lado: si la olvidas, no hay forma de recuperarlo.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ),
           TextField(
@@ -89,7 +94,6 @@ class _PassphraseDialogState extends State<PassphraseDialog> {
             autocorrect: false,
             decoration: InputDecoration(
               labelText: 'Frase de recuperación',
-              border: const OutlineInputBorder(),
               suffixIcon: IconButton(
                 icon: Icon(_obscure ? Icons.visibility : Icons.visibility_off),
                 // Revealing it matters here: a phrase typed blind into a field
@@ -100,19 +104,18 @@ class _PassphraseDialogState extends State<PassphraseDialog> {
             ),
           ),
           if (widget.confirm) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Space.md),
             TextField(
               controller: _repeat,
               obscureText: _obscure,
               autocorrect: false,
               decoration: const InputDecoration(
                 labelText: 'Repetila',
-                border: OutlineInputBorder(),
               ),
             ),
           ],
           if (_error != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Space.md),
             Text(
               _error!,
               style: TextStyle(color: Theme.of(context).colorScheme.error),

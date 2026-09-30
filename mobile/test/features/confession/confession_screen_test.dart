@@ -8,7 +8,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/features/confession/presentation/confession_screen.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 
 import 'dart:io';
 
@@ -29,6 +31,28 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('Nada de esto se guarda'), findsWidgets);
+  });
+
+  testWidgets('on a wide window the content stays in the readable column',
+      (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_app());
+    await tester.pump();
+
+    expect(
+      tester.getSize(find.byType(TextField)).width,
+      lessThanOrEqualTo(kContentMaxWidth),
+    );
+    expect(
+      find.ancestor(
+        of: find.textContaining('Nada de esto se guarda'),
+        matching: find.byType(StatusBanner),
+      ),
+      findsOneWidget,
+    );
   });
 
   // What this screen must NOT do is now covered from the other direction, in

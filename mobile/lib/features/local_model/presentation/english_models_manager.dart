@@ -1,7 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../english/presentation/english_providers.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../../voice_settings/presentation/voice_catalog_providers.dart';
@@ -41,38 +44,37 @@ class EnglishModelsManager extends ConsumerWidget {
       _ => _OptionalPhase.absent,
     };
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Text(
-            l10n.englishModelsTitle,
-            style: Theme.of(context).textTheme.titleMedium,
-          ),
-          const SizedBox(height: 4),
-          Text(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(l10n.englishModelsTitle),
+        Padding(
+          padding: const EdgeInsets.only(bottom: Space.md),
+          child: Text(
             l10n.englishModelsSubtitle,
-            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
               color: Theme.of(context).colorScheme.onSurfaceVariant,
             ),
           ),
-          const SizedBox(height: 12),
-          _OptionalModelRow(
-            name: l10n.englishModelsPronunciation,
-            phase: pronPhase,
-            progress: pron.progress,
-            onDownload: () =>
-                ref.read(pronModelStatusProvider.notifier).download(),
-          ),
-          _OptionalModelRow(
-            name: l10n.englishModelsPracticeVoice,
-            phase: voicePhase,
-            progress: voice is TtsVoiceDownloading ? voice.progress : 0,
-            onDownload: () => downloadEnglishVoice(ref),
-          ),
-        ],
-      ),
+        ),
+        GroupedList(
+          children: [
+            _OptionalModelRow(
+              name: l10n.englishModelsPronunciation,
+              phase: pronPhase,
+              progress: pron.progress,
+              onDownload: () =>
+                  ref.read(pronModelStatusProvider.notifier).download(),
+            ),
+            _OptionalModelRow(
+              name: l10n.englishModelsPracticeVoice,
+              phase: voicePhase,
+              progress: voice is TtsVoiceDownloading ? voice.progress : 0,
+              onDownload: () => downloadEnglishVoice(ref),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -106,59 +108,53 @@ class _OptionalModelRow extends StatelessWidget {
       _OptionalPhase.failed => l10n.requiredModelStatusError,
     };
 
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Icon(
-            switch (phase) {
-              _OptionalPhase.ready => Icons.check_circle,
-              _OptionalPhase.failed => Icons.error_outline,
-              _OptionalPhase.downloading => Icons.downloading,
-              _OptionalPhase.checking => Icons.hourglass_empty,
-              _OptionalPhase.absent => Icons.download_for_offline_outlined,
-            },
-            color: switch (phase) {
-              _OptionalPhase.ready => Colors.green,
-              _OptionalPhase.failed => scheme.error,
-              _OptionalPhase.downloading => scheme.primary,
-              _ => null,
-            },
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(name, style: Theme.of(context).textTheme.bodyLarge),
-                Text(
-                  status,
-                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: phase == _OptionalPhase.failed
-                        ? scheme.error
-                        : scheme.onSurfaceVariant,
+    final palette = LifeOSPalette.of(context);
+    final actionable =
+        phase == _OptionalPhase.absent || phase == _OptionalPhase.failed;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        GroupedRow(
+          title: name,
+          subtitle: status,
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (actionable)
+                TextButton(
+                  onPressed: onDownload,
+                  child: Text(
+                    phase == _OptionalPhase.failed
+                        ? l10n.actionRetry
+                        : l10n.englishModelsDownload,
                   ),
                 ),
-                if (phase == _OptionalPhase.downloading) ...[
-                  const SizedBox(height: 4),
-                  LinearProgressIndicator(
-                    value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
-                  ),
-                ],
-              ],
+              Icon(
+                switch (phase) {
+                  _OptionalPhase.ready => Icons.check_circle,
+                  _OptionalPhase.failed => Icons.error_outline,
+                  _OptionalPhase.downloading => Icons.downloading,
+                  _OptionalPhase.checking => Icons.hourglass_empty,
+                  _OptionalPhase.absent => Icons.download_for_offline_outlined,
+                },
+                color: switch (phase) {
+                  _OptionalPhase.ready => palette.success,
+                  _OptionalPhase.failed => scheme.error,
+                  _OptionalPhase.downloading => scheme.primary,
+                  _ => scheme.onSurfaceVariant,
+                },
+              ),
+            ],
+          ),
+        ),
+        if (phase == _OptionalPhase.downloading)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(Space.lg, 0, Space.lg, Space.md),
+            child: LinearProgressIndicator(
+              value: progress > 0 ? progress.clamp(0.0, 1.0) : null,
             ),
           ),
-          if (phase == _OptionalPhase.absent || phase == _OptionalPhase.failed)
-            TextButton(
-              onPressed: onDownload,
-              child: Text(
-                phase == _OptionalPhase.failed
-                    ? l10n.actionRetry
-                    : l10n.englishModelsDownload,
-              ),
-            ),
-        ],
-      ),
+      ],
     );
   }
 }

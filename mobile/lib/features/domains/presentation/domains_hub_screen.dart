@@ -1,60 +1,30 @@
 import 'package:flutter/material.dart';
-
-import '../../../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../l10n/app_localizations.dart';
 import '../domain/domain_descriptor.dart';
 
-/// The domains hub (spec `mobile-domain-crud` / `mobile-app-shell`): a grid
-/// of the registered domains (health, finance, exercise this slice — the
-/// same grid grows to 7 by extending [domainDescriptors], no widget
-/// changes). Tapping a card opens that domain's [DomainListScreen] at
-/// `/domains/:key`. No longer pairing-gated (native domain CRUD): each
-/// domain screen's local tab works fully offline/unpaired.
+/// All registered domains in one quiet navigation group. Each domain's local
+/// screen works fully offline/unpaired; the registry owns icons and labels.
 class DomainsHubScreen extends StatelessWidget {
   const DomainsHubScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      // The same words the home screen used to get here. A destination that
-      // renames itself on arrival makes people wonder whether they tapped the
-      // wrong thing.
+      // Keep the destination named exactly like the home navigation row.
       appBar: AppBar(title: Text(AppLocalizations.of(context).homeMyData)),
-      body: GridView.count(
-        padding: const EdgeInsets.all(16),
-        crossAxisCount: 2,
-        mainAxisSpacing: 12,
-        crossAxisSpacing: 12,
-        children: [
+      body: PageBody(children: [
+        GroupedList(children: [
           for (final descriptor in domainDescriptors)
-            _DomainCard(descriptor: descriptor, onTap: () => context.push('/domains/${descriptor.key}')),
-        ],
-      ),
-    );
-  }
-}
-
-class _DomainCard extends StatelessWidget {
-  const _DomainCard({required this.descriptor, required this.onTap});
-
-  final DomainDescriptor descriptor;
-  final VoidCallback onTap;
-
-  @override
-  Widget build(BuildContext context) {
-    return Card(
-      child: InkWell(
-        onTap: onTap,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(descriptor.icon, size: 36),
-            const SizedBox(height: 8),
-            Text(descriptor.title),
-          ],
-        ),
-      ),
+            GroupedRow(
+              icon: descriptor.icon,
+              title: descriptor.title,
+              onTap: () => context.push('/domains/${descriptor.key}'),
+            ),
+        ]),
+      ]),
     );
   }
 }

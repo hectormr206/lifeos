@@ -24,20 +24,9 @@ void useGoldenSurface(WidgetTester tester) {
   });
 }
 
-/// The brand (LifeOS) light theme with a real text font forced on, so golden
-/// text is READABLE (see flutter_test_config.dart). Bare `Text` widgets inherit
-/// this family through the ambient DefaultTextStyle, so even styles that only
-/// set a colour pick up the real font.
-ThemeData goldenTheme() {
-  final base = lifeosLightTheme;
-  return base.copyWith(
-    textTheme: base.textTheme.apply(fontFamily: 'Roboto'),
-    primaryTextTheme: base.primaryTextTheme.apply(fontFamily: 'Roboto'),
-    // The brand appBar title style sets no family; force the loaded real font
-    // so the AppBar title renders as readable text and not a tofu box.
-    appBarTheme: base.appBarTheme.copyWith(
-      titleTextStyle:
-          base.appBarTheme.titleTextStyle?.copyWith(fontFamily: 'Roboto'),
-    ),
-  );
-}
+/// Real light theme: bundled fonts are loaded by flutter_test_config.dart via
+/// FontManifest.json, so no Roboto override is needed for readable goldens.
+ThemeData goldenTheme() => lifeosLightTheme;
+
+/// Real dark theme for future dark-mode snapshots.
+ThemeData goldenDarkTheme() => lifeosDarkTheme;

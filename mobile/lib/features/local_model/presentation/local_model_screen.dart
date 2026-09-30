@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/local_llm_engine.dart';
 import 'english_models_manager.dart';
 import 'local_model_notifier.dart';
@@ -25,9 +28,22 @@ class LocalModelScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Modelo local')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+      // Short, fixed content: built eagerly (not a lazy ListView) so every
+      // section, including the developer controls below the fold, exists.
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              kPageGutter,
+              Space.sm,
+              kPageGutter,
+              Space.xxxl + MediaQuery.paddingOf(context).bottom,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
           // Unified model manager (option B): the four required models + a
           // "Descargar todo" that fetches the missing ones so the offline
           // experience is never half-broken.
@@ -44,7 +60,10 @@ class LocalModelScreen extends ConsumerWidget {
           // Misma herramienta, otra perilla: la decodificación especulativa
           // (MTP) del modelo, para poder medir si conviene en cada tarea.
           const _SpeculativeDecodingSection(),
-        ],
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -66,57 +85,36 @@ class _UpdateAvailableBanner extends ConsumerWidget {
       return const SizedBox.shrink();
     }
     final manifest = manager.manifest!;
-    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final palette = LifeOSPalette.of(context);
     final sizeGb = manifest.sizeBytes > 0
         ? ' (~${(manifest.sizeBytes / (1024 * 1024 * 1024)).toStringAsFixed(1)} GB)'
         : '';
-    return Padding(
-      padding: const EdgeInsets.only(top: 16),
-      child: Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: scheme.secondaryContainer,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.new_releases_outlined, size: 20, color: scheme.onSecondaryContainer),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Hay un nuevo modelo disponible',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleSmall
-                        ?.copyWith(color: scheme.onSecondaryContainer),
-                  ),
-                ),
-              ],
+    return StatusBanner(
+      tone: BannerTone.info,
+      icon: Icons.new_releases_outlined,
+      margin: const EdgeInsets.only(top: Space.lg),
+      message: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Hay un nuevo modelo disponible',
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: palette.onInfoContainer,
             ),
-            if (manifest.notes.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                manifest.notes,
-                style: Theme.of(context)
-                    .textTheme
-                    .bodySmall
-                    ?.copyWith(color: scheme.onSecondaryContainer),
-              ),
-            ],
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: FilledButton.icon(
-                onPressed: () => ref.read(localModelManagerProvider.notifier).download(),
-                icon: const Icon(Icons.system_update_alt_outlined),
-                label: Text('Actualizar modelo$sizeGb'),
-              ),
-            ),
+          ),
+          if (manifest.notes.isNotEmpty) ...[
+            const SizedBox(height: Space.sm),
+            Text(manifest.notes),
           ],
-        ),
+          const SizedBox(height: Space.sm),
+          FilledButton.icon(
+            onPressed: () =>
+                ref.read(localModelManagerProvider.notifier).download(),
+            icon: const Icon(Icons.system_update_alt_outlined),
+            label: Text('Actualizar modelo$sizeGb'),
+          ),
+        ],
       ),
     );
   }
@@ -145,43 +143,46 @@ class _BackendOverrideSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final forced = ref.watch(forcedLocalModelBackendProvider);
-    final scheme = Theme.of(context).colorScheme;
 
-    return Padding(
-      padding: const EdgeInsets.only(top: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Backend de inferencia',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '«Automático» pide lo que le conviene a este aparato: en el '
-            'móvil la GPU (y CPU si no puede), en el ordenador la CPU, sin '
-            'tocar la tarjeta gráfica. Forzar uno manda sobre eso a partir de '
-            'la siguiente carga (la actual se suelta al cambiar).',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<LocalLlmBackend?>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment<LocalLlmBackend?>(value: null, label: Text('Automático')),
-              ButtonSegment<LocalLlmBackend?>(value: LocalLlmBackend.gpu, label: Text('GPU')),
-              ButtonSegment<LocalLlmBackend?>(value: LocalLlmBackend.cpu, label: Text('CPU')),
-            ],
-            selected: {forced},
-            onSelectionChanged: (selection) => ref
-                .read(forcedLocalModelBackendProvider.notifier)
-                .setForcedBackend(selection.first),
-          ),
-        ],
-      ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionHeader('Backend de inferencia'),
+        _SectionNote(
+          '«Automático» pide lo que le conviene a este aparato: en el '
+          'móvil la GPU (y CPU si no puede), en el ordenador la CPU, sin '
+          'tocar la tarjeta gráfica. Forzar uno manda sobre eso a partir de '
+          'la siguiente carga (la actual se suelta al cambiar).',
+        ),
+        GroupedList(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Space.md),
+              child: SegmentedButton<LocalLlmBackend?>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment<LocalLlmBackend?>(
+                    value: null,
+                    label: Text('Automático'),
+                  ),
+                  ButtonSegment<LocalLlmBackend?>(
+                    value: LocalLlmBackend.gpu,
+                    label: Text('GPU'),
+                  ),
+                  ButtonSegment<LocalLlmBackend?>(
+                    value: LocalLlmBackend.cpu,
+                    label: Text('CPU'),
+                  ),
+                ],
+                selected: {forced},
+                onSelectionChanged: (selection) => ref
+                    .read(forcedLocalModelBackendProvider.notifier)
+                    .setForcedBackend(selection.first),
+              ),
+            ),
+          ],
+        ),
+      ],
     );
   }
 }
@@ -210,42 +211,57 @@ class _SpeculativeDecodingSection extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final choice = ref.watch(localModelSpeculativeDecodingProvider);
-    final scheme = Theme.of(context).colorScheme;
 
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SectionHeader('Decodificación especulativa'),
+        _SectionNote(
+          '«Automático» deja decidir al propio modelo. Forzarla no siempre '
+          'acelera: según el fabricante gana resumiendo texto y pierde '
+          'escribiendo código, así que hay que medirlo. Manda a partir de la '
+          'siguiente carga (la actual se suelta al cambiar).',
+        ),
+        GroupedList(
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(Space.md),
+              child: SegmentedButton<bool?>(
+                showSelectedIcon: false,
+                segments: const [
+                  ButtonSegment<bool?>(value: null, label: Text('Automático')),
+                  ButtonSegment<bool?>(value: true, label: Text('Sí')),
+                  ButtonSegment<bool?>(value: false, label: Text('No')),
+                ],
+                selected: {choice},
+                onSelectionChanged: (selection) => ref
+                    .read(localModelSpeculativeDecodingProvider.notifier)
+                    .setSpeculativeDecoding(selection.first),
+              ),
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+}
+
+/// Explanatory paragraph between a section header and its group.
+class _SectionNote extends StatelessWidget {
+  const _SectionNote(this.text);
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
     return Padding(
-      padding: const EdgeInsets.only(top: 24),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'Decodificación especulativa',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
-          const SizedBox(height: 4),
-          Text(
-            '«Automático» deja decidir al propio modelo. Forzarla no siempre '
-            'acelera: según el fabricante gana resumiendo texto y pierde '
-            'escribiendo código, así que hay que medirlo. Manda a partir de la '
-            'siguiente carga (la actual se suelta al cambiar).',
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: scheme.onSurfaceVariant),
-          ),
-          const SizedBox(height: 8),
-          SegmentedButton<bool?>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment<bool?>(value: null, label: Text('Automático')),
-              ButtonSegment<bool?>(value: true, label: Text('Sí')),
-              ButtonSegment<bool?>(value: false, label: Text('No')),
-            ],
-            selected: {choice},
-            onSelectionChanged: (selection) => ref
-                .read(localModelSpeculativeDecodingProvider.notifier)
-                .setSpeculativeDecoding(selection.first),
-          ),
-        ],
+      padding: const EdgeInsets.only(bottom: Space.md),
+      child: Text(
+        text,
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: theme.colorScheme.onSurfaceVariant,
+        ),
       ),
     );
   }

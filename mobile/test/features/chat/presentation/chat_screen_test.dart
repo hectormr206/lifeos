@@ -268,13 +268,17 @@ void main() {
       await tester.tap(find.text('Galería'));
       await tester.pumpAndSettle();
     }
-    expect(find.byType(Image), findsNWidgets(2)); // two compose thumbnails
+    // The AppBar now has Axi's asset mark; count only attached image bytes.
+    final photos = find.byWidgetPredicate(
+      (widget) => widget is Image && widget.image is MemoryImage,
+    );
+    expect(photos, findsNWidgets(2)); // two compose thumbnails
     expect(engine.generateWithImagesCount, 0); // nothing sent yet
 
     // Remove one thumbnail via its × button.
     await tester.tap(find.byIcon(Icons.close).first);
     await tester.pumpAndSettle();
-    expect(find.byType(Image), findsOneWidget);
+    expect(photos, findsOneWidget);
 
     // Send: the remaining photo goes to the VISION path in one turn.
     await tester.tap(find.byIcon(Icons.send));
@@ -286,7 +290,7 @@ void main() {
     expect(engine.lastImages?.length, 1);
     expect(engine.lastImageBytes, bytes);
     // The sent photo renders in a chat bubble and the compose strip is cleared.
-    expect(find.byType(Image), findsOneWidget);
+    expect(photos, findsOneWidget);
   });
 
   testWidgets('press-and-hold mic records and drops a playable voice-note bubble', (tester) async {

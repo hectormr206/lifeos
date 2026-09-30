@@ -6,7 +6,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
 import 'package:lifeos/features/tts/domain/tts_voice.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 import 'package:lifeos/features/voice_settings/presentation/voice_catalog_providers.dart';
 import 'package:lifeos/features/voice_settings/presentation/voice_catalog_screen.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
@@ -30,6 +32,33 @@ class _FixedCatalog extends VoiceCatalogController {
 }
 
 void main() {
+  testWidgets('voice catalog: regions are grouped under language headers, within the column',
+      (tester) async {
+    useGoldenSurface(tester);
+    tester.view.physicalSize = const Size(1280, 900) * kGoldenDpr;
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          selectedVoiceProvider.overrideWith(() => _FixedSelectedVoice('es_MX-claude')),
+          voiceCatalogControllerProvider.overrideWith(() => _FixedCatalog(const {})),
+        ],
+        child: MaterialApp(
+          theme: goldenTheme(),
+          locale: const Locale('es'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: const VoiceCatalogScreen(),
+        ),
+      ),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 300));
+    expect(find.widgetWithText(SectionHeader, 'Español'), findsOneWidget);
+    expect(find.ancestor(of: find.byType(ExpansionTile).first, matching: find.byType(GroupedList)),
+        findsOneWidget);
+    expect(tester.getSize(find.byType(GroupedList).first).width, lessThanOrEqualTo(kContentMaxWidth));
+  });
+
   testWidgets('golden: voice catalog — installed/selected, downloading, absent',
       (tester) async {
     useGoldenSurface(tester);

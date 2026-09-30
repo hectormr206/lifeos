@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
 import '../domain/english_goal.dart';
 import 'english_providers.dart';
 
@@ -29,10 +30,11 @@ class EnglishGoalPicker extends ConsumerWidget {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Text(l10n.englishGoalQuestion,
-            style: Theme.of(context).textTheme.titleMedium),
-        const SizedBox(height: 4),
-        Text(l10n.englishGoalHint),
+        SectionHeader(l10n.englishGoalQuestion),
+        Text(l10n.englishGoalHint,
+            style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            )),
         RadioGroup<EnglishGoal>(
           groupValue: goal,
           onChanged: (choice) {

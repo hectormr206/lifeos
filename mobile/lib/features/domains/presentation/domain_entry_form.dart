@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/domain_form_spec.dart';
 
 /// The ONE reusable, data-driven create-entry form (spec:
@@ -178,8 +179,8 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           for (final field in widget.spec)
-            Padding(padding: const EdgeInsets.symmetric(vertical: 6), child: _fieldWidget(field)),
-          const SizedBox(height: 12),
+            Padding(padding: const EdgeInsets.symmetric(vertical: Space.sm), child: _fieldWidget(field)),
+          const SizedBox(height: Space.md),
           FilledButton.icon(
             onPressed: widget.submitting ? null : _submit,
             icon: widget.submitting
@@ -189,7 +190,7 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
           ),
           if (widget.errorText != null)
             Padding(
-              padding: const EdgeInsets.only(top: 8),
+              padding: const EdgeInsets.only(top: Space.sm),
               child: Text(widget.errorText!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
             ),
         ],
@@ -202,7 +203,7 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
       case DomainFieldType.enumType:
         return DropdownButtonFormField<String>(
           initialValue: _values[field.key] as String?,
-          decoration: InputDecoration(labelText: field.label, border: const OutlineInputBorder()),
+          decoration: InputDecoration(labelText: field.label),
           items: [
             for (final option in field.enumOptions!)
               DropdownMenuItem(value: option, child: Text(field.enumLabels?[option] ?? option)),
@@ -217,7 +218,7 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
         return InkWell(
           onTap: () => _pickDate(field),
           child: InputDecorator(
-            decoration: InputDecoration(labelText: field.label, border: const OutlineInputBorder()),
+            decoration: InputDecoration(labelText: field.label),
             child: Row(
               children: [
                 Expanded(
@@ -238,7 +239,6 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
           controller: _controllers[field.key],
           decoration: InputDecoration(
             labelText: field.label,
-            border: const OutlineInputBorder(),
             suffixText: field.unitHint,
           ),
           validator: (text) => _requiredError(field, text ?? ''),
@@ -249,7 +249,6 @@ class _DomainEntryFormState extends State<DomainEntryForm> {
           controller: _controllers[field.key],
           decoration: InputDecoration(
             labelText: field.label,
-            border: const OutlineInputBorder(),
             suffixText: field.unitHint,
           ),
           keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),

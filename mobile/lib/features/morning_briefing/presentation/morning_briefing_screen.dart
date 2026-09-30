@@ -6,8 +6,9 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
-import '../../../theme/lifeos_theme.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../local_model/presentation/engine_failure_details.dart';
 import '../../permissions/domain/app_permission.dart';
 import '../../permissions/presentation/permission_request_helper.dart';
@@ -174,8 +175,8 @@ class _MorningBriefingScreenState extends ConsumerState<MorningBriefingScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 16, 16, 96),
+      body: PageBody(
+        padding: const EdgeInsets.fromLTRB(kPageGutter, Space.lg, kPageGutter, 96),
         children: [
           _ScheduleCard(state: state, notifier: notifier),
           if (state.schedule.enabled) const _BatteryDelayCard(),
@@ -214,12 +215,12 @@ class _MorningBriefingScreenState extends ConsumerState<MorningBriefingScreen> {
       floatingActionButton: FloatingActionButton.extended(
         onPressed: state.isGenerating ? null : notifier.generate,
         icon: state.isGenerating
-            ? const SizedBox(
+            ? SizedBox(
                 width: 18,
                 height: 18,
                 child: CircularProgressIndicator(
                   strokeWidth: 2,
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.onPrimaryContainer,
                 ),
               )
             : const Icon(Icons.auto_awesome),
@@ -246,7 +247,6 @@ class _ScheduleCard extends StatelessWidget {
     final schedule = state.schedule;
     final time = TimeOfDay(hour: schedule.hour, minute: schedule.minute);
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
       child: Column(
         children: [
           SwitchListTile(
@@ -257,7 +257,7 @@ class _ScheduleCard extends StatelessWidget {
           ),
           if (schedule.enabled)
             ListTile(
-              leading: const Icon(Icons.schedule, color: LifeOSColors.teal),
+              leading: Icon(Icons.schedule, color: Theme.of(context).colorScheme.primary),
               title: Text(l10n.briefingScheduleTimeLabel),
               trailing: Text(
                 time.format(context),
@@ -346,10 +346,10 @@ class _EmptyState extends StatelessWidget {
       padding: const EdgeInsets.only(top: 48),
       child: Column(
         children: [
-          const Icon(
+          Icon(
             Icons.wb_sunny_outlined,
             size: 56,
-            color: LifeOSColors.teal,
+            color: Theme.of(context).colorScheme.primary,
           ),
           const SizedBox(height: 16),
           Text(
@@ -386,7 +386,7 @@ class _BriefingHeader extends StatelessWidget {
         Text(
           l10n.briefingGeneratedAt(_formatTimestamp(briefing.generatedAt)),
           style: textTheme.labelMedium?.copyWith(
-            color: Theme.of(context).hintColor,
+            color: Theme.of(context).colorScheme.onSurfaceVariant,
           ),
         ),
       ],
@@ -420,7 +420,6 @@ class _BatteryDelayCard extends ConsumerWidget {
     if (resolved != PermissionState.denied) return const SizedBox.shrink();
     final theme = Theme.of(context);
     return Card(
-      margin: const EdgeInsets.only(bottom: 8),
       child: Padding(
         padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
         child: Column(
@@ -504,7 +503,6 @@ class _SectionBlock extends StatelessWidget {
     final theme = Theme.of(context);
     final text = digest?.trim() ?? '';
     return Card(
-      margin: const EdgeInsets.only(top: 8, bottom: 4),
       clipBehavior: Clip.antiAlias,
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -516,19 +514,9 @@ class _SectionBlock extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    Container(
-                      width: 3,
-                      height: 20,
-                      color: LifeOSColors.teal,
-                    ),
-                    const SizedBox(width: 8),
                     Expanded(
-                      child: Text(
-                        group.section,
-                        style: theme.textTheme.titleMedium?.copyWith(
-                          fontWeight: FontWeight.w700,
-                        ),
-                      ),
+                      child: SectionHeader(group.section,
+                        padding: EdgeInsets.zero),
                     ),
                   ],
                 ),
@@ -578,13 +566,13 @@ class _SectionBlock extends StatelessWidget {
                       _foldLabel(group.articles.length),
                       style: theme.textTheme.bodyMedium?.copyWith(
                         fontWeight: FontWeight.w600,
-                        color: LifeOSColors.teal,
+                        color: theme.colorScheme.primary,
                       ),
                     ),
                   ),
                   Icon(
                     isOpen ? Icons.expand_less : Icons.expand_more,
-                    color: LifeOSColors.teal,
+                    color: theme.colorScheme.primary,
                   ),
                 ],
               ),
@@ -662,7 +650,7 @@ class _TranslationFailedNote extends StatelessWidget {
           Text(
             l10n.briefingTranslationFailed,
             style: theme.textTheme.bodySmall?.copyWith(
-              color: LifeOSColors.pink,
+              color: theme.colorScheme.error,
             ),
           ),
           EngineFailureDetails(detail: detail),
@@ -687,7 +675,7 @@ class _SkippedNote extends StatelessWidget {
       child: Text(
         l10n.briefingSkippedSources(sources.join(', ')),
         style: textTheme.labelMedium?.copyWith(
-          color: Theme.of(context).hintColor,
+          color: Theme.of(context).colorScheme.onSurfaceVariant,
         ),
       ),
     );
@@ -756,7 +744,6 @@ class _ArticleCard extends StatelessWidget {
     final l10n = AppLocalizations.of(context);
     final article = this.article;
     return Card(
-      margin: const EdgeInsets.only(bottom: 12),
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
@@ -768,7 +755,7 @@ class _ArticleCard extends StatelessWidget {
               Text(
                 _formatDate(article.publishedAt!),
                 style: textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).hintColor,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                 ),
               ),
             ],
@@ -781,7 +768,7 @@ class _ArticleCard extends StatelessWidget {
               Text(
                 l10n.briefingNoSummaryHint,
                 style: textTheme.bodySmall?.copyWith(
-                  color: Theme.of(context).hintColor,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
                   fontStyle: FontStyle.italic,
                 ),
               ),
@@ -795,7 +782,7 @@ class _ArticleCard extends StatelessWidget {
                   child: Text(
                     l10n.briefingOpenArticle,
                     style: textTheme.labelLarge?.copyWith(
-                      color: LifeOSColors.teal,
+                      color: Theme.of(context).colorScheme.primary,
                     ),
                   ),
                 ),
@@ -807,7 +794,7 @@ class _ArticleCard extends StatelessWidget {
                 label: showSummary
                     ? l10n.briefingHideFullSummary
                     : l10n.briefingFullSummary,
-                color: LifeOSColors.teal,
+                color: Theme.of(context).colorScheme.primary,
                 onTap: onToggleSummary,
               ),
             if (showSummary)
@@ -837,7 +824,7 @@ class _ArticleCard extends StatelessWidget {
                 label: showComments
                     ? l10n.briefingHideCommentsSummary
                     : l10n.briefingCommentsSummary,
-                color: LifeOSColors.pink,
+                color: Theme.of(context).colorScheme.secondary,
                 onTap: onToggleComments,
               ),
             if (showComments)
@@ -1045,7 +1032,7 @@ class _SummaryPanel extends StatelessWidget {
       child = Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.schedule, size: 16, color: theme.hintColor),
+          Icon(Icons.schedule, size: 16, color: theme.colorScheme.onSurfaceVariant),
           const SizedBox(width: 12),
           Expanded(
             child: Column(
@@ -1055,7 +1042,7 @@ class _SummaryPanel extends StatelessWidget {
                 Text(
                   queuedHint,
                   style: theme.textTheme.labelSmall?.copyWith(
-                    color: theme.hintColor,
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
                 if (slowBackend) _slowBackendLine(theme),
@@ -1118,7 +1105,7 @@ class _SummaryPanel extends StatelessWidget {
     padding: const EdgeInsets.only(top: 4),
     child: Text(
       slowBackendLabel,
-      style: theme.textTheme.labelSmall?.copyWith(color: theme.hintColor),
+      style: theme.textTheme.labelSmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
     ),
   );
 }
@@ -1147,7 +1134,7 @@ class _FailurePanel extends StatelessWidget {
       children: [
         Text(
           message,
-          style: theme.textTheme.bodySmall?.copyWith(color: LifeOSColors.pink),
+          style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.error),
         ),
         // From the second failure on: the retry IS running, and failing fast.
         // Without this line the identical message repaints and the tap reads as
@@ -1158,7 +1145,7 @@ class _FailurePanel extends StatelessWidget {
             child: Text(
               l10n.briefingSummaryRetryFailedAgain(failure.attempt),
               style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.hintColor,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),
@@ -1188,7 +1175,7 @@ class _FailurePanel extends StatelessWidget {
             child: Text(
               l10n.briefingSummaryNotRetryable,
               style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.hintColor,
+                color: theme.colorScheme.onSurfaceVariant,
               ),
             ),
           ),

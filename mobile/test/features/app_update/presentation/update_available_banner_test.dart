@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/widgets/status_banner.dart';
 import 'package:lifeos/features/app_update/domain/app_manifest.dart';
 import 'package:lifeos/features/app_update/domain/update_status.dart';
 import 'package:lifeos/features/app_update/presentation/app_update_providers.dart';
@@ -44,6 +45,7 @@ void main() {
     await _pump(tester, const UpdateAvailable(manifest: _manifest));
     expect(find.text('Nueva versión disponible'), findsOneWidget);
     expect(find.textContaining('1.4.0'), findsOneWidget);
+    expect(tester.widget<StatusBanner>(find.byType(StatusBanner)).tone, BannerTone.info);
   });
 
   testWidgets('hides the banner when up to date', (tester) async {

@@ -11,6 +11,9 @@ import 'package:lifeos/features/domains/domain/local_domain_entry.dart';
 import 'package:lifeos/features/daily_digest/domain/daily_digest.dart';
 import 'package:lifeos/features/mi_vida/presentation/mi_vida_notifier.dart';
 import 'package:lifeos/features/mi_vida/presentation/mi_vida_screen.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
+import 'package:lifeos/theme/lifeos_theme.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 
 class _FixedMiVida extends MiVidaNotifier {
   _FixedMiVida(this._fixed);
@@ -26,6 +29,33 @@ class _FixedDigest extends DailyDigestNotifier {
 }
 
 void main() {
+  testWidgets('domain name and count badge identify grouped records at desktop width', (tester) async {
+    final semantics = tester.ensureSemantics();
+    await tester.binding.setSurfaceSize(const Size(1280, 1200));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final state = MiVidaState(loading: false, sections: [
+      DigestDomainSection(domainKey: 'health', domainTitle: 'Salud', people: [
+        DigestPersonGroup(personKey: '@self', personLabel: 'Yo', entries: [
+          LocalDomainEntry(uuid: '1', label: 'Presión 120/80', timestamp: DateTime(2026, 7, 22, 12), type: 'blood_pressure', data: const {'type': 'blood_pressure'}),
+        ]),
+      ]),
+    ]);
+    await tester.pumpWidget(ProviderScope(overrides: [
+      miVidaNotifierProvider.overrideWith(() => _FixedMiVida(state)),
+      dailyDigestNotifierProvider.overrideWith(_FixedDigest.new),
+    ], child: MaterialApp(theme: lifeosLightTheme, home: const MiVidaScreen())));
+    await tester.pump();
+    expect(find.text('Salud'), findsOneWidget);
+    expect(find.bySemanticsLabel('Salud · 1'), findsOneWidget);
+    final badge = find.ancestor(of: find.text('1'), matching: find.byType(Container));
+    expect(badge, findsOneWidget);
+    expect((tester.widget<Container>(badge).decoration as ShapeDecoration).shape, isA<StadiumBorder>());
+    expect(find.ancestor(of: find.text('Presión 120/80'), matching: find.byType(GroupedList)), findsOneWidget);
+    expect(tester.getSize(find.byType(TextField)).width, lessThanOrEqualTo(kContentMaxWidth - 2 * kPageGutter));
+    expect(tester.takeException(), isNull);
+    semantics.dispose();
+  });
+
   final now = DateTime(2026, 7, 22, 12);
 
   LocalDomainEntry entry(String uuid, String label, {String? subject}) => LocalDomainEntry(

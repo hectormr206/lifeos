@@ -90,7 +90,7 @@ class _VoiceGateway extends FakeTtsVoiceGateway {
 }
 
 Finder _row(String name) =>
-    find.ancestor(of: find.text(name), matching: find.byType(Row)).first;
+    find.ancestor(of: find.text(name), matching: find.byType(ListTile)).first;
 
 Finder _action(String name) =>
     find.descendant(of: _row(name), matching: find.byType(TextButton));

@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/searxng_backend.dart';
 import '../domain/web_search_settings.dart';
 import 'web_search_providers.dart';
@@ -17,13 +19,15 @@ class WebSearchSettingsScreen extends ConsumerStatefulWidget {
   const WebSearchSettingsScreen({super.key});
 
   @override
-  ConsumerState<WebSearchSettingsScreen> createState() => _WebSearchSettingsScreenState();
+  ConsumerState<WebSearchSettingsScreen> createState() =>
+      _WebSearchSettingsScreenState();
 }
 
 /// The outcome of a "Probar conexión" run, driving the inline status line.
 enum _TestState { idle, running, success, failure }
 
-class _WebSearchSettingsScreenState extends ConsumerState<WebSearchSettingsScreen> {
+class _WebSearchSettingsScreenState
+    extends ConsumerState<WebSearchSettingsScreen> {
   final TextEditingController _urlController = TextEditingController();
   _TestState _testState = _TestState.idle;
   bool _urlHydrated = false;
@@ -47,30 +51,38 @@ class _WebSearchSettingsScreenState extends ConsumerState<WebSearchSettingsScree
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.webSearchSettingsTitle)),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+      body: PageBody(
         children: [
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-            child: Text(l10n.webSearchSettingsIntro,
-                style: Theme.of(context).textTheme.bodyMedium),
+            padding: const EdgeInsets.only(top: Space.sm, bottom: Space.lg),
+            child: Text(
+              l10n.webSearchSettingsIntro,
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
           ),
           RadioGroup<WebSearchProvider>(
             groupValue: settings.provider,
             onChanged: _selectProvider,
-            child: Column(
+            child: GroupedList(
               children: [
                 _ProviderOption(
                   value: WebSearchProvider.duckduckgo,
                   title: l10n.webSearchProviderDuckduckgo,
                   subtitle: l10n.webSearchProviderDuckduckgoDesc,
                 ),
-                _ProviderOption(
-                  value: WebSearchProvider.searxng,
-                  title: l10n.webSearchProviderSearxng,
-                  subtitle: l10n.webSearchProviderSearxngDesc,
+                Column(
+                  children: [
+                    _ProviderOption(
+                      value: WebSearchProvider.searxng,
+                      title: l10n.webSearchProviderSearxng,
+                      subtitle: l10n.webSearchProviderSearxngDesc,
+                    ),
+                    if (settings.provider == WebSearchProvider.searxng)
+                      _buildSearxngConfig(l10n),
+                  ],
                 ),
-                if (settings.provider == WebSearchProvider.searxng) _buildSearxngConfig(l10n),
                 _ProviderOption(
                   value: WebSearchProvider.none,
                   title: l10n.webSearchProviderNone,
@@ -86,7 +98,12 @@ class _WebSearchSettingsScreenState extends ConsumerState<WebSearchSettingsScree
 
   Widget _buildSearxngConfig(AppLocalizations l10n) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(56, 0, 16, 12),
+      padding: const EdgeInsets.fromLTRB(
+        Space.huge * 2,
+        0,
+        Space.lg,
+        Space.md,
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -100,22 +117,31 @@ class _WebSearchSettingsScreenState extends ConsumerState<WebSearchSettingsScree
               border: const OutlineInputBorder(),
             ),
             onChanged: (value) {
-              ref.read(webSearchSettingsProvider.notifier).setSearxngBaseUrl(value);
-              if (_testState != _TestState.idle) setState(() => _testState = _TestState.idle);
+              ref
+                  .read(webSearchSettingsProvider.notifier)
+                  .setSearxngBaseUrl(value);
+              if (_testState != _TestState.idle) {
+                setState(() => _testState = _TestState.idle);
+              }
             },
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           Row(
             children: [
               FilledButton.tonalIcon(
-                onPressed: _testState == _TestState.running ? null : _testConnection,
+                onPressed: _testState == _TestState.running
+                    ? null
+                    : _testConnection,
                 icon: _testState == _TestState.running
                     ? const SizedBox(
-                        width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
                     : const Icon(Icons.wifi_tethering),
                 label: Text(l10n.webSearchTestConnection),
               ),
-              const SizedBox(width: 12),
+              const SizedBox(width: Space.md),
               Expanded(child: _buildTestStatus(l10n)),
             ],
           ),
@@ -130,26 +156,45 @@ class _WebSearchSettingsScreenState extends ConsumerState<WebSearchSettingsScree
       case _TestState.idle:
         return const SizedBox.shrink();
       case _TestState.running:
-        return Text(l10n.webSearchTesting, style: TextStyle(color: scheme.onSurfaceVariant));
+        return Text(
+          l10n.webSearchTesting,
+          style: TextStyle(color: scheme.onSurfaceVariant),
+        );
       case _TestState.success:
-        return Row(children: [
-          Icon(Icons.check_circle, color: scheme.primary, size: 18),
-          const SizedBox(width: 4),
-          Expanded(child: Text(l10n.webSearchTestSuccess, style: TextStyle(color: scheme.primary))),
-        ]);
+        return Row(
+          children: [
+            Icon(Icons.check_circle, color: scheme.primary, size: 18),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                l10n.webSearchTestSuccess,
+                style: TextStyle(color: scheme.primary),
+              ),
+            ),
+          ],
+        );
       case _TestState.failure:
-        return Row(children: [
-          Icon(Icons.error_outline, color: scheme.error, size: 18),
-          const SizedBox(width: 4),
-          Expanded(child: Text(l10n.webSearchTestFailure, style: TextStyle(color: scheme.error))),
-        ]);
+        return Row(
+          children: [
+            Icon(Icons.error_outline, color: scheme.error, size: 18),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                l10n.webSearchTestFailure,
+                style: TextStyle(color: scheme.error),
+              ),
+            ),
+          ],
+        );
     }
   }
 
   void _selectProvider(WebSearchProvider? provider) {
     if (provider == null) return;
     ref.read(webSearchSettingsProvider.notifier).setProvider(provider);
-    if (_testState != _TestState.idle) setState(() => _testState = _TestState.idle);
+    if (_testState != _TestState.idle) {
+      setState(() => _testState = _TestState.idle);
+    }
   }
 
   /// Runs a throwaway search against the ENTERED URL and reports whether the

@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../data/recordings_repository.dart';
 import 'english_providers.dart';
@@ -70,18 +72,14 @@ class EnglishRecordingsScreen extends ConsumerWidget {
             error: (_, _) => const SizedBox.shrink(),
             data: (recordings) {
               if (recordings.isEmpty) {
-                return Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text(l10n.englishRecordingsEmpty),
-                );
+                return PageBody(children: [Text(l10n.englishRecordingsEmpty)]);
               }
               final progress = readAloudProgress(recordings, DateTime.now());
-              return ListView(
-                padding: const EdgeInsets.all(16),
+              return PageBody(
                 children: [
                   if (progress != null)
                     Padding(
-                      padding: const EdgeInsets.only(bottom: 16),
+                      padding: const EdgeInsets.only(bottom: Space.lg),
                       child: Text(
                         l10n.englishRecordingsProgress(
                           (progress.firstMonth * 100).round(),
@@ -90,18 +88,16 @@ class EnglishRecordingsScreen extends ConsumerWidget {
                         style: theme.textTheme.titleMedium,
                       ),
                     ),
-                  for (final r in recordings)
-                    Card(
-                      child: ListTile(
-                        title: Text(r.sentence),
-                        subtitle: Text([
+                  GroupedList(children: [
+                    for (final r in recordings)
+                      GroupedRow(
+                        title: r.sentence,
+                        subtitle: [
                           dates.formatMediumDate(r.recordedAt.toLocal()),
                           l10n.englishSpeakScore(
                               (r.intelligibility * 100).round()),
-                          if (!exists(r.audioPath))
-                            l10n.englishRecordingsElsewhere,
-                        ].join('\n')),
-                        isThreeLine: true,
+                        ].join('\n'),
+                        showChevron: false,
                         trailing: exists(r.audioPath)
                             ? IconButton(
                                 tooltip: l10n.englishRecordingsPlay,
@@ -110,9 +106,17 @@ class EnglishRecordingsScreen extends ConsumerWidget {
                                     .read(audioPlayerGatewayProvider)
                                     .play(r.audioPath),
                               )
-                            : null,
+                            : SizedBox(
+                                width: 100,
+                                child: Text(
+                                  l10n.englishRecordingsElsewhere,
+                                  style: theme.textTheme.bodySmall?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ),
                       ),
-                    ),
+                  ]),
                 ],
               );
             },

@@ -5,6 +5,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/graph/graph_records.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import 'local_graph_notifier.dart';
 
 /// The ON-DEVICE memory browser (roadmap SLICE C5): lists the nodes C1 writes
@@ -52,43 +54,49 @@ class _LocalGraphBrowserScreenState
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: TextField(
-              controller: _controller,
-              decoration: InputDecoration(
-                hintText: 'Buscar en mi memoria…',
-                border: const OutlineInputBorder(),
-                suffixIcon: IconButton(
-                  icon: const Icon(Icons.search),
-                  onPressed: _search,
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    kPageGutter, Space.sm, kPageGutter, Space.sm),
+                child: TextField(
+                  controller: _controller,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar en mi memoria…',
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.search),
+                      onPressed: _search,
+                    ),
+                  ),
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (_) => _search(),
                 ),
               ),
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _search(),
-            ),
-          ),
-          _KindFilterBar(
-            activeKind: activeKind,
-            onSelected: (kind) =>
-                ref.read(localGraphListProvider.notifier).setKind(kind),
-          ),
-          Expanded(
-            child: async.when(
-              loading: () =>
-                  const Center(child: CircularProgressIndicator()),
-              error: (error, _) => Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(24),
-                  child: Text('No se pudo abrir tu memoria: $error'),
+              _KindFilterBar(
+                activeKind: activeKind,
+                onSelected: (kind) =>
+                    ref.read(localGraphListProvider.notifier).setKind(kind),
+              ),
+              Expanded(
+                child: async.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (error, _) => Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(Space.xxl),
+                      child: Text('No se pudo abrir tu memoria: $error'),
+                    ),
+                  ),
+                  data: (state) => _NodeList(state: state),
                 ),
               ),
-              data: (state) => _NodeList(state: state),
-            ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
@@ -107,10 +115,10 @@ class _KindFilterBar extends StatelessWidget {
       height: 48,
       child: ListView(
         scrollDirection: Axis.horizontal,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        padding: const EdgeInsets.symmetric(horizontal: kPageGutter - Space.xs),
         children: [
           Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 4),
+            padding: const EdgeInsets.symmetric(horizontal: Space.xs),
             child: FilterChip(
               label: const Text('Todos'),
               selected: activeKind == null,
@@ -119,7 +127,7 @@ class _KindFilterBar extends StatelessWidget {
           ),
           for (final entry in kLocalGraphKinds)
             Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 4),
+              padding: const EdgeInsets.symmetric(horizontal: Space.xs),
               child: FilterChip(
                 label: Text(entry.label),
                 selected: activeKind == entry.kind,
@@ -140,26 +148,36 @@ class _NodeList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (state.nodes.isEmpty) {
+      final theme = Theme.of(context);
       return Center(
         child: Padding(
-          padding: const EdgeInsets.all(24),
+          padding: const EdgeInsets.all(Space.xxl),
           child: Text(
             state.isSearching
                 ? 'Sin resultados para "${state.query.trim()}".'
                 : 'Aún no hay nada en tu memoria. A medida que uses Axi, '
                     'aquí aparecerá lo que recuerde por ti.',
             textAlign: TextAlign.center,
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: theme.colorScheme.onSurfaceVariant,
+            ),
           ),
         ),
       );
     }
-    return ListView.builder(
+    return GroupedListView.builder(
+      padding: EdgeInsets.fromLTRB(
+        kPageGutter,
+        Space.sm,
+        kPageGutter,
+        Space.xxxl + MediaQuery.paddingOf(context).bottom,
+      ),
       itemCount: state.nodes.length,
       itemBuilder: (context, index) {
         final node = state.nodes[index];
-        return ListTile(
-          title: Text(node.label.isNotEmpty ? node.label : '(sin título)'),
-          subtitle: Text(_subtitle(node)),
+        return GroupedRow(
+          title: node.label.isNotEmpty ? node.label : '(sin título)',
+          subtitle: _subtitle(node),
           onTap: () => context.push('/settings/graph/${node.uuid}'),
         );
       },

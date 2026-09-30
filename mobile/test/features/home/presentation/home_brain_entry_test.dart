@@ -27,6 +27,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
 import 'package:lifeos/core/api/api_providers.dart';
+import 'package:lifeos/core/widgets/grouped_row.dart';
 import 'package:lifeos/features/connection/presentation/connection_screen.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
 
@@ -49,10 +50,10 @@ Future<void> _pumpHome(WidgetTester tester, ProviderContainer container) async {
 /// seam. That the rows are tappable at all is already covered by the existing
 /// home screen tests.
 Future<void> _pressRow(WidgetTester tester, String label) async {
-  final button = tester.widget<OutlinedButton>(
-    find.ancestor(of: find.text(label), matching: find.byType(OutlinedButton)),
+  final row = tester.widget<GroupedRow>(
+    find.ancestor(of: find.text(label), matching: find.byType(GroupedRow)),
   );
-  button.onPressed!();
+  row.onTap!();
   // Bounded pumps: a destination may open a (never-resolving in tests) local
   // graph store, so pumpAndSettle would hang on its loading spinner.
   await tester.pump();

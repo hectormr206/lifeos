@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/engine_failure_detail.dart';
 
 /// The collapsed "technical details" affordance under a model-failure message.
@@ -62,16 +63,16 @@ class _EngineFailureDetailsState extends State<EngineFailureDetails> {
         if (_expanded) ...[
           Container(
             width: double.infinity,
-            padding: const EdgeInsets.all(8),
+            padding: const EdgeInsets.all(Space.md),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(6),
+              color: theme.colorScheme.surfaceContainerHigh,
+              borderRadius: BorderRadius.circular(Radii.input),
             ),
             // Selectable as well as copyable: quoting one line of a long native
             // message is a normal thing to want.
             child: SelectableText(
               widget.detail.text,
-              style: theme.textTheme.labelSmall?.copyWith(fontFamily: 'monospace'),
+              style: theme.textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
             ),
           ),
           Align(

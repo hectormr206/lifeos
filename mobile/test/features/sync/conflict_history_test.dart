@@ -43,6 +43,23 @@ Future<void> _pump(
 }
 
 void main() {
+  testWidgets('a large history builds rows lazily', (tester) async {
+    final restored = <SyncConflict>[];
+    await _pump(
+      tester,
+      conflicts: [
+        for (var i = 0; i < 500; i++) _conflict(label: 'conflict $i'),
+      ],
+      onRestore: restored.add,
+    );
+
+    expect(find.byType(ListTile), findsWidgets);
+    expect(find.byType(ListTile).evaluate().length, lessThan(50));
+    expect(find.text('conflict 499'), findsNothing);
+    await tester.tap(find.text('Restaurar').first);
+    expect(restored, hasLength(1));
+  });
+
   testWidgets('a losing revision is listed with what it said', (tester) async {
     await _pump(tester, conflicts: [_conflict(label: 'cita del martes')]);
 

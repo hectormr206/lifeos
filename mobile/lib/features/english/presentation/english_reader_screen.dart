@@ -23,6 +23,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/passage_speaker.dart';
 import '../data/wikimedia_reading.dart';
 import '../data/word_gloss.dart';
@@ -195,8 +197,7 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
           ),
         ],
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
+      body: PageBody(
         children: [
           Text(
             l10n.englishFitLine(
@@ -206,11 +207,10 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
             style: theme.textTheme.labelLarge,
           ),
           if (reading.ranked.passage.section.isNotEmpty)
-            Text(reading.ranked.passage.section,
-                style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
+            SectionHeader(reading.ranked.passage.section),
+          const SizedBox(height: Space.sm),
           Text(l10n.englishReaderHint, style: theme.textTheme.bodySmall),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           Text.rich(
             TextSpan(
               style: theme.textTheme.bodyLarge?.copyWith(height: 1.6),
@@ -232,7 +232,7 @@ class _EnglishReaderScreenState extends ConsumerState<EnglishReaderScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: Space.xxl),
           Text(
             l10n.englishReaderCredit(
               reading.article.title,
@@ -297,43 +297,49 @@ class _GlossSheetState extends ConsumerState<_GlossSheet> {
     final lemma = widget.lemma != widget.word.toLowerCase()
         ? ' → ${widget.lemma}'
         : '';
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-      child: FutureBuilder<String?>(
-        future: _gloss,
-        builder: (context, snapshot) {
-          final done = snapshot.connectionState == ConnectionState.done;
-          final gloss = snapshot.data;
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              Text('${widget.word}$lemma', style: theme.textTheme.headlineSmall),
-              const SizedBox(height: 4),
-              Text(widget.context.sentence,
-                  style: const TextStyle(fontStyle: FontStyle.italic)),
-              const SizedBox(height: 16),
-              if (!done)
-                Text(l10n.englishReaderLooking)
-              else if (gloss == null)
-                Text(l10n.englishReaderNoGloss)
-              else
-                Text(gloss, style: theme.textTheme.titleLarge),
-              const SizedBox(height: 16),
-              switch (_save) {
-                _Save.saved => Text(l10n.englishReaderSaved),
-                _Save.failed => Text(
-                    l10n.englishReaderSaveFailed,
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
-                _Save.idle => FilledButton(
-                    onPressed: done ? () => _keep(gloss) : null,
-                    child: Text(l10n.englishReaderSave),
-                  ),
-              },
-            ],
-          );
-        },
+    return Center(
+      heightFactor: 1,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(kPageGutter, 0, kPageGutter, Space.xxl),
+          child: FutureBuilder<String?>(
+            future: _gloss,
+            builder: (context, snapshot) {
+              final done = snapshot.connectionState == ConnectionState.done;
+              final gloss = snapshot.data;
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('${widget.word}$lemma', style: theme.textTheme.headlineSmall),
+                  const SizedBox(height: Space.xs),
+                  Text(widget.context.sentence,
+                      style: const TextStyle(fontStyle: FontStyle.italic)),
+                  const SizedBox(height: Space.lg),
+                  if (!done)
+                    Text(l10n.englishReaderLooking)
+                  else if (gloss == null)
+                    Text(l10n.englishReaderNoGloss)
+                  else
+                    Text(gloss, style: theme.textTheme.titleLarge),
+                  const SizedBox(height: Space.lg),
+                  switch (_save) {
+                    _Save.saved => Text(l10n.englishReaderSaved),
+                    _Save.failed => Text(
+                        l10n.englishReaderSaveFailed,
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    _Save.idle => FilledButton(
+                        onPressed: done ? () => _keep(gloss) : null,
+                        child: Text(l10n.englishReaderSave),
+                      ),
+                  },
+                ],
+              );
+            },
+          ),
+        ),
       ),
     );
   }

@@ -12,6 +12,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/audio_importer.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/lexical_coverage.dart';
@@ -97,28 +99,27 @@ class _EnglishImportScreenState extends ConsumerState<EnglishImportScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishImportTitle)),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
+      body: PageBody(
         children: [
           Text(l10n.englishImportIntro),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           FilledButton.icon(
             onPressed: _working ? null : _pickAndImport,
             icon: const Icon(Icons.upload_file),
             label: Text(l10n.englishImportPick),
           ),
           if (_working) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Space.lg),
             LinearProgressIndicator(
               value: progress == null ? null : progress.done / progress.total,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Text(progress == null
                 ? l10n.englishImportPreparing
                 : l10n.englishImportProgress(progress.done, progress.total)),
           ],
           if (failure != null) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Space.lg),
             Text(_failureText(l10n, failure),
                 style: TextStyle(color: theme.colorScheme.error)),
           ],

@@ -13,6 +13,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
+import '../../../theme/lifeos_palette.dart';
 import '../domain/fsrs.dart';
 import '../domain/reader_tokens.dart';
 import '../domain/review_queue.dart';
@@ -127,7 +130,13 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
     }
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishReviewTitle)),
-      body: Padding(padding: const EdgeInsets.all(24), child: body),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: body,
+        ),
+      ),
     );
   }
 
@@ -147,25 +156,47 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
               l10n, scheduler.review(item.card, rating, now).due.difference(now)),
         );
 
-    return ListView(
+    return PageBody(
+      padding: const EdgeInsets.fromLTRB(kPageGutter, Space.xxl, kPageGutter, Space.xxxl),
       children: [
-        Text(lemma, style: theme.textTheme.headlineMedium),
-        const SizedBox(height: 8),
-        Text(l10n.englishReviewQuestion, style: theme.textTheme.bodySmall),
-        const SizedBox(height: 16),
-        Text.rich(TextSpan(
-          style: theme.textTheme.bodyLarge?.copyWith(height: 1.5),
-          children: [
-            for (final t in readerTokens(item.context.sentence))
-              TextSpan(
-                text: t.text,
-                style: isTheWord(t)
-                    ? const TextStyle(fontWeight: FontWeight.bold)
-                    : null,
-              ),
-          ],
-        )),
-        const SizedBox(height: 24),
+        Card(
+          margin: EdgeInsets.zero,
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(Radii.panel),
+            side: theme.brightness == Brightness.dark
+                ? BorderSide.none
+                : BorderSide(color: LifeOSPalette.of(context).hairline),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.all(Space.xxl),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(lemma, textAlign: TextAlign.center, style: theme.textTheme.displaySmall),
+                const SizedBox(height: Space.sm),
+                Text(l10n.englishReviewQuestion,
+                    textAlign: TextAlign.center,
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    )),
+                const SizedBox(height: Space.xl),
+                Text.rich(TextSpan(
+                  style: theme.textTheme.bodyLarge,
+                  children: [
+                    for (final t in readerTokens(item.context.sentence))
+                      TextSpan(
+                        text: t.text,
+                        style: isTheWord(t)
+                            ? const TextStyle(fontWeight: FontWeight.bold)
+                            : null,
+                      ),
+                  ],
+                )),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: Space.lg),
         if (!_revealed)
           FilledButton(
             onPressed: () => setState(() => _revealed = true),
@@ -174,7 +205,7 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
         else ...[
           Text(item.word.gloss ?? l10n.englishReviewNoGloss,
               style: theme.textTheme.titleLarge),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           for (final (label, rating) in [
             (l10n.englishReviewAgain, FsrsRating.again),
             (l10n.englishReviewHard, FsrsRating.hard),
@@ -182,7 +213,7 @@ class _EnglishReviewScreenState extends ConsumerState<EnglishReviewScreen> {
             (l10n.englishReviewEasy, FsrsRating.easy),
           ])
             Padding(
-              padding: const EdgeInsets.only(bottom: 8),
+              padding: const EdgeInsets.only(bottom: Space.sm),
               child: OutlinedButton(
                 onPressed: () => _answer(item, rating),
                 child: Text(answer(label, rating)),
@@ -204,11 +235,10 @@ class _End extends StatelessWidget {
   final String back;
 
   @override
-  Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
+  Widget build(BuildContext context) => PageBody(
         children: [
           Text(text),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           FilledButton(
             onPressed: () => Navigator.of(context).maybePop(),
             child: Text(back),

@@ -2,6 +2,8 @@
 // reminders screens (the viewer half of this screen is not localized yet
 // either — both localize together).
 import 'package:flutter/material.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../data/reminder_notifications.dart';
@@ -116,10 +118,10 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
               '${two(dueAt.day)}/${two(dueAt.month)}/${dueAt.year} ${two(dueAt.hour)}:${two(dueAt.minute)}';
           return Padding(
             padding: EdgeInsets.only(
-              left: 16,
-              right: 16,
-              top: 16,
-              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+              left: kPageGutter,
+              right: kPageGutter,
+              top: Space.lg,
+              bottom: MediaQuery.of(sheetContext).viewInsets.bottom + Space.lg,
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -127,15 +129,14 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
               children: [
                 Text('Editar recordatorio',
                     style: Theme.of(sheetContext).textTheme.titleMedium),
-                const SizedBox(height: 12),
+                const SizedBox(height: Space.md),
                 TextField(
                   controller: controller,
                   decoration: const InputDecoration(
                     labelText: '¿Qué te recuerdo?',
-                    border: OutlineInputBorder(),
                   ),
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: Space.md),
                 ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.schedule),
@@ -147,7 +148,7 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
                     if (picked != null) setSheetState(() => dueAt = picked);
                   },
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Space.sm),
                 Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -155,7 +156,7 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
                       onPressed: () => Navigator.of(sheetContext).pop(false),
                       child: const Text('Cancelar'),
                     ),
-                    const SizedBox(width: 8),
+                    const SizedBox(width: Space.sm),
                     FilledButton(
                       onPressed: () => Navigator.of(sheetContext).pop(true),
                       child: const Text('Guardar cambios'),
@@ -184,121 +185,136 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
   Widget build(BuildContext context) {
     final state = ref.watch(localRemindersNotifierProvider);
 
-    return Column(
-      children: [
-        // Errors (store unavailable, failed action) surface INLINE — a
-        // SnackBar here would float over the sibling tab's bottom bar.
-        if (state.error != null && state.reminders.isNotEmpty)
-          MaterialBanner(
-            content: Text(state.error!),
-            actions: [
-              TextButton(
-                onPressed: () => ref
+    return Align(
+      alignment: Alignment.topCenter,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+        child: Column(
+          children: [
+            // Keep store and action errors inline, above the refresh area.
+            if (state.error != null && state.reminders.isNotEmpty)
+              MaterialBanner(
+                content: Text(state.error!),
+                actions: [
+                  TextButton(
+                    onPressed: () => ref
+                        .read(localRemindersNotifierProvider.notifier)
+                        .refresh(),
+                    child: const Text('Reintentar'),
+                  ),
+                ],
+              ),
+            Expanded(
+              child: RefreshIndicator(
+                onRefresh: () => ref
                     .read(localRemindersNotifierProvider.notifier)
                     .refresh(),
-                child: const Text('Reintentar'),
+                child: _buildList(state),
               ),
-            ],
-          ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () =>
-                ref.read(localRemindersNotifierProvider.notifier).refresh(),
-            child: _buildList(state),
-          ),
-        ),
-        SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(8),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _controller,
-                    decoration: const InputDecoration(
-                      hintText: 'Ej. "comprar pan mañana a las 8"',
-                      border: OutlineInputBorder(),
-                    ),
-                    textInputAction: TextInputAction.send,
-                    onSubmitted: (_) => _create(),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                // Disabled while the box is empty. `_create` returned early
-                // on empty text, so tapping did nothing at all — no form, no
-                // message, no hint — and the only thing that communicated was
-                // that the app was broken. Grey says "not yet".
-                ValueListenableBuilder<TextEditingValue>(
-                  valueListenable: _controller,
-                  builder: (context, value, _) => IconButton(
-                    icon: const Icon(Icons.alarm_add),
-                    tooltip: 'Crear recordatorio local',
-                    onPressed: value.text.trim().isEmpty ? null : _create,
-                  ),
-                ),
-              ],
             ),
-          ),
+            SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(
+                    kPageGutter, Space.sm, kPageGutter, Space.md),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _controller,
+                        decoration: const InputDecoration(
+                          hintText: 'Ej. "comprar pan mañana a las 8"',
+                        ),
+                        textInputAction: TextInputAction.send,
+                        onSubmitted: (_) => _create(),
+                      ),
+                    ),
+                    const SizedBox(width: Space.sm),
+                    // An empty box offers nothing to create; preserve the
+                    // disabled affordance until meaningful text is entered.
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _controller,
+                      builder: (context, value, _) => IconButton(
+                        icon: const Icon(Icons.alarm_add),
+                        tooltip: 'Crear recordatorio local',
+                        onPressed: value.text.trim().isEmpty ? null : _create,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ],
         ),
-      ],
+      ),
     );
   }
 
   Widget _buildList(LocalRemindersUiState state) {
     if (state.loading) {
-      return const _ScrollableCenter(child: CircularProgressIndicator());
+      return const ScrollableCenter(child: CircularProgressIndicator());
     }
     if (state.error != null && state.reminders.isEmpty) {
-      return _ScrollableCenter(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24),
-              child: Text(state.error!, textAlign: TextAlign.center),
-            ),
-            const SizedBox(height: 16),
-            OutlinedButton(
-              onPressed: () =>
-                  ref.read(localRemindersNotifierProvider.notifier).refresh(),
-              child: const Text('Reintentar'),
-            ),
-          ],
-        ),
-      );
-    }
-    if (state.reminders.isEmpty) {
-      return const _ScrollableCenter(
-        child: Padding(
-          padding: EdgeInsets.all(24),
-          child: Text(
-            'No tienes recordatorios en este dispositivo.\n'
-            'Escribe uno abajo, por ejemplo: "llamar al doctor mañana a las 3".',
-            textAlign: TextAlign.center,
+      return _ScrollableEmptyState(
+        child: EmptyState(
+          icon: Icons.error_outline,
+          title: state.error!,
+          action: OutlinedButton(
+            onPressed: () => ref.read(localRemindersNotifierProvider.notifier).refresh(),
+            child: const Text('Reintentar'),
           ),
         ),
       );
     }
-    return ListView.builder(
+    if (state.reminders.isEmpty) {
+      return const _ScrollableEmptyState(
+        child: EmptyState(
+          icon: Icons.notifications_outlined,
+          title: 'No tienes recordatorios en este dispositivo.',
+          message: 'Escribe uno abajo, por ejemplo: "llamar al doctor mañana a las 3".',
+        ),
+      );
+    }
+    final notifier = ref.read(localRemindersNotifierProvider.notifier);
+    return GroupedListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, Space.xxl),
       itemCount: state.reminders.length,
       itemBuilder: (context, index) {
         final reminder = state.reminders[index];
         return _LocalReminderTile(
           reminder: reminder,
-          onDone: () => ref
-              .read(localRemindersNotifierProvider.notifier)
-              .complete(reminder),
-          onDelete: () =>
-              ref.read(localRemindersNotifierProvider.notifier).remove(reminder),
+          onDone: () => notifier.complete(reminder),
+          onDelete: () => notifier.remove(reminder),
           onEdit: () => _edit(reminder),
-          onToggleEnabled: (enabled) => ref
-              .read(localRemindersNotifierProvider.notifier)
-              .setEnabled(reminder, enabled),
+          onToggleEnabled: (enabled) => notifier.setEnabled(reminder, enabled),
         );
       },
     );
   }
+}
+
+/// Center when there is room, scroll when the keyboard or a short viewport
+/// leaves less height than the guidance needs. Retain pull-to-refresh physics.
+class _ScrollableEmptyState extends StatelessWidget {
+  const _ScrollableEmptyState({required this.child});
+
+  final EmptyState child;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) => ListView(
+      physics: const AlwaysScrollableScrollPhysics(),
+      children: [
+        ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: Padding(
+            padding: const EdgeInsets.all(kPageGutter),
+            child: child,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _LocalReminderTile extends StatelessWidget {
@@ -321,22 +337,28 @@ class _LocalReminderTile extends StatelessWidget {
     final fired = reminder.status == LocalReminderStatus.fired;
     final disabled = reminder.isDisabled;
     final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    String two(int n) => n.toString().padLeft(2, '0');
     return ListTile(
-      leading: Icon(
-        disabled
-            ? Icons.notifications_off_outlined
-            : (reminder.recurrence == ReminderRecurrence.daily
-                ? Icons.repeat
-                : Icons.alarm),
-        color: disabled
-            ? scheme.outline
-            : (fired ? scheme.tertiary : null),
+      minVerticalPadding: Space.md,
+      contentPadding: const EdgeInsets.symmetric(horizontal: Space.lg),
+      horizontalTitleGap: Space.md,
+      leading: Text(
+        '${two(reminder.dueAt.hour)}:${two(reminder.dueAt.minute)}',
+        style: text.titleLarge?.copyWith(
+          fontFeatures: const [FontFeature.tabularFigures()],
+          color: disabled ? scheme.onSurfaceVariant : (fired ? scheme.tertiary : scheme.onSurface),
+        ),
       ),
       title: Text(
         reminder.text,
-        style: disabled ? TextStyle(color: scheme.outline) : null,
+        style: text.bodyLarge?.copyWith(
+          fontWeight: FontWeight.w600,
+          color: disabled ? scheme.onSurfaceVariant : scheme.onSurface,
+        ),
       ),
-      subtitle: Text(_subtitle()),
+      subtitle: Text(_subtitle(),
+          style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -378,26 +400,5 @@ class _LocalReminderTile extends StatelessWidget {
     if (reminder.isDisabled) return '$base · desactivado';
     if (reminder.status == LocalReminderStatus.fired) return '$base · ya sonó';
     return base;
-  }
-}
-
-class _ScrollableCenter extends StatelessWidget {
-  const _ScrollableCenter({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) => ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(
-            height: constraints.maxHeight,
-            child: Center(child: child),
-          ),
-        ],
-      ),
-    );
   }
 }

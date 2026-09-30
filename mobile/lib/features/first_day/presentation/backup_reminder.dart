@@ -3,6 +3,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../core/graph/graph_providers.dart';
+import '../../../core/widgets/status_banner.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/backup_nag_store.dart';
 import '../domain/backup_nag.dart';
 
@@ -41,9 +43,15 @@ final shouldAskForBackupProvider = FutureProvider<bool>((ref) async {
   );
 });
 
+const _defaultMargin =
+    EdgeInsets.symmetric(horizontal: kPageGutter, vertical: Space.sm);
+
 /// La tarjeta. Aparece sola, dice qué se pierde y ofrece la salida en un toque.
 class BackupReminderBanner extends ConsumerWidget {
-  const BackupReminderBanner({super.key});
+  const BackupReminderBanner({super.key, this.margin});
+
+  /// Overrides [StatusBanner]'s default margin, for hosts that already pad.
+  final EdgeInsetsGeometry? margin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -53,52 +61,43 @@ class BackupReminderBanner extends ConsumerWidget {
     if (ask.value != true) return const SizedBox.shrink();
 
     final text = Theme.of(context).textTheme;
-    return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-      child: Padding(
-        padding: const EdgeInsets.all(14),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Icon(Icons.shield_outlined, size: 18),
-                const SizedBox(width: 10),
-                Text('Si pierdes este teléfono', style: text.titleSmall),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Todo lo que me has contado vive aquí dentro, y sólo aquí. Una '
-              'copia tarda un minuto en hacerse y se guarda cifrada donde tú '
-              'decidas: sólo tú puedes abrirla.',
-              style: text.bodySmall,
-            ),
-            const SizedBox(height: 10),
-            Row(
-              children: [
-                FilledButton(
-                  onPressed: () async {
-                    await ref.read(backupNagStoreProvider).markBackedUp();
-                    ref.invalidate(shouldAskForBackupProvider);
-                    if (context.mounted) context.push('/settings/backups');
-                  },
-                  child: const Text('Guardar mi copia'),
-                ),
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: () async {
-                    await ref
-                        .read(backupNagStoreProvider)
-                        .postpone(DateTime.now());
-                    ref.invalidate(shouldAskForBackupProvider);
-                  },
-                  child: const Text('Luego'),
-                ),
-              ],
-            ),
-          ],
-        ),
+    return StatusBanner(
+      margin: margin ?? _defaultMargin,
+      tone: BannerTone.warning,
+      icon: Icons.shield_outlined,
+      message: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Si pierdes este teléfono', style: text.titleSmall),
+          const SizedBox(height: Space.sm),
+          Text(
+            'Todo lo que me has contado vive aquí dentro, y sólo aquí. Una '
+            'copia tarda un minuto en hacerse y se guarda cifrada donde tú '
+            'decidas: sólo tú puedes abrirla.',
+            style: text.bodySmall,
+          ),
+          const SizedBox(height: Space.md),
+          Wrap(
+            spacing: Space.sm,
+            children: [
+              FilledButton(
+                onPressed: () async {
+                  await ref.read(backupNagStoreProvider).markBackedUp();
+                  ref.invalidate(shouldAskForBackupProvider);
+                  if (context.mounted) context.push('/settings/backups');
+                },
+                child: const Text('Guardar mi copia'),
+              ),
+              TextButton(
+                onPressed: () async {
+                  await ref.read(backupNagStoreProvider).postpone(DateTime.now());
+                  ref.invalidate(shouldAskForBackupProvider);
+                },
+                child: const Text('Luego'),
+              ),
+            ],
+          ),
+        ],
       ),
     );
   }

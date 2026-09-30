@@ -6,6 +6,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/clock/clock.dart';
 import 'package:lifeos/features/daily_digest/domain/daily_digest.dart';
 import 'package:lifeos/features/daily_digest/domain/daily_digest_schedule.dart';
 import 'package:lifeos/features/daily_digest/presentation/daily_digest_notifier.dart';
@@ -29,8 +30,13 @@ class _FixedDigest extends DailyDigestNotifier {
       const DailyDigestState(schedule: DailyDigestSchedule(enabled: false));
 }
 
+class _Clock implements Clock {
+  @override
+  DateTime now() => DateTime(2026, 7, 22, 12);
+}
+
 void main() {
-  final now = DateTime(2026, 7, 22, 12);
+  final now = _Clock().now();
 
   LocalDomainEntry entry(String uuid, String label, String type,
           {String? subject}) =>
@@ -42,72 +48,84 @@ void main() {
         data: {'type': type, 'subject': ?subject},
       );
 
-  testWidgets('golden: Mi vida — 2 people, 2 domains', (tester) async {
-    useGoldenSurface(tester);
-
-    final state = MiVidaState(
-      loading: false,
-      sections: [
-        DigestDomainSection(
-          domainKey: 'health',
-          domainTitle: 'Salud',
-          people: [
-            DigestPersonGroup(
-              personKey: '@self',
-              personLabel: 'Yo',
-              entries: [
-                entry('h1', 'Presión 122/77, pulso 55', 'blood_pressure'),
-                entry('h2', 'Glucosa 95 mg/dL', 'glucose'),
-              ],
-            ),
-            DigestPersonGroup(
-              personKey: 'esposa',
-              personLabel: 'Celia',
-              entries: [
-                entry('h3', 'Presión 120/60, pulso 49', 'blood_pressure',
-                    subject: 'esposa'),
-              ],
-            ),
-          ],
-        ),
-        DigestDomainSection(
-          domainKey: 'exercise',
-          domainTitle: 'Ejercicio',
-          people: [
-            DigestPersonGroup(
-              personKey: '@self',
-              personLabel: 'Yo',
-              entries: [
-                entry('e1', 'Corrió 5 km en la mañana', 'activity'),
-              ],
-            ),
-          ],
-        ),
-      ],
-      reminders: const [],
-    );
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [
-          miVidaNotifierProvider.overrideWith(() => _FixedMiVida(state)),
-          dailyDigestNotifierProvider.overrideWith(_FixedDigest.new),
+  final state = MiVidaState(
+    loading: false,
+    sections: [
+      DigestDomainSection(
+        domainKey: 'health',
+        domainTitle: 'Salud',
+        people: [
+          DigestPersonGroup(
+            personKey: '@self',
+            personLabel: 'Yo',
+            entries: [
+              entry('h1', 'Presión 122/77, pulso 55', 'blood_pressure'),
+              entry('h2', 'Glucosa 95 mg/dL', 'glucose'),
+            ],
+          ),
+          DigestPersonGroup(
+            personKey: 'esposa',
+            personLabel: 'Celia',
+            entries: [
+              entry('h3', 'Presión 120/60, pulso 49', 'blood_pressure',
+                  subject: 'esposa'),
+            ],
+          ),
         ],
-        child: MaterialApp(
-          theme: goldenTheme(),
-          locale: const Locale('es'),
-          localizationsDelegates: AppLocalizations.localizationsDelegates,
-          supportedLocales: AppLocalizations.supportedLocales,
-          home: const MiVidaScreen(),
-        ),
       ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
+      DigestDomainSection(
+        domainKey: 'exercise',
+        domainTitle: 'Ejercicio',
+        people: [
+          DigestPersonGroup(
+            personKey: '@self',
+            personLabel: 'Yo',
+            entries: [entry('e1', 'Corrió 5 km en la mañana', 'activity')],
+          ),
+        ],
+      ),
+    ],
+    reminders: const [],
+  );
 
-    await expectLater(
-      find.byType(MiVidaScreen),
-      matchesGoldenFile('images/mi_vida_screen.png'),
-    );
-  });
+  for (final (dark, wide) in [(false, false), (true, false), (false, true)]) {
+    testWidgets('golden: Mi vida — 2 people, 2 domains, dark=$dark wide=$wide', (tester) async {
+      useGoldenSurface(tester);
+      // A tall portrait captures every group in this scrolling page so visual
+      // review includes the second person and domain, not only the first fold.
+      tester.view.physicalSize = const Size(390, 1100) * kGoldenDpr;
+      if (wide) {
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [
+            clockProvider.overrideWithValue(_Clock()),
+            miVidaNotifierProvider.overrideWith(() => _FixedMiVida(state)),
+            dailyDigestNotifierProvider.overrideWith(_FixedDigest.new),
+          ],
+          child: MaterialApp(
+            debugShowCheckedModeBanner: false,
+            theme: dark ? goldenDarkTheme() : goldenTheme(),
+            locale: const Locale('es'),
+            localizationsDelegates: AppLocalizations.localizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            home: const MiVidaScreen(),
+          ),
+        ),
+      );
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300));
+      await expectLater(
+        find.byType(MiVidaScreen),
+        matchesGoldenFile(wide
+            ? 'images/mi_vida_screen_wide_light.png'
+            : dark
+                ? 'images/mi_vida_screen_dark.png'
+                : 'images/mi_vida_screen.png'),
+      );
+    });
+  }
 }

@@ -13,6 +13,7 @@ import 'package:lifeos/features/dictation/presentation/dictate_screen.dart';
 import 'package:lifeos/features/stt/domain/stt_model.dart';
 import 'package:lifeos/features/stt/presentation/stt_providers.dart';
 import 'package:lifeos/l10n/app_localizations.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 
 import '../chat/support/fake_chat_gateways.dart';
 import '../stt/support/fake_stt.dart';
@@ -81,6 +82,22 @@ void main() {
     expect(field.controller?.text, 'recordame comprar pan');
     expect(find.text('Enviar a Axi'), findsOneWidget);
     expect(find.text('Copiar'), findsOneWidget);
+  });
+
+  testWidgets('on a wide window the transcript sits in a card within the content column',
+      (tester) async {
+    tester.view.physicalSize = const Size(1280, 900);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.reset);
+
+    await tester.pumpWidget(_app());
+    await tester.pumpAndSettle();
+    await _tapMic(tester);
+    await _tapMic(tester);
+
+    final card = find.ancestor(of: find.byType(TextField), matching: find.byType(Card));
+    expect(card, findsOneWidget);
+    expect(tester.getSize(card).width, lessThanOrEqualTo(kContentMaxWidth));
   });
 
   group('failures are visible on screen', () {

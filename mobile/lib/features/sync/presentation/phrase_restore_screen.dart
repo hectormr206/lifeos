@@ -16,6 +16,8 @@
 import 'package:flutter/material.dart';
 
 import 'package:lifeos/core/sync/phrase.dart';
+import 'package:lifeos/core/widgets/widgets.dart';
+import 'package:lifeos/theme/lifeos_tokens.dart';
 
 class PhraseRestoreScreen extends StatefulWidget {
   const PhraseRestoreScreen({
@@ -73,21 +75,20 @@ class _PhraseRestoreScreenState extends State<PhraseRestoreScreen> {
           onPressed: widget.onCancel,
         ),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: PageBody(
         children: [
           Text(
             'Escribe las doce palabras de tu otro dispositivo.',
             style: text.titleMedium,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           Text(
             'Tiene que ser la misma frase. Es lo que hace que los dos '
             'dispositivos compartan la misma información: con una frase '
             'distinta, cada uno queda por su cuenta.',
-            style: text.bodyMedium,
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: Space.xl),
           TextField(
             controller: _controller,
             // Autocorrect would "fix" words the checksum then rejects, and the
@@ -97,19 +98,19 @@ class _PhraseRestoreScreenState extends State<PhraseRestoreScreen> {
             maxLines: 3,
             decoration: const InputDecoration(
               labelText: 'Tus doce palabras, separadas por espacios',
-              border: OutlineInputBorder(),
             ),
           ),
           if (_rejected)
-            Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: Text(
+            const StatusBanner(
+              tone: BannerTone.error,
+              icon: Icons.error_outline,
+              margin: EdgeInsets.only(top: Space.md),
+              message: Text(
                 'Esa frase no es válida. Revisa que estén las doce palabras y '
                 'que no haya ninguna cambiada.',
-                style: TextStyle(color: scheme.error),
               ),
             ),
-          const SizedBox(height: 20),
+          const SizedBox(height: Space.xl),
           FilledButton(
             onPressed: _submit,
             child: const Text('Activar sincronización'),

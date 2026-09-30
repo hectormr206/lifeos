@@ -5,7 +5,9 @@ import '../domain/update_initiator.dart';
 import '../domain/update_status.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import 'app_update_notifier.dart';
 
 /// "Actualizaciones de la app" screen (route `/settings/updates`, self-hosted
@@ -29,16 +31,19 @@ class AppUpdatesScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Actualizaciones de la app')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: PageBody(
         children: [
-          ListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Versión instalada'),
-            subtitle: Text(_installedVersionLabel(l10n, state)),
+          GroupedList(
+            children: [
+              GroupedRow(
+                title: 'Versión instalada',
+                subtitle: _installedVersionLabel(l10n, state),
+                showChevron: false,
+              ),
+              _LatestTile(status: status),
+            ],
           ),
-          _LatestTile(status: status),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.lg),
           FilledButton.icon(
             onPressed: state.checking ? null : () => notifier.check(),
             icon: state.checking
@@ -51,45 +56,63 @@ class AppUpdatesScreen extends ConsumerWidget {
             label: const Text('Buscar actualizaciones'),
           ),
           if (status is UpdateAvailable) ...[
-            const SizedBox(height: 16),
-            _UpdateActions(state: state, notifier: notifier, isDesktop: isDesktop),
-          ],
-          const Divider(height: 32),
-          Text('Preferencias', style: Theme.of(context).textTheme.titleMedium),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Buscar automáticamente'),
-            subtitle: const Text('Comprueba si hay actualizaciones al abrir la app.'),
-            value: state.settings.autoCheck,
-            onChanged: notifier.setAutoCheck,
-          ),
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            title: const Text('Notificar'),
-            subtitle: const Text('Avísame cuando haya una nueva versión.'),
-            value: state.settings.notify,
-            onChanged: notifier.setNotify,
-          ),
-          // APK-only. On desktop the systemd updater owns downloading, on its
-          // own hourly schedule, so a switch here would control nothing —
-          // and a control that is shown is a control that works.
-          if (!isDesktop)
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Descargar automáticamente'),
-              subtitle: const Text('Descarga el APK sin preguntar (siempre pides instalar).'),
-              value: state.settings.autoDownload,
-              onChanged: notifier.setAutoDownload,
+            const SizedBox(height: Space.md),
+            _UpdateActions(
+              state: state,
+              notifier: notifier,
+              isDesktop: isDesktop,
             ),
+          ],
+          const SectionHeader('Preferencias'),
+          GroupedList(
+            children: [
+              SwitchListTile(
+                contentPadding: _switchPadding,
+                title: const Text('Buscar automáticamente'),
+                subtitle: const Text(
+                  'Comprueba si hay actualizaciones al abrir la app.',
+                ),
+                value: state.settings.autoCheck,
+                onChanged: notifier.setAutoCheck,
+              ),
+              SwitchListTile(
+                contentPadding: _switchPadding,
+                title: const Text('Notificar'),
+                subtitle: const Text('Avísame cuando haya una nueva versión.'),
+                value: state.settings.notify,
+                onChanged: notifier.setNotify,
+              ),
+              // APK-only. On desktop the systemd updater owns downloading, on its
+              // own hourly schedule, so a switch here would control nothing —
+              // and a control that is shown is a control that works.
+              if (!isDesktop)
+                SwitchListTile(
+                  contentPadding: _switchPadding,
+                  title: const Text('Descargar automáticamente'),
+                  subtitle: const Text(
+                    'Descarga el APK sin preguntar (siempre pides instalar).',
+                  ),
+                  value: state.settings.autoDownload,
+                  onChanged: notifier.setAutoDownload,
+                ),
+            ],
+          ),
           if (state.error != null) ...[
-            const SizedBox(height: 16),
-            Text(state.error!, style: TextStyle(color: Theme.of(context).colorScheme.error)),
+            const SizedBox(height: Space.lg),
+            StatusBanner(
+              tone: BannerTone.error,
+              icon: Icons.error_outline,
+              margin: EdgeInsets.zero,
+              message: Text(state.error!),
+            ),
           ],
         ],
       ),
     );
   }
 }
+
+const _switchPadding = EdgeInsets.symmetric(horizontal: Space.lg);
 
 /// What the "Versión instalada" line says, including the two honest ways it can
 /// have nothing to say.
@@ -124,19 +147,27 @@ class _LatestTile extends StatelessWidget {
       case UpdateUnknown(:final reason):
         subtitle = reason ?? 'Sin información de actualización.';
     }
-    return ListTile(
-      contentPadding: EdgeInsets.zero,
-      title: const Text('Última versión disponible'),
-      subtitle: Text(subtitle),
+    return GroupedRow(
+      title: 'Última versión disponible',
+      subtitle: subtitle,
+      subtitleMaxLines: null,
+      showChevron: false,
       trailing: status is UpdateAvailable
-          ? Icon(Icons.new_releases, color: Theme.of(context).colorScheme.primary)
+          ? Icon(
+              Icons.new_releases,
+              color: Theme.of(context).colorScheme.primary,
+            )
           : null,
     );
   }
 }
 
 class _UpdateActions extends StatelessWidget {
-  const _UpdateActions({required this.state, required this.notifier, required this.isDesktop});
+  const _UpdateActions({
+    required this.state,
+    required this.notifier,
+    required this.isDesktop,
+  });
 
   final AppUpdateUiState state;
   final AppUpdateNotifier notifier;
@@ -148,9 +179,9 @@ class _UpdateActions extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     if (isDesktop) return _desktopActions(context);
-    final downloading = state.downloadProgress != null && state.downloadedApkPath == null;
+    final downloading =
+        state.downloadProgress != null && state.downloadedApkPath == null;
     final ready = state.downloadedApkPath != null;
     final pct = ((state.downloadProgress ?? 0) * 100).round();
 
@@ -159,26 +190,30 @@ class _UpdateActions extends StatelessWidget {
       children: [
         if (downloading) ...[
           LinearProgressIndicator(value: state.downloadProgress),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           Text('Descargando… $pct%'),
-          const SizedBox(height: 12),
+          const SizedBox(height: Space.md),
         ],
         // Missing "install unknown apps" grant: guide the user to enable it.
         // Once granted and back in the app, the install continues on its own
         // (see AppUpdateNotifier.onAppResumed) — no second tap needed.
         if (state.installHintNeeded) ...[
-          Text(
-            'Activa "Instalar apps desconocidas" para completar la instalación. '
-            'En cuanto lo hagas, la instalación continúa automáticamente.',
-            style: TextStyle(color: scheme.error),
+          const StatusBanner(
+            tone: BannerTone.warning,
+            icon: Icons.warning_amber,
+            margin: EdgeInsets.zero,
+            message: Text(
+              'Activa "Instalar apps desconocidas" para completar la instalación. '
+              'En cuanto lo hagas, la instalación continúa automáticamente.',
+            ),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           OutlinedButton.icon(
             onPressed: notifier.openInstallSettings,
             icon: const Icon(Icons.settings),
             label: const Text('Abrir ajustes'),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
         ],
         // Idle: a single button runs the whole flow (download → auto-install).
         if (!downloading && !ready && !state.installHintNeeded)
@@ -209,48 +244,34 @@ class _UpdateActions extends StatelessWidget {
   /// `DesktopUpdateWatcher`, which explains what is observable and what is not.
   Widget _desktopActions(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
     final version = state.desktopUpdateVersionName;
 
     switch (state.desktopUpdatePhase) {
       case DesktopUpdatePhase.waiting:
-        return _statusRow(
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          l10n.desktopUpdateWaiting,
-        );
+        return _progressRow(context, l10n.desktopUpdateWaiting);
       case DesktopUpdatePhase.applied:
-        return _statusRow(
-          Icon(Icons.check_circle, color: scheme.primary),
+        return _banner(
+          BannerTone.success,
+          Icons.check_circle,
           (version == null || version.isEmpty)
               ? l10n.desktopUpdateAppliedUnnamed
               : l10n.desktopUpdateApplied(version),
         );
       case DesktopUpdatePhase.restarting:
-        return _statusRow(
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          ),
-          l10n.desktopUpdateRestarting,
-        );
+        return _progressRow(context, l10n.desktopUpdateRestarting);
       case DesktopUpdatePhase.notWatched:
-        return _statusRow(
-          Icon(Icons.error_outline, color: scheme.error),
+        return _banner(
+          BannerTone.error,
+          Icons.error_outline,
           l10n.desktopUpdateNotWatched,
-          color: scheme.error,
         );
       case DesktopUpdatePhase.notApplied:
-        return _statusRow(
-          Icon(Icons.warning_amber, color: scheme.error),
+        return _banner(
+          BannerTone.error,
+          Icons.warning_amber,
           (version == null || version.isEmpty)
               ? l10n.desktopUpdateNotConfirmedUnnamed
               : l10n.desktopUpdateNotConfirmed(version),
-          color: scheme.error,
         );
       case DesktopUpdatePhase.idle:
         return Column(
@@ -264,22 +285,38 @@ class _UpdateActions extends StatelessWidget {
               icon: const Icon(Icons.system_update),
               label: const Text('Actualizar ahora'),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Text(
               'LifeOS también se actualiza solo cada hora, sin abrir la terminal.',
-              style: Theme.of(context).textTheme.bodySmall,
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
             ),
           ],
         );
     }
   }
 
-  Widget _statusRow(Widget leading, String message, {Color? color}) => Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          leading,
-          const SizedBox(width: 8),
-          Expanded(child: Text(message, style: TextStyle(color: color))),
-        ],
+  Widget _progressRow(BuildContext context, String message) => Row(
+    crossAxisAlignment: CrossAxisAlignment.start,
+    children: [
+      const SizedBox(
+        width: 20,
+        height: 20,
+        child: CircularProgressIndicator(strokeWidth: 2),
+      ),
+      const SizedBox(width: Space.sm),
+      Expanded(
+        child: Text(message, style: Theme.of(context).textTheme.bodyMedium),
+      ),
+    ],
+  );
+
+  Widget _banner(BannerTone tone, IconData icon, String message) =>
+      StatusBanner(
+        tone: tone,
+        icon: icon,
+        margin: EdgeInsets.zero,
+        message: Text(message),
       );
 }

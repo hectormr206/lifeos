@@ -1,6 +1,7 @@
 // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep (the domains
 // screens are not localized yet — they localize together in a later pass).
-import 'package:lifeos/theme/lifeos_theme.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import 'package:lifeos/features/memory/domain/relationship_reminders.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -56,9 +57,9 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
         child: ListView(
           shrinkWrap: true,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('¿Qué quieres registrar?', style: TextStyle(fontWeight: FontWeight.bold)),
+            Padding(
+              padding: const EdgeInsets.all(kPageGutter),
+              child: Text('¿Qué quieres registrar?', style: Theme.of(sheetContext).textTheme.titleMedium),
             ),
             for (final type in types)
               ListTile(
@@ -80,10 +81,10 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
       isScrollControlled: true,
       builder: (sheetContext) => Padding(
         padding: EdgeInsets.only(
-          left: 16,
-          right: 16,
-          top: 16,
-          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 16,
+          left: kPageGutter,
+          right: kPageGutter,
+          top: Space.lg,
+          bottom: MediaQuery.of(sheetContext).viewInsets.bottom + Space.lg,
         ),
         child: SingleChildScrollView(
           child: Column(
@@ -94,7 +95,7 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
                 entry == null ? type.label : 'Editar: ${type.label}',
                 style: Theme.of(sheetContext).textTheme.titleMedium,
               ),
-              const SizedBox(height: 8),
+              const SizedBox(height: Space.sm),
               DomainEntryForm(
                 spec: type.fields,
                 initialValues: entry == null ? null : {...entry.data, 'ts': entry.timestamp.toLocal()},
@@ -147,134 +148,159 @@ class _LocalDomainTabState extends ConsumerState<LocalDomainTab> {
               onPressed: _openCreate,
               child: const Icon(Icons.add),
             ),
-      body: Column(
-        children: [
-          if (state.error != null && state.entries.isNotEmpty)
-            MaterialBanner(
-              content: Text(state.error!),
-              actions: [TextButton(onPressed: notifier.refresh, child: const Text('Reintentar'))],
-            ),
-          if (widget.descriptor.key == 'finance' && state.summary != null)
-            _FinanceSummaryTiles(summary: state.summary!),
-          if (state.reminders != null && !state.reminders!.isEmpty)
-            _RelationshipReminders(reminders: state.reminders!)
-          // Nothing to remind about YET, but this is the domain where the
-          // whole point is invisible until you start: the card used to
-          // collapse and take with it the only trace that any of it existed
-          // ("estoy en blanco en esto"). A feature you cannot find is a
-          // feature you do not have.
-          else if (widget.descriptor.key == 'relationships')
-            const _RelationshipsInvitation(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: TextField(
-              controller: _searchController,
-              decoration: InputDecoration(
-                hintText: 'Buscar…',
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
-                isDense: true,
-                suffixIcon: state.query.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          _searchController.clear();
-                          notifier.setQuery('');
-                        },
-                      ),
-              ),
-              onChanged: notifier.setQuery,
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
-            child: SegmentedButton<LocalEntryPeriod>(
-              segments: [
-                for (final period in LocalEntryPeriod.values)
-                  ButtonSegment(value: period, label: Text(period.label)),
-              ],
-              selected: {state.period},
-              onSelectionChanged: (selection) => notifier.setPeriod(selection.first),
-            ),
-          ),
-          if (_types.isNotEmpty)
-            SizedBox(
-              height: 48,
-              child: ListView(
-                scrollDirection: Axis.horizontal,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: ChoiceChip(
-                      label: const Text('Todos'),
-                      selected: state.typeFilter == null,
-                      onSelected: (_) => notifier.setTypeFilter(null),
-                    ),
+      body: Align(
+        alignment: Alignment.topCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Column(
+            children: [
+              if (state.error != null && state.entries.isNotEmpty)
+                MaterialBanner(
+                  content: Text(state.error!),
+                  actions: [TextButton(onPressed: notifier.refresh, child: const Text('Reintentar'))],
+                ),
+              if (widget.descriptor.key == 'finance' && state.summary != null)
+                _FinanceSummaryTiles(summary: state.summary!),
+              if (state.reminders != null && !state.reminders!.isEmpty)
+                _RelationshipReminders(reminders: state.reminders!)
+              // Nothing to remind about YET, but this is the domain where the
+              // whole point is invisible until you start: the card used to
+              // collapse and take with it the only trace that any of it existed
+              // ("estoy en blanco en esto"). A feature you cannot find is a
+              // feature you do not have.
+              else if (widget.descriptor.key == 'relationships')
+                const _RelationshipsInvitation(),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, 0),
+                child: TextField(
+                  controller: _searchController,
+                  decoration: InputDecoration(
+                    hintText: 'Buscar…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: state.query.isEmpty
+                        ? null
+                        : IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              _searchController.clear();
+                              notifier.setQuery('');
+                            },
+                          ),
                   ),
-                  for (final type in _types)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: ChoiceChip(
-                        label: Text(type.label),
-                        selected: state.typeFilter == type.type,
-                        onSelected: (_) => notifier.setTypeFilter(type.type),
-                      ),
-                    ),
-                ],
+                  onChanged: notifier.setQuery,
+                ),
               ),
-            ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: notifier.refresh,
-              child: _buildList(state),
-            ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(kPageGutter, Space.md, kPageGutter, 0),
+                child: SegmentedButton<LocalEntryPeriod>(
+                  segments: [
+                    for (final period in LocalEntryPeriod.values)
+                      ButtonSegment(value: period, label: Text(period.label)),
+                  ],
+                  selected: {state.period},
+                  onSelectionChanged: (selection) => notifier.setPeriod(selection.first),
+                ),
+              ),
+              if (_types.isNotEmpty)
+                SizedBox(
+                  height: Space.huge,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: const EdgeInsets.symmetric(horizontal: kPageGutter, vertical: Space.xs),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: Space.sm),
+                        child: ChoiceChip(
+                          label: const Text('Todos'),
+                          selected: state.typeFilter == null,
+                          onSelected: (_) => notifier.setTypeFilter(null),
+                        ),
+                      ),
+                      for (final type in _types)
+                        Padding(
+                          padding: const EdgeInsets.only(right: Space.sm),
+                          child: ChoiceChip(
+                            label: Text(type.label),
+                            selected: state.typeFilter == type.type,
+                            onSelected: (_) => notifier.setTypeFilter(type.type),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: notifier.refresh,
+                  child: _buildList(state),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 
   Widget _buildList(LocalDomainUiState state) {
     if (state.loading) {
-      return const _ScrollableCenter(child: CircularProgressIndicator());
+      return const ScrollableCenter(child: CircularProgressIndicator());
     }
     if (state.error != null && state.entries.isEmpty) {
-      return _ScrollableCenter(
+      return ScrollableCenter(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
+          padding: const EdgeInsets.symmetric(horizontal: kPageGutter),
           child: Text(state.error!, textAlign: TextAlign.center),
         ),
       );
     }
     if (state.entries.isEmpty) {
-      return const _ScrollableCenter(
-        child: Text('Aún no hay registros en este dispositivo.\nUsa el botón + para agregar el primero.',
-            textAlign: TextAlign.center),
+      // The relationships invitation can leave less height than the empty
+      // state needs. Center when it fits; otherwise keep the whole state
+      // reachable by scrolling, with pull-to-refresh still available.
+      return LayoutBuilder(
+        builder: (context, constraints) => ListView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          children: [
+            ConstrainedBox(
+              constraints: BoxConstraints(minHeight: constraints.maxHeight),
+              child: const Padding(
+                padding: EdgeInsets.all(kPageGutter),
+                child: EmptyState(
+                  icon: Icons.inbox_outlined,
+                  title: 'Aún no hay registros en este dispositivo.',
+                  message: 'Usa el botón + para agregar el primero.',
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     }
 
     // Grouped by LOCAL calendar day, newest first (entries arrive sorted).
     final rows = <Widget>[];
     DateTime? currentDay;
+    var entries = <Widget>[];
     for (final entry in state.entries) {
       final local = entry.timestamp.toLocal();
       final day = DateTime(local.year, local.month, local.day);
       if (currentDay != day) {
         currentDay = day;
+        if (entries.isNotEmpty) rows.add(GroupedList(children: entries));
+        entries = <Widget>[];
         rows.add(_DayHeader(day: day));
       }
-      rows.add(_EntryRow(
+      entries.add(_EntryRow(
         entry: entry,
         editType: localEntryTypeFor(widget.descriptor.key, entry.type),
         onEdit: (type) => _openForm(type: type, entry: entry),
         onDelete: () => _confirmDelete(entry),
       ));
     }
+    if (entries.isNotEmpty) rows.add(GroupedList(children: entries));
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
-      padding: const EdgeInsets.only(bottom: 88), // keep the FAB off the last row
+      padding: const EdgeInsets.fromLTRB(kPageGutter, 0, kPageGutter, Space.huge + Space.huge), // keep the FAB off the last row
       children: rows,
     );
   }
@@ -291,13 +317,13 @@ class _FinanceSummaryTiles extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, 0),
       child: Row(
         children: [
           _tile(context, 'Gastos', summary.gastos, scheme.error),
-          const SizedBox(width: 8),
+          const SizedBox(width: Space.sm),
           _tile(context, 'Ingresos', summary.ingresos, scheme.primary),
-          const SizedBox(width: 8),
+          const SizedBox(width: Space.sm),
           _tile(context, 'Balance', summary.balance, summary.balance < 0 ? scheme.error : scheme.primary),
         ],
       ),
@@ -309,11 +335,11 @@ class _FinanceSummaryTiles extends StatelessWidget {
       child: Card(
         margin: EdgeInsets.zero,
         child: Padding(
-          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+          padding: const EdgeInsets.symmetric(vertical: Space.md, horizontal: Space.sm),
           child: Column(
             children: [
               Text(label, style: Theme.of(context).textTheme.labelMedium),
-              const SizedBox(height: 4),
+              const SizedBox(height: Space.xs),
               Text(
                 '\$${value.toStringAsFixed(2)}',
                 style: Theme.of(context).textTheme.titleSmall?.copyWith(color: color),
@@ -345,10 +371,7 @@ class _DayHeader extends StatelessWidget {
       String two(int n) => n.toString().padLeft(2, '0');
       text = '${two(day.day)}/${two(day.month)}/${day.year}';
     }
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      child: Text(text, style: Theme.of(context).textTheme.labelLarge),
-    );
+    return SectionHeader(text);
   }
 }
 
@@ -375,9 +398,10 @@ class _EntryRow extends StatelessWidget {
     final subtitle = editType != null
         ? '${editType!.label} · ${two(local.hour)}:${two(local.minute)}'
         : 'Desde el chat · ${two(local.hour)}:${two(local.minute)}';
-    return ListTile(
-      title: Text(entry.label),
-      subtitle: Text(subtitle),
+    return GroupedRow(
+      title: entry.label,
+      subtitle: subtitle,
+      showChevron: false,
       trailing: PopupMenuButton<String>(
         tooltip: 'Acciones',
         onSelected: (action) {
@@ -392,25 +416,6 @@ class _EntryRow extends StatelessWidget {
     );
   }
 }
-
-class _ScrollableCenter extends StatelessWidget {
-  const _ScrollableCenter({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) => ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(height: constraints.maxHeight, child: Center(child: child)),
-        ],
-      ),
-    );
-  }
-}
-
 
 /// Relaciones: the birthdays coming up and the people worth writing to.
 ///
@@ -436,7 +441,8 @@ class _RelationshipReminders extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
-    final hint = Theme.of(context).hintColor;
+    final scheme = Theme.of(context).colorScheme;
+    final hint = scheme.onSurfaceVariant;
 
     // Birthdays already carried by a nudge, so they are not printed twice.
     final claimed = <String>{
@@ -455,20 +461,20 @@ class _RelationshipReminders extends StatelessWidget {
     }
 
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      margin: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, 0),
       child: Padding(
-        padding: const EdgeInsets.all(12),
+        padding: const EdgeInsets.all(Space.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             for (final d in reminders.due)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 5),
+                padding: const EdgeInsets.symmetric(vertical: Space.xs),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.waving_hand_outlined, size: 18, color: LifeOSColors.teal),
-                    const SizedBox(width: 10),
+                    Icon(Icons.waving_hand_outlined, size: 20, color: scheme.primary),
+                    const SizedBox(width: Space.md),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -488,15 +494,15 @@ class _RelationshipReminders extends StatelessWidget {
                 ),
               ),
             if (reminders.due.isNotEmpty && unclaimed.isNotEmpty)
-              Divider(height: 16, color: hint.withValues(alpha: 0.2)),
+              const SizedBox(height: Space.xxl),
             for (final b in unclaimed)
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(vertical: Space.xs),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Icon(Icons.cake_outlined, size: 18, color: LifeOSColors.teal),
-                    const SizedBox(width: 10),
+                    Icon(Icons.cake_outlined, size: 20, color: scheme.primary),
+                    const SizedBox(width: Space.md),
                     Expanded(child: Text(b.describe(), style: textTheme.bodyMedium)),
                   ],
                 ),
@@ -510,14 +516,14 @@ class _RelationshipReminders extends StatelessWidget {
             // language. Rendered quiet and last so it never competes with the
             // actionable rows above.
             if (reminders.loveLanguages != null) ...[
-              Divider(height: 16, color: hint.withValues(alpha: 0.2)),
+              const SizedBox(height: Space.xxl),
               Padding(
-                padding: const EdgeInsets.symmetric(vertical: 4),
+                padding: const EdgeInsets.symmetric(vertical: Space.xs),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Icon(Icons.favorite_outline, size: 18, color: hint),
-                    const SizedBox(width: 10),
+                    const SizedBox(width: Space.md),
                     Expanded(
                       child: Text(
                         reminders.loveLanguages!.describe(),
@@ -547,21 +553,21 @@ class _RelationshipsInvitation extends StatelessWidget {
   Widget build(BuildContext context) {
     final text = Theme.of(context).textTheme;
     return Card(
-      margin: const EdgeInsets.fromLTRB(12, 8, 12, 0),
+      margin: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, 0),
       child: Padding(
-        padding: const EdgeInsets.all(14),
+        padding: const EdgeInsets.all(Space.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               children: [
-                const Icon(Icons.favorite_border,
-                    size: 18, color: LifeOSColors.teal),
-                const SizedBox(width: 10),
+                Icon(Icons.favorite_border,
+                    size: 20, color: Theme.of(context).colorScheme.primary),
+                const SizedBox(width: Space.md),
                 Text('Personas y pareja', style: text.titleSmall),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Text(
               'Aquí viven las personas que te importan. Guarda su fecha de '
               'nacimiento y te aviso unos días antes del cumpleaños, en todos '
@@ -569,17 +575,17 @@ class _RelationshipsInvitation extends StatelessWidget {
               'buscarlas, te lo recuerdo — sin que tengas que acordarte tú.',
               style: text.bodySmall,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Text(
               'Y con "Pareja" puedes ir anotando lo que hiciste por ella y lo '
               'que ella te dijo que le gustó. Con el tiempo se nota qué es lo '
               'que de verdad valora — que casi nunca es lo que uno supone.',
               style: text.bodySmall,
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             Text(
               'Empieza con el botón de abajo, o cuéntaselo a Axi en el chat.',
-              style: text.bodySmall?.copyWith(color: Theme.of(context).hintColor),
+              style: text.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant),
             ),
           ],
         ),

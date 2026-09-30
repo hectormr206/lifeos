@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -6,8 +7,11 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 
-import '../../../core/widgets/pending_sync_banner.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_theme.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../assistant/presentation/assistant_providers.dart';
 import '../../local_model/domain/generation_metrics.dart';
 import '../../local_model/domain/local_llm_engine.dart' show LocalModelConfig;
@@ -543,7 +547,19 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       // then reflows the message list so recent messages stay visible above it.
       resizeToAvoidBottomInset: true,
       appBar: AppBar(
-        title: Text(AppLocalizations.of(context).chatTitle),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Image.asset(
+              'assets/branding/axi-512.png',
+              width: 30,
+              height: 30,
+              excludeFromSemantics: true,
+            ),
+            const SizedBox(width: Space.sm),
+            Text(AppLocalizations.of(context).chatTitle),
+          ],
+        ),
         actions: [
           IconButton(
             icon: const Icon(Icons.record_voice_over),
@@ -597,23 +613,17 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             child: Center(
               child: Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 32),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    const Text(
-                      'No pude abrir tu conversación guardada. Sigue ahí: '
+                child: EmptyState(
+                  icon: Icons.history,
+                  title: 'No pude abrir tu conversación guardada. Sigue ahí: '
                       'esto es un problema al leerla, no algo que se haya '
                       'borrado.',
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 12),
-                    FilledButton(
-                      onPressed: () => ref
-                          .read(chatNotifierProvider.notifier)
-                          .retryHistory(),
-                      child: const Text('Reintentar'),
-                    ),
-                  ],
+                  action: FilledButton(
+                    onPressed: () => ref
+                        .read(chatNotifierProvider.notifier)
+                        .retryHistory(),
+                    child: const Text('Reintentar'),
+                  ),
                 ),
               ),
             ),
@@ -646,12 +656,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
           ),
         if (chat.sending) const _TypingIndicator(),
         SafeArea(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              if (_hasPendingImages) _pendingImagesStrip(context),
-              _buildInputBar(context, chat.sending, modelLoading),
-            ],
+          child: _ChatColumn(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_hasPendingImages) _pendingImagesStrip(context),
+                _buildInputBar(context, chat.sending, modelLoading),
+              ],
+            ),
           ),
         ),
       ],
@@ -684,77 +696,109 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     final searchAvailable =
         ref.watch(webSearchSettingsProvider).provider != WebSearchProvider.none;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(6, 6, 6, 6),
+      padding: const EdgeInsets.symmetric(
+        horizontal: Space.sm,
+        vertical: Space.sm,
+      ),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
-          if (searchAvailable)
-            IconButton(
-              icon: Icon(
-                Icons.public,
-                color: webSearchOn ? scheme.primary : null,
-              ),
-              tooltip: AppLocalizations.of(context).chatWebSearchTooltip,
-              onPressed: () =>
-                  ref.read(webSearchEnabledProvider.notifier).toggle(),
-            ),
-          IconButton(
-            icon: const Icon(Icons.attach_file),
-            tooltip: AppLocalizations.of(context).chatAttachTooltip,
-            onPressed: busy ? null : _openAttachSheet,
-          ),
           Expanded(
-            // The text field stays MOUNTED while recording, with the recording
-            // indicator drawn ON TOP of it (not swapping it out). Swapping it
-            // out unfocused the field, which dismissed the keyboard and shifted
-            // the whole input bar — and the mic — DOWNWARD, out from under the
-            // user's finger mid-press. Keeping the field mounted preserves focus
-            // and the keyboard state, so the layout never jumps when recording
-            // begins. The overlay is opaque and ignores pointers (the record
-            // gesture is captured by the mic [Listener], so slide-to-cancel is
-            // unaffected).
-            child: Stack(
-              children: [
-                _textFieldFor(scheme),
-                if (_recording)
-                  Positioned.fill(
-                    child: AbsorbPointer(child: _recordingIndicator(context)),
+            child: Container(
+              decoration: BoxDecoration(
+                color: _composerFill(scheme),
+                borderRadius: BorderRadius.circular(28),
+                border: scheme.brightness == Brightness.light
+                    ? Border.all(color: LifeOSPalette.of(context).hairline)
+                    : null,
+              ),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  if (searchAvailable)
+                    IconButton(
+                      icon: Icon(
+                        Icons.public,
+                        color: webSearchOn ? scheme.primary : null,
+                      ),
+                      tooltip: AppLocalizations.of(context).chatWebSearchTooltip,
+                      onPressed: () =>
+                          ref.read(webSearchEnabledProvider.notifier).toggle(),
+                    ),
+                  IconButton(
+                    icon: const Icon(Icons.attach_file),
+                    tooltip: AppLocalizations.of(context).chatAttachTooltip,
+                    onPressed: busy ? null : _openAttachSheet,
                   ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 4),
-          // Press-and-hold to record a voice note (WhatsApp-style). A raw
-          // [Listener] (not a long-press GestureDetector) so pointer-up AND
-          // pointer-cancel both reliably end the recording — the gesture can
-          // never be stranded "recording forever" the way onLongPressEnd could
-          // when the arena stole the pointer.
-          Listener(
-            behavior: HitTestBehavior.opaque,
-            onPointerDown: _onMicPointerDown,
-            onPointerMove: _onMicPointerMove,
-            onPointerUp: _onMicPointerUp,
-            onPointerCancel: _onMicPointerCancel,
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Icon(
-                Icons.mic,
-                color: _recording ? scheme.error : scheme.primary,
+                  Expanded(
+                    // The text field stays MOUNTED while recording, with the recording
+                    // indicator drawn ON TOP of it (not swapping it out). Swapping it
+                    // out unfocused the field, which dismissed the keyboard and shifted
+                    // the whole input bar — and the mic — DOWNWARD, out from under the
+                    // user's finger mid-press. Keeping the field mounted preserves focus
+                    // and the keyboard state, so the layout never jumps when recording
+                    // begins. The overlay is opaque and ignores pointers (the record
+                    // gesture is captured by the mic [Listener], so slide-to-cancel is
+                    // unaffected).
+                    child: Stack(
+                      children: [
+                        _textFieldFor(),
+                        if (_recording)
+                          Positioned.fill(
+                            child: AbsorbPointer(
+                              child: _recordingIndicator(context),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: Space.xs),
+                  // Press-and-hold to record a voice note (WhatsApp-style). A raw
+                  // [Listener] (not a long-press GestureDetector) so pointer-up AND
+                  // pointer-cancel both reliably end the recording — the gesture can
+                  // never be stranded "recording forever" the way onLongPressEnd could
+                  // when the arena stole the pointer.
+                  Listener(
+                    behavior: HitTestBehavior.opaque,
+                    onPointerDown: _onMicPointerDown,
+                    onPointerMove: _onMicPointerMove,
+                    onPointerUp: _onMicPointerUp,
+                    onPointerCancel: _onMicPointerCancel,
+                    child: Padding(
+                      padding: const EdgeInsets.all(Space.md),
+                      child: Icon(
+                        Icons.mic,
+                        color: _recording ? scheme.error : scheme.primary,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
-          IconButton(
-            icon: const Icon(Icons.send),
-            tooltip: AppLocalizations.of(context).chatSendTooltip,
-            color: scheme.primary,
-            onPressed: (busy || !_canSend) ? null : _send,
+          const SizedBox(width: Space.sm),
+          SizedBox(
+            width: 48,
+            height: 48,
+            child: IconButton.filled(
+              icon: const Icon(Icons.send),
+              tooltip: AppLocalizations.of(context).chatSendTooltip,
+              style: IconButton.styleFrom(
+                backgroundColor: LifeOSColors.teal,
+                foregroundColor: LifeOSColors.dark,
+                disabledBackgroundColor: scheme.onSurface.withValues(alpha: 0.12),
+                disabledForegroundColor: scheme.onSurface.withValues(alpha: 0.38),
+                shape: const CircleBorder(),
+              ),
+              onPressed: (busy || !_canSend) ? null : _send,
+            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _textFieldFor(ColorScheme scheme) => TextField(
+  Widget _textFieldFor() => TextField(
     controller: _textController,
     minLines: 1,
     maxLines: 4,
@@ -762,13 +806,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
     onSubmitted: (_) => _send(),
     decoration: InputDecoration(
       hintText: AppLocalizations.of(context).chatInputHint,
-      filled: true,
-      fillColor: scheme.surfaceContainerHighest,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-      border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(24),
-        borderSide: BorderSide.none,
-      ),
+      filled: false,
+      contentPadding: const EdgeInsets.symmetric(vertical: Space.md),
+      border: InputBorder.none,
+      enabledBorder: InputBorder.none,
+      focusedBorder: InputBorder.none,
+      disabledBorder: InputBorder.none,
+      errorBorder: InputBorder.none,
+      focusedErrorBorder: InputBorder.none,
     ),
   );
 
@@ -789,7 +834,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
             clipBehavior: Clip.none,
             children: [
               ClipRRect(
-                borderRadius: BorderRadius.circular(10),
+                borderRadius: BorderRadius.circular(Radii.input),
                 child: Image.memory(
                   _pendingImages[index],
                   width: 72,
@@ -830,14 +875,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       height: 44,
       padding: const EdgeInsets.symmetric(horizontal: 14),
       decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(24),
+        color: _composerFill(scheme),
+        borderRadius: BorderRadius.circular(28),
       ),
       child: Row(
         children: [
           Icon(
             Icons.fiber_manual_record,
-            color: _willCancel ? scheme.error : Colors.red,
+            color: scheme.error,
             size: 14,
           ),
           const SizedBox(width: 8),
@@ -856,7 +901,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
                   child: Text(
                     label,
                     overflow: TextOverflow.ellipsis,
-                    style: TextStyle(color: scheme.onSurfaceVariant),
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
                   ),
                 ),
               ],
@@ -866,6 +913,27 @@ class _ChatScreenState extends ConsumerState<ChatScreen>
       ),
     );
   }
+}
+
+Color _composerFill(ColorScheme scheme) =>
+    scheme.brightness == Brightness.dark
+        ? scheme.surfaceContainer
+        : scheme.surfaceContainerLowest;
+
+/// The transcript keeps full-width scrolling while its content and composer
+/// share a centered reading column on desktop. This never owns scroll/focus.
+class _ChatColumn extends StatelessWidget {
+  const _ChatColumn({required this.child});
+
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => Center(
+    child: ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 760),
+      child: SizedBox(width: double.infinity, child: child),
+    ),
+  );
 }
 
 String _formatDuration(Duration d) {
@@ -895,10 +963,13 @@ class _ModelLoadingBanner extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final load = ref.watch(localModelLoadProvider);
     final scheme = Theme.of(context).colorScheme;
+    final palette = LifeOSPalette.of(context);
 
     if (load.isLoading) {
+      // Keep the progress indicator as the leading content; StatusBanner's
+      // fixed icon slot cannot represent indeterminate load progress.
       return Material(
-        color: scheme.secondaryContainer,
+        color: palette.infoContainer,
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           child: Row(
@@ -916,9 +987,8 @@ class _ModelLoadingBanner extends ConsumerWidget {
               Expanded(
                 child: Text(
                   AppLocalizations.of(context).chatModelLoading,
-                  style: TextStyle(
-                    color: scheme.onSecondaryContainer,
-                    fontSize: 13,
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: palette.onInfoContainer,
                   ),
                 ),
               ),
@@ -929,34 +999,18 @@ class _ModelLoadingBanner extends ConsumerWidget {
     }
 
     if (load.hasError) {
-      return Material(
-        color: scheme.errorContainer,
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 4, 4, 4),
-          child: Row(
-            children: [
-              Icon(
-                Icons.error_outline,
-                size: 18,
-                color: scheme.onErrorContainer,
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  AppLocalizations.of(context).chatModelLoadError,
-                  style: TextStyle(
-                    color: scheme.onErrorContainer,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-              TextButton(
-                onPressed: () =>
-                    ref.read(localModelLoadProvider.notifier).retry(),
-                child: Text(AppLocalizations.of(context).actionRetry),
-              ),
-            ],
+      return StatusBanner(
+        tone: BannerTone.error,
+        icon: Icons.error_outline,
+        message: Text(
+          AppLocalizations.of(context).chatModelLoadError,
+          style: Theme.of(context).textTheme.bodySmall?.copyWith(
+            color: scheme.onErrorContainer,
           ),
+        ),
+        action: TextButton(
+          onPressed: () => ref.read(localModelLoadProvider.notifier).retry(),
+          child: Text(AppLocalizations.of(context).actionRetry),
         ),
       );
     }
@@ -981,12 +1035,16 @@ class _SttModelBanner extends ConsumerWidget {
     if (!ref.watch(localModelEnabledProvider)) return const SizedBox.shrink();
     final status = ref.watch(sttModelDownloadProvider);
     final scheme = Theme.of(context).colorScheme;
+    final palette = LifeOSPalette.of(context);
     final l10n = AppLocalizations.of(context);
+
+    // Preserve the whole-banner InkWell download/retry target and the leading
+    // progress slot (neither is an action slot on StatusBanner).
 
     switch (status) {
       case SttModelAbsent():
         return Material(
-          color: scheme.secondaryContainer,
+          color: palette.warningContainer,
           child: InkWell(
             onTap: () =>
                 ref.read(chatNotifierProvider.notifier).downloadSttModel(),
@@ -997,15 +1055,14 @@ class _SttModelBanner extends ConsumerWidget {
                   Icon(
                     Icons.download,
                     size: 18,
-                    color: scheme.onSecondaryContainer,
+                    color: palette.onWarningContainer,
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       l10n.sttDownloadVoiceModel,
-                      style: TextStyle(
-                        color: scheme.onSecondaryContainer,
-                        fontSize: 13,
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: palette.onWarningContainer,
                       ),
                     ),
                   ),
@@ -1016,7 +1073,7 @@ class _SttModelBanner extends ConsumerWidget {
         );
       case SttModelDownloading(:final progress):
         return Material(
-          color: scheme.secondaryContainer,
+          color: palette.infoContainer,
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
@@ -1035,9 +1092,8 @@ class _SttModelBanner extends ConsumerWidget {
                 Expanded(
                   child: Text(
                     l10n.sttDownloadingVoiceModel((progress * 100).round()),
-                    style: TextStyle(
-                      color: scheme.onSecondaryContainer,
-                      fontSize: 13,
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                      color: palette.onInfoContainer,
                     ),
                   ),
                 ),
@@ -1064,9 +1120,8 @@ class _SttModelBanner extends ConsumerWidget {
                   Expanded(
                     child: Text(
                       l10n.sttVoiceModelFailed,
-                      style: TextStyle(
+                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
                         color: scheme.onErrorContainer,
-                        fontSize: 13,
                       ),
                     ),
                   ),
@@ -1093,26 +1148,15 @@ class _PreparingLocalModelPanel extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
     return SafeArea(
       child: ListView(
         padding: const EdgeInsets.all(20),
         children: [
           const SizedBox(height: 8),
-          Icon(Icons.hourglass_top_outlined, size: 40, color: scheme.primary),
-          const SizedBox(height: 12),
-          Text(
-            l10n.chatPreparingTitle,
-            textAlign: TextAlign.center,
-            style: Theme.of(context).textTheme.titleLarge,
-          ),
-          const SizedBox(height: 6),
-          Text(
-            l10n.chatPreparingBody,
-            textAlign: TextAlign.center,
-            style: Theme.of(
-              context,
-            ).textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          EmptyState(
+            icon: Icons.hourglass_top_outlined,
+            title: l10n.chatPreparingTitle,
+            message: l10n.chatPreparingBody,
           ),
           const SizedBox(height: 24),
           // Reuse the same manager the "Modelo local" screen shows — one engine,
@@ -1130,28 +1174,42 @@ class _TypingIndicator extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            SizedBox(
-              width: 14,
-              height: 14,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: scheme.primary,
+    final palette = LifeOSPalette.of(context);
+    return _ChatColumn(
+      child: Align(
+        alignment: Alignment.centerLeft,
+        child: Container(
+          margin: const EdgeInsets.fromLTRB(Space.md, Space.xs, Space.md, Space.sm),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+          decoration: BoxDecoration(
+            color: palette.axiBubble,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(Radii.bubble),
+              topRight: Radius.circular(Radii.bubble),
+              bottomRight: Radius.circular(Radii.bubble),
+              bottomLeft: Radius.circular(Radii.bubbleTail),
+            ),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              SizedBox(
+                width: 14,
+                height: 14,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: palette.onAxiBubble,
+                ),
               ),
-            ),
-            const SizedBox(width: 8),
-            Text(
-              AppLocalizations.of(context).chatTyping,
-              style: TextStyle(color: scheme.onSurfaceVariant),
-            ),
-          ],
+              const SizedBox(width: Space.sm),
+              Text(
+                AppLocalizations.of(context).chatTyping,
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: palette.onAxiBubble,
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -1201,9 +1259,19 @@ class _MessageList extends StatelessWidget {
                   itemCount: group.messages.length,
                   itemBuilder: (context, index) {
                     final message = group.messages[index];
-                    return _MessageBubble(
-                      message: message,
-                      onLongPress: () => onLongPress(message),
+                    final gap = index == 0
+                        ? Space.md
+                        : group.messages[index - 1].role == message.role
+                            ? 2.0
+                            : Space.md;
+                    return _ChatColumn(
+                      child: Padding(
+                        padding: EdgeInsets.fromLTRB(Space.xs, gap, Space.xs, 0),
+                        child: _MessageBubble(
+                          message: message,
+                          onLongPress: () => onLongPress(message),
+                        ),
+                      ),
                     );
                   },
                 ),
@@ -1267,16 +1335,14 @@ class _DayHeaderDelegate extends SliverPersistentHeaderDelegate {
       height: _height,
       child: Center(
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-          decoration: BoxDecoration(
-            color: scheme.surfaceContainerHighest,
-            borderRadius: BorderRadius.circular(12),
+          padding: const EdgeInsets.symmetric(horizontal: Space.md, vertical: Space.xs),
+          decoration: ShapeDecoration(
+            color: scheme.surfaceContainerHigh,
+            shape: const StadiumBorder(),
           ),
           child: Text(
             label,
-            style: TextStyle(
-              fontSize: 12,
-              fontWeight: FontWeight.w500,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(
               color: scheme.onSurfaceVariant,
             ),
           ),
@@ -1305,86 +1371,88 @@ class _MessageBubble extends StatelessWidget {
   Widget build(BuildContext context) {
     final isUser = message.role == ChatRole.user;
     final scheme = Theme.of(context).colorScheme;
+    final palette = LifeOSPalette.of(context);
+    final isDark = scheme.brightness == Brightness.dark;
     final bubbleColor = isUser
-        ? scheme.primaryContainer
-        : scheme.secondaryContainer;
-    final onBubble = isUser
-        ? scheme.onPrimaryContainer
-        : scheme.onSecondaryContainer;
+        ? (isDark ? scheme.surfaceContainerHigh : scheme.surfaceContainerLowest)
+        : palette.axiBubble;
+    final onBubble = isUser ? scheme.onSurface : palette.onAxiBubble;
 
     // Asymmetric radius: the corner nearest the sender's edge is squared off
     // to read as a tail.
     final radius = BorderRadius.only(
-      topLeft: const Radius.circular(16),
-      topRight: const Radius.circular(16),
-      bottomLeft: Radius.circular(isUser ? 16 : 4),
-      bottomRight: Radius.circular(isUser ? 4 : 16),
+      topLeft: const Radius.circular(Radii.bubble),
+      topRight: const Radius.circular(Radii.bubble),
+      bottomLeft: Radius.circular(isUser ? Radii.bubble : Radii.bubbleTail),
+      bottomRight: Radius.circular(isUser ? Radii.bubbleTail : Radii.bubble),
     );
 
-    return Align(
-      alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
-      child: GestureDetector(
-        onLongPress: onLongPress,
-        child: Container(
-          margin: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-          padding: const EdgeInsets.fromLTRB(12, 8, 12, 6),
-          constraints: BoxConstraints(
-            maxWidth: MediaQuery.of(context).size.width * 0.78,
-          ),
-          decoration: BoxDecoration(color: bubbleColor, borderRadius: radius),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _content(context, onBubble, scheme),
-              const SizedBox(height: 2),
-              // Meta line: timestamp + (for a sent user message) WhatsApp ticks.
-              Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // The bubble SHOWS the hour (the day is announced by the
-                  // separator above it), but it ANNOUNCES the whole date and
-                  // time: read aloud, "9:05" with no day is meaningless.
-                  Semantics(
-                    label: spokenTimestamp(context, message.timestamp),
-                    excludeSemantics: true,
-                    child: Text(
-                      _formatTime(message.timestamp),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: onBubble.withValues(alpha: 0.7),
+    return LayoutBuilder(
+      builder: (context, constraints) => Align(
+        alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
+        child: GestureDetector(
+          onLongPress: onLongPress,
+          child: Container(
+            padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
+            constraints: BoxConstraints(
+              maxWidth: math.min(constraints.maxWidth * 0.78, 560),
+            ),
+            decoration: BoxDecoration(
+              color: bubbleColor,
+              borderRadius: radius,
+              border: isUser && !isDark
+                  ? Border.all(color: palette.hairline)
+                  : null,
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                _content(context, onBubble, scheme),
+                const SizedBox(height: 2),
+                // Meta line: timestamp + (for a sent user message) WhatsApp ticks.
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // The bubble SHOWS the hour (the day is announced by the
+                    // separator above it), but it ANNOUNCES the whole date and
+                    // time: read aloud, "9:05" with no day is meaningless.
+                    Semantics(
+                      label: spokenTimestamp(context, message.timestamp),
+                      excludeSemantics: true,
+                      child: Text(
+                        _formatTime(message.timestamp),
+                        style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                          color: onBubble.withValues(alpha: 0.7),
+                        ),
                       ),
                     ),
-                  ),
-                  if (isUser && message.status != null) ...[
-                    const SizedBox(width: 4),
-                    _StatusTicks(status: message.status!, color: onBubble),
+                    if (isUser && message.status != null) ...[
+                      const SizedBox(width: Space.xs),
+                      _StatusTicks(status: message.status!, color: onBubble),
+                    ],
+                    // "Axi habla": read this reply aloud. Only on Axi text replies
+                    // that actually have words to speak.
+                    if (!isUser &&
+                        message.kind == ChatMessageKind.text &&
+                        message.text.trim().isNotEmpty) ...[
+                      const SizedBox(width: Space.xs),
+                      _SpeakButton(
+                        messageId: message.id,
+                        text: message.text,
+                        color: onBubble,
+                      ),
+                    ],
                   ],
-                  // "Axi habla": read this reply aloud. Only on Axi text replies
-                  // that actually have words to speak.
-                  if (!isUser &&
-                      message.kind == ChatMessageKind.text &&
-                      message.text.trim().isNotEmpty) ...[
-                    const SizedBox(width: 4),
-                    _SpeakButton(
-                      messageId: message.id,
-                      text: message.text,
-                      color: onBubble,
-                    ),
-                  ],
-                ],
-              ),
-              // Per-response metrics (on-device Axi replies only): a compact
-              // always-visible line + a discreet button to the full-stats modal.
-              if (!isUser && message.metrics != null) ...[
-                const SizedBox(height: 2),
-                _MetricsLine(
-                  metrics: message.metrics!,
-                  color: onBubble,
-                  scheme: scheme,
                 ),
+                // Per-response metrics (on-device Axi replies only): a compact
+                // always-visible line + a discreet button to the full-stats modal.
+                if (!isUser && message.metrics != null) ...[
+                  const SizedBox(height: 2),
+                  _MetricsLine(metrics: message.metrics!, color: onBubble),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
@@ -1392,6 +1460,9 @@ class _MessageBubble extends StatelessWidget {
   }
 
   Widget _content(BuildContext context, Color onBubble, ColorScheme scheme) {
+    final bodyStyle = Theme.of(context).textTheme.bodyLarge?.copyWith(
+      color: onBubble,
+    );
     switch (message.kind) {
       case ChatMessageKind.image:
         return Column(
@@ -1401,7 +1472,7 @@ class _MessageBubble extends StatelessWidget {
             if (message.images.isNotEmpty) _ImageGrid(images: message.images),
             if (message.text.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(message.text, style: TextStyle(color: onBubble)),
+              Text(message.text, style: bodyStyle),
             ],
           ],
         );
@@ -1413,16 +1484,15 @@ class _MessageBubble extends StatelessWidget {
         );
       case ChatMessageKind.text:
         return message.role == ChatRole.user
-            ? Text(message.text, style: TextStyle(color: onBubble))
+            ? Text(message.text, style: bodyStyle)
             : MarkdownBody(
                 data: message.text,
                 selectable: true,
                 styleSheet: MarkdownStyleSheet.fromTheme(Theme.of(context))
                     .copyWith(
-                      p: TextStyle(color: onBubble),
-                      listBullet: TextStyle(color: onBubble),
-                      code: TextStyle(
-                        color: onBubble,
+                      p: bodyStyle,
+                      listBullet: bodyStyle,
+                      code: bodyStyle?.copyWith(
                         backgroundColor: scheme.surfaceContainerHighest,
                       ),
                     ),
@@ -1442,7 +1512,7 @@ class _ImageGrid extends StatelessWidget {
   Widget build(BuildContext context) {
     if (images.length == 1) {
       return ClipRRect(
-        borderRadius: BorderRadius.circular(10),
+        borderRadius: BorderRadius.circular(Radii.input),
         child: Image.memory(images.first, width: 220, fit: BoxFit.cover),
       );
     }
@@ -1460,7 +1530,7 @@ class _ImageGrid extends StatelessWidget {
           mainAxisSpacing: 3,
         ),
         itemBuilder: (context, index) => ClipRRect(
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(Radii.input),
           child: Image.memory(images[index], fit: BoxFit.cover),
         ),
       ),
@@ -1470,8 +1540,7 @@ class _ImageGrid extends StatelessWidget {
 
 /// WhatsApp-style delivery ticks shown in an outgoing message's meta line:
 /// a clock while sending, a single ✓ once handed to the engine, and a double
-/// ✓✓ once Axi's reply arrives. Small, muted, and branded (the double tick
-/// gets the accent colour, like WhatsApp's read state).
+/// ✓✓ once Axi's reply arrives. All states use the bubble's muted meta ink.
 class _StatusTicks extends StatelessWidget {
   const _StatusTicks({required this.status, required this.color});
 
@@ -1480,18 +1549,17 @@ class _StatusTicks extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     switch (status) {
       case ChatMessageStatus.sending:
         return Icon(
           Icons.schedule,
           size: 13,
-          color: color.withValues(alpha: 0.6),
+          color: color.withValues(alpha: 0.7),
         );
       case ChatMessageStatus.sent:
         return Icon(Icons.done, size: 15, color: color.withValues(alpha: 0.7));
       case ChatMessageStatus.delivered:
-        return Icon(Icons.done_all, size: 15, color: scheme.primary);
+        return Icon(Icons.done_all, size: 15, color: color.withValues(alpha: 0.7));
     }
   }
 }
@@ -1516,7 +1584,7 @@ class _SpeakButton extends ConsumerWidget {
     final speakingId = ref.watch(speechControllerProvider);
     final isSpeaking = speakingId == messageId;
     return InkResponse(
-      radius: 16,
+      radius: Radii.card,
       onTap: () =>
           ref.read(speechControllerProvider.notifier).toggle(messageId, text),
       child: Padding(
@@ -1542,12 +1610,10 @@ class _MetricsLine extends StatelessWidget {
   const _MetricsLine({
     required this.metrics,
     required this.color,
-    required this.scheme,
   });
 
   final GenerationMetrics metrics;
   final Color color;
-  final ColorScheme scheme;
 
   @override
   Widget build(BuildContext context) {
@@ -1564,15 +1630,15 @@ class _MetricsLine extends StatelessWidget {
           // tok/s next to it were actually measured on.
           '${metrics.tokensPerSec.round()} tok/s · ${_formatSeconds(metrics.totalMs)}'
           ' · ${metrics.backend.name.toUpperCase()}',
-          style: TextStyle(fontSize: 11, color: muted),
+          style: Theme.of(context).textTheme.labelSmall?.copyWith(color: muted),
         ),
         const SizedBox(width: 2),
         InkResponse(
-          radius: 16,
+          radius: Radii.card,
           onTap: () => _showMetricsSheet(context, metrics),
           child: Padding(
             padding: const EdgeInsets.all(3),
-            child: Icon(Icons.bar_chart, size: 15, color: scheme.primary),
+            child: Icon(Icons.bar_chart, size: 15, color: muted),
           ),
         ),
       ],
@@ -1669,14 +1735,14 @@ class _MetricRow extends StatelessWidget {
             width: 150,
             child: Text(
               label,
-              style: TextStyle(color: scheme.onSurfaceVariant),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
             ),
           ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               value,
-              style: const TextStyle(fontWeight: FontWeight.w600),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(fontWeight: FontWeight.w600),
             ),
           ),
         ],
@@ -1754,13 +1820,13 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
               height: 3,
               decoration: BoxDecoration(
                 color: widget.onBubble.withValues(alpha: 0.4),
-                borderRadius: BorderRadius.circular(2),
+                borderRadius: BorderRadius.circular(Radii.bubbleTail),
               ),
             ),
             const SizedBox(width: 8),
             Text(
               _formatDuration(duration),
-              style: TextStyle(color: widget.onBubble),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: widget.onBubble),
             ),
           ],
         ),
@@ -1776,15 +1842,14 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
             const SizedBox(height: 4),
             Text(
               widget.message.transcription!,
-              style: TextStyle(fontSize: 13, color: widget.onBubble),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: widget.onBubble),
             ),
           ],
         ] else if (widget.message.transcriptionPending) ...[
           const SizedBox(height: 2),
           Text(
             AppLocalizations.of(context).chatTranscriptionPending,
-            style: TextStyle(
-              fontSize: 11,
+            style: Theme.of(context).textTheme.labelSmall?.copyWith(
               color: widget.onBubble.withValues(alpha: 0.7),
             ),
           ),
@@ -1817,10 +1882,8 @@ class _VoiceNoteBubbleState extends ConsumerState<_VoiceNoteBubble> {
             const SizedBox(width: 2),
             Text(
               label,
-              style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w500,
-                color: widget.onBubble.withValues(alpha: 0.8),
+              style: Theme.of(context).textTheme.labelMedium?.copyWith(
+                color: widget.onBubble.withValues(alpha: 0.7),
               ),
             ),
           ],

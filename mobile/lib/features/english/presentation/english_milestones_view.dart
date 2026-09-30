@@ -9,6 +9,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
 import '../domain/milestones.dart';
 import 'english_providers.dart';
 
@@ -22,7 +23,7 @@ class EnglishMilestonesView extends ConsumerWidget {
     final l10n = AppLocalizations.of(context);
     return ExpansionTile(
       tilePadding: EdgeInsets.zero,
-      title: Text(
+      title: SectionHeader(
           l10n.englishMilestonesTitle(reached.length, Milestone.values.length)),
       children: [
         for (final m in Milestone.values)

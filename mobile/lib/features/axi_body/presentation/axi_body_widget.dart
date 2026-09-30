@@ -25,7 +25,10 @@ import 'axi_avatar_painter.dart';
 /// Organ taps are resolved by [kAxiOrganRoutes]; organs without a mobile
 /// equivalent yet show a localized "próximamente" snackbar.
 class AxiBodyWidget extends StatefulWidget {
-  const AxiBodyWidget({super.key});
+  const AxiBodyWidget({super.key, this.viewportHeight});
+
+  /// Optional compact viewport; defaults to the original dashboard size.
+  final double? viewportHeight;
 
   /// Avatar viewport height; matches the SVG's 220x275 intrinsic size.
   static const double height = 285;
@@ -93,28 +96,35 @@ class _AxiBodyWidgetState extends State<AxiBodyWidget>
     return Semantics(
       label: l10n.axiAvatarLabel,
       child: SizedBox(
-        height: AxiBodyWidget.height,
+        height: widget.viewportHeight ?? AxiBodyWidget.height,
+        width: widget.viewportHeight == null
+            ? null
+            : widget.viewportHeight! * kAxiAvatarIntrinsicSize.width /
+                kAxiAvatarIntrinsicSize.height,
         child: Center(
-          child: SizedBox.fromSize(
-            size: kAxiAvatarIntrinsicSize,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTapUp: (details) => _onTapUp(details, kAxiAvatarIntrinsicSize),
-              child: AnimatedBuilder(
-                animation: _controller,
-                builder: (context, _) {
-                  final seconds =
-                      _controller.value * kAxiAvatarLoop.inMilliseconds / 1000;
-                  return CustomPaint(
-                    size: kAxiAvatarIntrinsicSize,
-                    painter: AxiAvatarPainter(
-                      elapsedSeconds: seconds,
-                      pose: _reduceMotion
-                          ? kAxiAvatarRestPose
-                          : axiAvatarPoseAt(seconds),
-                    ),
-                  );
-                },
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: SizedBox.fromSize(
+              size: kAxiAvatarIntrinsicSize,
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTapUp: (details) => _onTapUp(details, kAxiAvatarIntrinsicSize),
+                child: AnimatedBuilder(
+                  animation: _controller,
+                  builder: (context, _) {
+                    final seconds =
+                        _controller.value * kAxiAvatarLoop.inMilliseconds / 1000;
+                    return CustomPaint(
+                      size: kAxiAvatarIntrinsicSize,
+                      painter: AxiAvatarPainter(
+                        elapsedSeconds: seconds,
+                        pose: _reduceMotion
+                            ? kAxiAvatarRestPose
+                            : axiAvatarPoseAt(seconds),
+                      ),
+                    );
+                  },
+                ),
               ),
             ),
           ),
