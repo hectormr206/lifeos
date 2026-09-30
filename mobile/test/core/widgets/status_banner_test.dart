@@ -19,7 +19,7 @@ void main() {
       ));
 
   testWidgets('icon aligns with the first line of a multi-line message', (tester) async {
-    await pump(tester, 'This message is long enough that it wraps across several lines. ' * 3);
+    await pump(tester, List.filled(3, 'This message is long enough that it wraps across several lines. ').join());
     final text = tester.getRect(find.byKey(const Key('msg')));
     expect(text.height, greaterThan(22 * 3));
     final icon = tester.getRect(find.byIcon(Icons.info_outline));
