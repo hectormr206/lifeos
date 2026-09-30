@@ -1,0 +1,15 @@
+{
+  "backup": "/home/hectormr/backups/lifeos-releases/english-pixel-audit-20260927-candidate2",
+  "private_modes_verified": true,
+  "backup_file_hashes": {
+    "lifeos-private-candidate2-1024.apk": "a934f62da9985efed746d158b278c6607d9d7dc4a21cd61f66f62664ce6cef9f",
+    "candidate-2-source-sha256.json": "f9dec4dd6d08feb5b6e3eb3cd38f78fd18e2d9f16cd100a3481df1a4ade636b7",
+    "screened-evidence-logs.tar.gz": "876515a235fdfcd73e4c504660eec6f7f91934158373d94d6dd4ab2d007e2f44",
+    "candidate-source-files.tar.gz": "997f7af7c112f0dab4b2e19bd53dc8abe23579cda6a08ad21614eb05765633d6",
+    "logs/gama/transcripts.log": "accf3fb92d7ab710000ed9dbacf629e0f89707ebf452287c73cb18579d866bb9",
+    "logs/gama/transcripts-e.log": "a791fb12ef8c82c82470b66d0e319f1eca03b9872660096488126f395cb6be17"
+  },
+  "source_manifest_matches": 19,
+  "source_paths_exact": true,
+  "head": "ab5d67465be7857e97f0f44063a8d8b9d582ec85"
+}

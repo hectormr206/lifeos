@@ -1,0 +1,22 @@
+{
+  "android": {
+    "versionCode": 1024,
+    "versionName": "0.20.1",
+    "apkFilename": "lifeos-0.20.1-1024.apk",
+    "sha256": "e9f52fa60a972d9159c22d597d1cbe1079ace0d434aabacb56084c557eb486bf",
+    "sizeBytes": 336551951,
+    "notes": "Actualizaciones más seguras: protección para evitar versiones sin configuración OTA. Incluye todas las funciones de inglés de 0.20.0.",
+    "publishedAt": "2026-09-27T03:23:35Z"
+  },
+  "linux": {
+    "versionCode": 1024,
+    "versionName": "0.20.1",
+    "filename": "lifeos-linux-x64-0.20.1-1024.tar.gz",
+    "sha256": "318d3602673e53186b9891e3f30c83e2a018241d2b441ab6ce4682571f13d1ed",
+    "sizeBytes": 58647228,
+    "arch": "x64",
+    "platform": "linux",
+    "notes": "Actualizaciones más seguras: protección para evitar versiones sin configuración OTA. Incluye todas las funciones de inglés de 0.20.0.",
+    "publishedAt": "2026-09-27T03:25:51Z"
+  }
+}

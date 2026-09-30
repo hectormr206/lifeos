@@ -1,0 +1,8 @@
+{
+  "removed": "/home/hectormr/work/lifeos-english-pixel-audit/checks/audio-verification",
+  "verified_files": 10,
+  "empty_parents_removed": [
+    "/home/hectormr/work/lifeos-english-pixel-audit/checks",
+    "/home/hectormr/work/lifeos-english-pixel-audit"
+  ]
+}

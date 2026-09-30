@@ -1,0 +1,45 @@
+[
+  {
+    "id": "daily-writing-school-email",
+    "title": "Correo a la escuela",
+    "feedback": [
+      "My child will misses school tomorrow because she has a cold\nMy child will miss school tomorrow because she has a cold\nEl verbo después de will es en forma base"
+    ],
+    "visible_tail": [
+      "Write an email to your child's teacher saying your child will miss school tomorrow, and why.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "My child will misses school tomorrow because she has a cold.",
+      "Revisar",
+      "My child will misses school tomorrow because she has a cold\nMy child will miss school tomorrow because she has a cold\nEl verbo después de will es en forma base"
+    ]
+  },
+  {
+    "id": "daily-writing-invite",
+    "title": "Invitar a una amiga",
+    "feedback": [
+      "Come to dinner this weekend I has food for everyone\nCome to dinner this weekend I have food for everyone\nEl verbo has debe ser have con el sujeto i"
+    ],
+    "visible_tail": [
+      "Write a message inviting a friend to dinner this weekend.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "Come to dinner this weekend. I has food for everyone.",
+      "Revisar",
+      "Come to dinner this weekend I has food for everyone\nCome to dinner this weekend I have food for everyone\nEl verbo has debe ser have con el sujeto i"
+    ]
+  },
+  {
+    "id": "daily-writing-complaint",
+    "title": "Una queja amable",
+    "feedback": [
+      "The cup I bought arrive broken\nThe cup I bought arrives broken\nError de concordancia verbal (arrive debe ser arrives)",
+      "Please helps me\nPlease help me\nError de conjugación del verbo (helps debe ser help)"
+    ],
+    "visible_tail": [
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "The cup I bought arrive broken. Please helps me.",
+      "Revisar",
+      "The cup I bought arrive broken\nThe cup I bought arrives broken\nError de concordancia verbal (arrive debe ser arrives)",
+      "Please helps me\nPlease help me\nError de conjugación del verbo (helps debe ser help)"
+    ]
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "command": "ls -la /sdcard/Download/LifeOS-English-QA",
+    "output": "total 740\n-rw-rw---- 1 u0_a240 media_rw     76 2026-09-26 23:34 QA-English-corrupt.mp3\n-rw-rw---- 1 u0_a240 media_rw 157851 2026-09-26 23:34 QA-English-lesson.mp4\n-rw-rw---- 1 u0_a240 media_rw 520398 2026-09-26 23:34 QA-English-short.wav\n-rw-rw---- 1 u0_a240 media_rw  64078 2026-09-26 23:34 QA-English-silence.wav\n-rw-rw---- 1 u0_a240 media_rw    273 2026-09-26 23:34 qa-transcript.txt\n"
+  },
+  {
+    "command": "sha256sum /sdcard/Download/LifeOS-English-QA/*",
+    "output": "00599c7382d1274e4d84cbfa41108017eff4eb72d1dcfcfa88a054490e978ccf  /sdcard/Download/LifeOS-English-QA/QA-English-corrupt.mp3\n6161e4e7fc066ea8c3e4be16fab02610b8c6399136164f2580fbb2a36750fc25  /sdcard/Download/LifeOS-English-QA/QA-English-lesson.mp4\n7af096f16375a8e354cd3c9321eff1d1e211b07306f642b8848c41757d484f73  /sdcard/Download/LifeOS-English-QA/QA-English-short.wav\n6b454e58dda23568eb196d6b02ae2c360112fa817da431e1c633979ecd166bb3  /sdcard/Download/LifeOS-English-QA/QA-English-silence.wav\nc3f15654a59feef9857e72f7bcaf91e7c7cabb98f105ed96bc181c5db7b6bfa6  /sdcard/Download/LifeOS-English-QA/qa-transcript.txt\n"
+  },
+  {
+    "command": "content query --uri content://media/external/file --projection _id:_data --where \"_data LIKE '/storage/emulated/0/Download/LifeOS-English-QA/%'\"",
+    "output": "Row: 0 _id=1000127739, _data=/storage/emulated/0/Download/LifeOS-English-QA/qa-transcript.txt\nRow: 1 _id=1000127740, _data=/storage/emulated/0/Download/LifeOS-English-QA/QA-English-corrupt.mp3\nRow: 2 _id=1000127741, _data=/storage/emulated/0/Download/LifeOS-English-QA/QA-English-silence.wav\nRow: 3 _id=1000127742, _data=/storage/emulated/0/Download/LifeOS-English-QA/QA-English-lesson.mp4\nRow: 4 _id=1000127743, _data=/storage/emulated/0/Download/LifeOS-English-QA/QA-English-short.wav\n"
+  }
+]

@@ -1,0 +1,112 @@
+--------- beginning of main
+09-26 23:39:36.522 11875 11875 I libprocessgroup: Created cgroup /sys/fs/cgroup/apps/uid_10308/pid_11875
+09-26 23:39:36.527 11875 11875 I Zygote  : Process 11875 created for com.lifeos.lifeos
+09-26 23:39:36.527 11875 11875 I m.lifeos.lifeos: Using generational CollectorTypeCMC GC.
+09-26 23:39:36.532 11875 11875 D nativeloader: Load libframework-connectivity-tiramisu-jni.so using APEX ns com_android_tethering for caller /apex/com.android.tethering/javalib/framework-connectivity-t.jar: ok
+09-26 23:39:36.541 11875 11875 D ApplicationLoaders: Returning zygote-cached class loader: /system_ext/framework/androidx.window.extensions.jar
+09-26 23:39:36.541 11875 11875 D ApplicationLoaders: Returning zygote-cached class loader: /system_ext/framework/androidx.window.sidecar.jar
+09-26 23:39:36.546 11875 11875 D nativeloader: Configuring clns-9 for other apk /data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk. target_sdk_version=36, uses_libraries=libOpenCL.so:libOpenCL-pixel.so, library_path=/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/lib/arm64:/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk!/lib/arm64-v8a, permitted_path=/data:/mnt/expand:/data/user/0/com.lifeos.lifeos
+09-26 23:39:36.550 11875 11875 V GraphicsEnvironment: Currently set values for:
+09-26 23:39:36.550 11875 11875 V GraphicsEnvironment:   angle_gl_driver_selection_pkgs=[com.android.angle]
+09-26 23:39:36.550 11875 11875 V GraphicsEnvironment:   angle_gl_driver_selection_values=[angle]
+09-26 23:39:36.550 11875 11875 V GraphicsEnvironment: com.lifeos.lifeos is not listed in per-application setting
+09-26 23:39:36.550 11875 11875 V GraphicsEnvironment: No special selections for ANGLE, returning default driver choice
+09-26 23:39:36.551 11875 11875 V GraphicsEnvironment: Neither updatable production driver nor prerelease driver is supported.
+09-26 23:39:36.554 11875 11875 D WM-WrkMgrInitializer: Initializing WorkManager with default configuration.
+09-26 23:39:36.555 11875 11875 D WM-PackageManagerHelper: Skipping component enablement for androidx.work.impl.background.systemjob.SystemJobService
+09-26 23:39:36.555 11875 11875 D WM-Schedulers: Created SystemJobScheduler and enabled SystemJobService
+09-26 23:39:36.556 11875 11887 D WM-ForceStopRunnable: The default process name was not specified.
+09-26 23:39:36.556 11875 11887 D WM-ForceStopRunnable: Performing cleanup operations.
+--------- beginning of system
+09-26 23:39:36.560 11875 11888 I DisplayManager: Choreographer implicitly registered for the refresh rate.
+09-26 23:39:36.561 11875 11888 D vulkan  : searching for layers in '/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/lib/arm64'
+09-26 23:39:36.561 11875 11888 D vulkan  : searching for layers in '/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk!/lib/arm64-v8a'
+09-26 23:39:36.570 11875 11875 D CompatChangeReporter: Compat change id reported: 377864165; UID 10308; state: ENABLED
+09-26 23:39:36.575 11875 11898 D WM-PackageManagerHelper: Skipping component enablement for androidx.work.impl.background.systemalarm.RescheduleReceiver
+09-26 23:39:36.578 11875 11899 D nativeloader: Load /data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk!/lib/arm64-v8a/libflutter.so using class loader ns clns-9 (caller=/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk): ok
+09-26 23:39:36.584 11875 11875 W m.lifeos.lifeos: type=1400 audit(0.0:119766): avc:  denied  { read } for  name="max_map_count" dev="proc" ino=23913328 scontext=u:r:untrusted_app_34:s0:c52,c257,c512,c768 tcontext=u:object_r:proc_max_map_count:s0 tclass=file permissive=0 app=com.lifeos.lifeos
+09-26 23:39:36.596 11875 11902 I flutter : [IMPORTANT:flutter/shell/platform/android/android_context_vk_impeller.cc(62)] Using the Impeller rendering backend (Vulkan).
+09-26 23:39:36.611 11875 11875 D DesktopExperienceFlags: Toggle override initialized to: false
+09-26 23:39:36.615 11875 11875 I TextToSpeech: Sucessfully bound to com.google.android.tts
+09-26 23:39:36.616 11875 11875 D nativeloader: Load /data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk!/lib/arm64-v8a/libdartjni.so using class loader ns clns-9 (caller=/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk): ok
+09-26 23:39:36.616 11875 11901 W FlutterJNI: FlutterJNI.loadLibrary called more than once
+09-26 23:39:36.616 11875 11899 W FlutterJNI: FlutterJNI.prefetchDefaultFontManager called more than once
+09-26 23:39:36.617 11875 11875 W FlutterJNI: FlutterJNI.init called more than once
+09-26 23:39:36.619 11875 11875 D nativeloader: Load /data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk!/lib/arm64-v8a/libsqlcipher.so using class loader ns clns-9 (caller=/data/app/~~igTmG2sxxaz6RF9CNpJMVw==/com.lifeos.lifeos-Y_dLz9DFR7E5tcsuKrt7Hw==/base.apk): ok
+09-26 23:39:36.631 11875 11875 I ContentCaptureHelper: Setting logging level to OFF
+09-26 23:39:36.641 11875 11885 I TextToSpeech: Connected to TTS engine
+09-26 23:39:36.643 11875 11875 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): android.app.Activity$$ExternalSyntheticLambda0@1a8a4ba
+09-26 23:39:36.644 11875 11875 I WindowExtensionsImpl: Initializing Window Extensions, vendor API level=10, activity embedding enabled=true
+09-26 23:39:36.646 11875 11875 W UiContextUtils: Requested context is a non-UI Context. Creating a UI-Context with display: 0. Context: Context=android.app.Application@51564d2, of which baseContext=android.app.ContextImpl@8282747
+09-26 23:39:36.648 11875 11875 D VRI[MainActivity]: WindowInsets changed: 1440x3120 statusBars:[0,144,0,0] navigationBars:[0,0,0,84] mandatorySystemGestures:[0,186,0,112] 
+09-26 23:39:36.650 11875 11875 I Surface : Creating surface for consumer unnamed-11875-0 with slotExpansion=1 for 64 slots
+09-26 23:39:36.651 11875 11875 I Surface : Creating surface for consumer VRI[MainActivity]#0(BLAST Consumer)0 with slotExpansion=1 for 64 slots
+09-26 23:39:36.652 11875 11875 I Surface : Creating surface for consumer unnamed-11875-1 with slotExpansion=1 for 64 slots
+09-26 23:39:36.653 11875 11875 I Surface : Creating surface for consumer c8a7199 SurfaceView[com.lifeos.lifeos/com.lifeos.lifeos.MainActivity]#1(BLAST Consumer)1 with slotExpansion=1 for 64 slots
+09-26 23:39:36.695 11875 11875 D WindowLayoutComponentImpl: Register WindowLayoutInfoListener on Context=com.lifeos.lifeos.MainActivity@eb32c80, of which baseContext=android.app.ContextImpl@1878e55
+09-26 23:39:36.719 11875 11875 I flutter : MissingPluginException(No implementation found for method listen on channel dev.leanflutter.plugins/hotkey_manager_event)
+09-26 23:39:36.719 11875 11875 I flutter : #0      MethodChannel._invokeMethod (package:flutter/src/services/platform_channel.dart:364)
+09-26 23:39:36.719 11875 11875 I flutter : <asynchronous suspension>
+09-26 23:39:36.719 11875 11875 I flutter : #1      EventChannel.receiveBroadcastStream.<anonymous closure> (package:flutter/src/services/platform_channel.dart:711)
+09-26 23:39:36.719 11875 11875 I flutter : <asynchronous suspension>
+09-26 23:39:36.767 11875 11958 I SQLiteConnection: Database keying operation returned:0
+09-26 23:39:36.768 11875 11896 D WM-Processor: Processor cancelling bb5d8fa4-a325-4bfe-924f-ea083e383794
+09-26 23:39:36.768 11875 11896 D WM-Processor: WorkerWrapper could not be found for bb5d8fa4-a325-4bfe-924f-ea083e383794
+09-26 23:39:36.770 11875 11896 D WM-GreedyScheduler: Cancelling work ID bb5d8fa4-a325-4bfe-924f-ea083e383794
+09-26 23:39:36.772 11875 11896 D WM-SystemJobScheduler: Scheduling work ID ad2b2cda-a6c3-45aa-8758-d6bee1fa877aJob ID 15867
+09-26 23:39:36.774 11875 11898 D WM-Processor: Processor cancelling ad2b2cda-a6c3-45aa-8758-d6bee1fa877a
+09-26 23:39:36.774 11875 11898 D WM-Processor: WorkerWrapper could not be found for ad2b2cda-a6c3-45aa-8758-d6bee1fa877a
+09-26 23:39:36.775 11875 11875 D InsetsController: hide(ime())
+09-26 23:39:36.775 11875 11875 I ImeTracker: com.lifeos.lifeos:470b4f25: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN
+09-26 23:39:36.776 11875 11898 D WM-GreedyScheduler: Cancelling work ID ad2b2cda-a6c3-45aa-8758-d6bee1fa877a
+09-26 23:39:36.778 11875 11898 D WM-SystemJobScheduler: Scheduling work ID 9b89d5eb-9be8-447e-9215-eb85f0918a4aJob ID 15868
+09-26 23:39:37.009 11875 11963 I SQLiteConnection: Database keying operation returned:0
+09-26 23:39:37.050 11875 11919 V BackgroundDownloader: Returning 0 unfinished tasks in group app_updates
+09-26 23:39:37.059 11875 11919 I BackgroundDownloader: Enqueuing task with id app_update_apk
+09-26 23:39:37.072 11875 11896 W JobInfo : Requested important-while-foreground flag for job15869 is ignored and takes no effect
+09-26 23:39:37.072 11875 11896 D WM-SystemJobScheduler: Scheduling work ID b6608e2a-b09e-4a27-aac1-638dc92728a9Job ID 15869
+09-26 23:39:37.080 11875 11896 D WM-GreedyScheduler: Starting tracking for b6608e2a-b09e-4a27-aac1-638dc92728a9
+09-26 23:39:37.081 11875 11875 D WM-SystemJobService: onStartJob for WorkGenerationalId(workSpecId=b6608e2a-b09e-4a27-aac1-638dc92728a9, generation=0)
+09-26 23:39:37.085 11875 11896 D WM-Processor: d: processing WorkGenerationalId(workSpecId=b6608e2a-b09e-4a27-aac1-638dc92728a9, generation=0)
+09-26 23:39:37.092 11875 11875 D WM-WorkerWrapper: Starting work for com.bbflight.background_downloader.DownloadTaskWorker
+09-26 23:39:37.093 11875 11919 I TaskRunner: Starting task with taskId app_update_apk
+09-26 23:39:37.094 11875 11896 D WM-ConstraintTracker: g: initial state = NetworkState(isConnected=true, isValidated=true, isMetered=false, isNotRoaming=true)
+09-26 23:39:37.094 11875 11896 D WM-NetworkStateTracker: Registering network callback
+09-26 23:39:37.094 11875 11919 I TaskRunner: Not using proxy for any task
+09-26 23:39:37.097 11875 11896 D WM-GreedyScheduler: Constraints met: Scheduling work ID WorkGenerationalId(workSpecId=b6608e2a-b09e-4a27-aac1-638dc92728a9, generation=0)
+09-26 23:39:37.097 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=65772Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:39:37.099 11875 11896 D WM-Processor: Work WorkGenerationalId(workSpecId=b6608e2a-b09e-4a27-aac1-638dc92728a9, generation=0) is already enqueued for processing
+09-26 23:39:37.143 11875 11969 I HWUI    : Using FreeType backend (prop=Auto)
+09-26 23:39:37.560 11875 11930 I TextToSpeech: Setting up the connection to TTS engine...
+09-26 23:39:41.739 11875 11918 V BackgroundDownloader: Returning 1 unfinished tasks in group null
+09-26 23:39:42.159 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=21304Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:39:42.159 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:39:42.529 11875 11997 D ProfileInstaller: Skipping profile installation for com.lifeos.lifeos
+09-26 23:39:51.390 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:39:51.402 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=39459Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:39:54.511 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:39:54.529 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=55977Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:00.718 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=65284Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:00.718 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:09.953 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:09.965 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=31458Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:22.317 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:22.326 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=26529Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:29.947 11875 11875 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): d1.l@b93caff
+09-26 23:40:31.720 11875 11875 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): android.app.Activity$$ExternalSyntheticLambda0@1a8a4ba
+09-26 23:40:31.720 11875 11875 D WindowOnBackDispatcher: setTopOnBackInvokedCallback (unwrapped): d1.l@b93caff
+09-26 23:40:40.923 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=40334Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:40.931 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:43.997 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:44.008 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=55903Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:50.188 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:50.197 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=27779Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:40:59.476 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:40:59.483 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=23398Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:41:15.036 11875 11965 D WM-NetworkStateTracker: Network capabilities changed: [ Transports: WIFI|VPN Capabilities: NOT_METERED&INTERNET&NOT_RESTRICTED&TRUSTED&VALIDATED&NOT_ROAMING&FOREGROUND&NOT_CONGESTED&NOT_SUSPENDED&NOT_VCN_MANAGED&NOT_BANDWIDTH_CONSTRAINED LinkUpBandwidth>=54154Kbps LinkDnBandwidth>=27284Kbps TransportInfo: <VpnTransportInfo{type=2, sessionId=null, bypassable=true longLivedTcpConnectionsExpensive=true}> UnderlyingNetworks: Null]
+09-26 23:41:15.038 11875 11875 W JobService: onNetworkChanged() not implemented in androidx.work.impl.background.systemjob.SystemJobService. Must override in a subclass.
+09-26 23:41:16.695 11875 11936 W libc    : Access denied finding property "ro.mediatek.platform"
+09-26 23:41:16.695 11875 11936 W libc    : Access denied finding property "ro.chipname"
+09-26 23:41:16.695 11875 11936 W libc    : Access denied finding property "ro.hardware.chipname"
+09-26 23:41:18.069 11875 11936 W sherpa-onnx: /home/runner/work/sherpa-onnx/sherpa-onnx/sherpa-onnx/csrc/offline-tts-vits-model.cc:Init:167
+09-26 23:41:18.069 11875 11936 W sherpa-onnx: 'sample_rate' does not exist in the metadata

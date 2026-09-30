@@ -1,0 +1,57 @@
+[
+  {
+    "id": "daily-restaurant",
+    "title": "En un restaurante",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Pide una mesa, la comida y la cuenta.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Hi there! Welcome. How many people?",
+        "Hello. We needs a table for two.",
+        "Of course! We have a table for two. Are you ready to order?",
+        "Hablar"
+      ],
+      [
+        "Hi there! Welcome. How many people?",
+        "Hello. We needs a table for two.",
+        "Of course! We have a table for two. Are you ready to order?",
+        "Thank you. What can I do next?",
+        "You can look at the menu. What kind of food do you like?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": [
+      "Hello we needs a table for two\nHello we need a table for two\nEl verbo needs debe ser need."
+    ]
+  },
+  {
+    "id": "daily-doctor",
+    "title": "Pedir una cita con el médico",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Pide una cita para ti y explica qué te pasa.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Good morning, Dr. Miller's office. How can I help you?",
+        "I need an appointment because I have a cough.",
+        "Hello. Can I have your name, please?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  },
+  {
+    "id": "daily-school",
+    "title": "Junta con la maestra",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Pregunta cómo va tu hijo y cómo puedes ayudarle.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Hello, thank you for coming. Please, have a seat.",
+        "How is my child doing in class?",
+        "He is doing very well. He likes to play with his friends.",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  }
+]

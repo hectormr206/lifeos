@@ -1,0 +1,23 @@
+Analyzing mobile...                                             
+
+   info • Angle brackets will be interpreted as HTML. Try using backticks around the content with angle brackets, or try replacing `<` with `&lt;` and `>` with `&gt;` • lib/features/chat/domain/chat_context_builder.dart:139:19 • unintended_html_in_doc_comment
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • lib/features/confession/presentation/confession_screen.dart:112:9 • use_null_aware_elements
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • lib/features/confession/presentation/confession_screen.dart:113:9 • use_null_aware_elements
+   info • Don't use 'BuildContext's across async gaps. Try rewriting the code to not use the 'BuildContext', or guard the use with a 'mounted' check • lib/features/data_control/presentation/export_tile.dart:68:44 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/features/morning_briefing/domain/morning_briefing.dart:396:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/features/morning_briefing/domain/morning_briefing_preferences.dart:66:7 • curly_braces_in_flow_control_structures
+   info • Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._accessKey') to initialize the field • lib/features/web_search/data/searxng_backend.dart:28:9 • prefer_initializing_formals
+   info • Unnecessary use of multiple underscores. Try using '_' • test/features/backup/backup_settings_screen_test.dart:85:24 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores. Try using '_' • test/features/backups/workmanager_automatic_backup_work_test.dart:152:26 • unnecessary_underscores
+   info • The import of 'dart:ui' is unnecessary because all of the used elements are also provided by the import of 'package:flutter_test/flutter_test.dart'. Try removing the import directive • test/features/brain3d/node_hit_test_test.dart:6:8 • unnecessary_import
+warning • Unused import: 'package:lifeos/features/chat/presentation/chat_providers.dart'. Try removing the import directive • test/features/chat/presentation/history_failure_test.dart:12:8 • unused_import
+warning • Unused import: 'package:lifeos/features/chat/presentation/chat_providers.dart'. Try removing the import directive • test/features/chat/presentation/history_reopen_test.dart:22:8 • unused_import
+warning • A value for optional parameter 'edges' isn't ever given. Try removing the unused parameter • test/features/data_control/export_service_test.dart:15:32 • unused_element_parameter
+   info • Use a function declaration rather than a variable assignment to bind a function to a name. Try rewriting the closure assignment as a function declaration • test/features/memory/domain/recall_timezone_test.dart:24:9 • prefer_function_declarations_over_variables
+   info • Use a function declaration rather than a variable assignment to bind a function to a name. Try rewriting the closure assignment as a function declaration • test/features/memory/domain/recall_timezone_test.dart:25:9 • prefer_function_declarations_over_variables
+warning • Unused import: 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart'. Try removing the import directive • test/features/morning_briefing/domain/hacker_news_tema_test.dart:16:8 • unused_import
+warning • Unused import: 'dart:typed_data'. Try removing the import directive • test/features/settings/synced_settings_store_test.dart:8:8 • unused_import
+warning • Unused import: 'package:lifeos/core/graph/graph_records.dart'. Try removing the import directive • test/features/settings/synced_settings_store_test.dart:11:8 • unused_import
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • tool/device_security_probe/probe_progress.dart:56:9 • use_null_aware_elements
+
+19 issues found. (ran in 11.1s)

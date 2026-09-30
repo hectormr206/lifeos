@@ -1,0 +1,51 @@
+[
+  {
+    "id": "work-scope",
+    "title": "El cliente pide algo fuera del alcance",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Explica con amabilidad qué cambia en tiempo y en precio.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Hey, quick question. Could you also add online payments? It should be easy, right?",
+        "Online payments need more time and cost.",
+        "That is a big change. Will this cost more money?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  },
+  {
+    "id": "work-standup",
+    "title": "Reunión diaria (stand-up)",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Cuenta qué hiciste ayer, qué harás hoy y si algo te bloquea.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Good morning! Let's keep it short. What did you work on yesterday?",
+        "Yesterday I fix a bug. Today I write tests.",
+        "That sounds good. What is the first test you will write today?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": [
+      "Yesterday I fix a bug today I write tests\nYesterday I fixed a bug today I write tests\nSe necesita el pasado simple para acciones terminadas ayer"
+    ]
+  },
+  {
+    "id": "work-rate",
+    "title": "Defender tu tarifa",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Defiende tu tarifa explicando el valor de tu trabajo.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "I really like your portfolio, but your rate is higher than I expected.",
+        "My rate cover careful testing and support.",
+        "Your work is good. How much do you think you can charge?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": [
+      "My rate cover careful testing and support\nMy rate covers careful testing and support\nfalta la 's' en cover porque el sujeto es singular"
+    ]
+  }
+]

@@ -1,0 +1,49 @@
+{
+  "head": "92967b77acf72a81a7e7ccc60e1942638717a661",
+  "versionName": "0.20.2",
+  "versionCode": 1030,
+  "publishedAt": "2026-09-27T19:54:17Z",
+  "confirmedOperations": [
+    "android-apk",
+    "android-manifest",
+    "android-current-link",
+    "linux-tarball",
+    "linux-installer",
+    "linux-manifest"
+  ],
+  "manifests": {
+    "android": {
+      "versionCode": 1030,
+      "versionName": "0.20.2",
+      "apkFilename": "lifeos-0.20.2-1030.apk",
+      "sha256": "8b03d496055bfe567732f9709b07a58bb967b42cc06e611e05a4e1bc2765369a",
+      "sizeBytes": 336715791,
+      "notes": "Corrige el cierre al escuchar inglés, la prueba de escucha, los botones de práctica y los recordatorios.",
+      "publishedAt": "2026-09-27T19:54:17Z"
+    },
+    "linux": {
+      "versionCode": 1030,
+      "versionName": "0.20.2",
+      "filename": "lifeos-linux-x64-0.20.2-1030.tar.gz",
+      "sha256": "cddf5b63593a232f51d639db6dd4fdfa9142dbed3d505c00f0cdec1efe6631ad",
+      "sizeBytes": 58666736,
+      "arch": "x64",
+      "platform": "linux",
+      "notes": "Corrige el cierre al escuchar inglés, la prueba de escucha, los botones de práctica y los recordatorios.",
+      "publishedAt": "2026-09-27T19:54:17Z"
+    }
+  },
+  "downloadVerification": {
+    "android": {
+      "httpStatus": 200,
+      "sizeBytes": 336715791,
+      "sha256": "8b03d496055bfe567732f9709b07a58bb967b42cc06e611e05a4e1bc2765369a"
+    },
+    "linux": {
+      "httpStatus": 200,
+      "sizeBytes": 58666736,
+      "sha256": "cddf5b63593a232f51d639db6dd4fdfa9142dbed3d505c00f0cdec1efe6631ad"
+    }
+  },
+  "personalDeviceInstallations": "NOT VERIFIED"
+}

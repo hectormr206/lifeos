@@ -1,0 +1,100 @@
+ACTIVITY MANAGER PROCESS EXIT INFO (dumpsys activity exit-info)
+Last Timestamp of Persistence Into Persistent Storage: 2026-09-26 23:17:22.448
+  package: com.lifeos.lifeos
+    Historical Process Exit for uid=10308
+        ApplicationExitInfo #0:
+          timestamp=2026-09-26 23:25:16.994 pid=9687 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=1 (EXIT_SELF) subreason=0 (UNKNOWN) status=255
+          importance=100 pss=0.00 rss=433MB state=empty trace=null
+          description=null
+          anrInfo=null
+        ApplicationExitInfo #1:
+          timestamp=2026-09-26 23:16:52.755 pid=6595 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=1 (EXIT_SELF) subreason=0 (UNKNOWN) status=255
+          importance=100 pss=0.00 rss=260MB state=empty trace=null
+          description=null
+          anrInfo=null
+        ApplicationExitInfo #2:
+          timestamp=2026-09-26 22:55:21.627 pid=1199 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=1 (EXIT_SELF) subreason=0 (UNKNOWN) status=255
+          importance=100 pss=0.00 rss=256MB state=empty trace=null
+          description=null
+          anrInfo=null
+        ApplicationExitInfo #3:
+          timestamp=2026-09-26 08:38:49.899 pid=27776 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=325 pss=0.00 rss=12GB state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #4:
+          timestamp=2026-09-25 22:05:31.674 pid=21124 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=100 pss=0.00 rss=658MB state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #5:
+          timestamp=2026-09-25 21:13:06.399 pid=17429 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=100 pss=0.00 rss=542MB state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #6:
+          timestamp=2026-09-25 20:41:07.194 pid=17173 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=11
+          importance=100 pss=0.00 rss=0.00 state=empty trace=null
+          description=crash
+          anrInfo=null
+        ApplicationExitInfo #7:
+          timestamp=2026-09-25 20:40:41.748 pid=17076 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=11
+          importance=100 pss=0.00 rss=0.00 state=empty trace=null
+          description=crash
+          anrInfo=null
+        ApplicationExitInfo #8:
+          timestamp=2026-09-25 20:40:16.880 pid=16952 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=11
+          importance=100 pss=0.00 rss=0.00 state=empty trace=null
+          description=crash
+          anrInfo=null
+        ApplicationExitInfo #9:
+          timestamp=2026-09-25 20:39:27.023 pid=16618 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=11
+          importance=325 pss=0.00 rss=0.00 state=empty trace=null
+          description=crash
+          anrInfo=null
+        ApplicationExitInfo #10:
+          timestamp=2026-09-25 20:39:11.528 pid=16454 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=11
+          importance=325 pss=0.00 rss=0.00 state=empty trace=null
+          description=crash
+          anrInfo=null
+        ApplicationExitInfo #11:
+          timestamp=2026-09-25 20:39:06.793 pid=22769 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=325 pss=0.00 rss=317MB state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #12:
+          timestamp=2026-09-24 17:52:14.216 pid=21734 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=100 pss=0.00 rss=0.00 state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #13:
+          timestamp=2026-09-24 17:21:44.873 pid=20731 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=10 (USER REQUESTED) subreason=21 (FORCE STOP) status=0
+          importance=100 pss=0.00 rss=0.00 state=empty trace=null
+          description=stop com.lifeos.lifeos due to from pid 21654
+          anrInfo=null
+        ApplicationExitInfo #14:
+          timestamp=2026-09-24 17:18:50.685 pid=10625 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=16 (PACKAGE UPDATED) subreason=0 (UNKNOWN) status=0
+          importance=400 pss=0.00 rss=144MB state=empty trace=null
+          description=stop com.lifeos.lifeos due to killDueToPackageUpdate
+          anrInfo=null
+        ApplicationExitInfo #15:
+          timestamp=2026-09-22 07:27:53.241 pid=18532 realUid=10308 packageUid=10308 definingUid=10308 user=0
+          process=com.lifeos.lifeos reason=5 (APP CRASH(NATIVE)) subreason=0 (UNKNOWN) status=6
+          importance=400 pss=0.00 rss=239MB state=empty trace=null
+          description=crash
+          anrInfo=null

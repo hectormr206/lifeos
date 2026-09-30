@@ -1,0 +1,128 @@
+Resolving dependencies...
+Downloading packages...
+  _fe_analyzer_shared 99.0.0 (108.0.0 available)
+  analyzer 12.1.0 (14.4.0 available)
+  archive 4.0.9 (4.3.0 available)
+  background_downloader 9.5.6 (9.6.2 available)
+  cli_util 0.4.2 (0.6.0 available)
+  clock 1.1.2 (1.1.3 available)
+  code_assets 1.2.1 (2.1.0 available)
+  copy_with_extension 7.1.0 (17.1.0 available)
+  cross_file 0.3.5+4 (0.4.0 available)
+  dart_sentencepiece_tokenizer 1.3.2 (1.4.1 available)
+  dbus 0.7.13 (0.8.0 available)
+  dio 5.10.0 (5.11.1 available)
+  dio_web_adapter 2.2.0 (2.2.2 available)
+  file_selector_linux 0.9.4 (0.9.4+1 available)
+  file_selector_macos 0.9.5 (0.9.5+1 available)
+  file_selector_windows 0.9.3+5 (0.9.3+6 available)
+  flutter_gemma 1.3.1 (1.9.0 available)
+  flutter_gemma_embeddings 1.0.2 (2.2.0 available)
+  flutter_gemma_litertlm 1.1.0 (1.8.0 available)
+  flutter_local_notifications 22.1.0 (22.3.1 available)
+  flutter_local_notifications_platform_interface 12.0.1 (12.2.0 available)
+  flutter_riverpod 3.3.2 (3.4.3 available)
+  flutter_secure_storage 10.3.1 (11.2.0 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.3 available)
+  flutter_secure_storage_linux 3.0.1 (3.0.3 available)
+  flutter_secure_storage_platform_interface 2.0.1 (2.1.1 available)
+  flutter_timezone 4.1.1 (5.1.0 available)
+  glob 2.1.3 (2.2.0 available)
+  go_router 17.3.0 (18.0.1 available)
+  hooks 2.0.2 (2.2.0 available)
+  image 4.9.1 (4.10.1 available)
+  image_picker_android 0.8.13+19 (0.8.13+23 available)
+  image_picker_ios 0.8.13+6 (0.8.13+8 available)
+  intl 0.20.2 (0.20.3 available)
+  io 1.0.5 (1.1.0 available)
+  jni 1.0.0 (1.0.3 available)
+  jni_flutter 1.0.1 (1.0.3 available)
+  large_file_handler 0.5.0 (0.5.2 available)
+  local_auth_android 2.0.9 (2.2.0 available)
+  local_auth_darwin 2.0.3 (2.0.4 available)
+  local_auth_windows 2.0.1 (2.0.2 available)
+  matcher 0.12.19 (0.12.20 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  meta 1.18.0 (1.19.0 available)
+  mime 2.0.0 (2.1.0 available)
+  native_toolchain_c 0.19.2 (0.19.5 available)
+  objective_c 9.4.1 (9.6.0 available)
+  package_config 2.2.0 (3.0.0 available)
+  permission_handler 12.0.3 (13.0.2 available)
+  permission_handler_android 13.0.1 (14.1.0 available)
+  permission_handler_apple 9.4.10 (9.6.1 available)
+  permission_handler_html 0.1.3+5 (0.1.4+1 available)
+  permission_handler_platform_interface 4.3.0 (4.4.1 available)
+  permission_handler_windows 0.2.1 (0.2.2 available)
+  platform 3.1.6 (3.2.0 available)
+  pool 1.5.2 (1.5.3 available)
+  posix 6.5.0 (6.5.2 available)
+  pub_semver 2.2.0 (2.2.1 available)
+  record_android 2.1.2 (2.2.0 available)
+  record_linux 2.1.1 (2.1.2 available)
+  record_use 0.6.0 (1.1.1 available)
+  record_web 2.1.1 (2.1.3 available)
+  record_windows 2.2.2 (2.3.0 available)
+  riverpod 3.3.2 (3.4.3 available)
+  shared_preferences_android 2.4.27 (2.4.28 available)
+  shared_preferences_foundation 2.5.6 (2.5.7 available)
+  sherpa_onnx 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_arm64 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_armeabi 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_x86 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_x86_64 1.13.4 (1.13.8 available)
+  sherpa_onnx_ios 1.13.4 (1.13.8 available)
+  sherpa_onnx_linux 1.13.4 (1.13.8 available)
+  sherpa_onnx_macos 1.13.4 (1.13.8 available)
+  sherpa_onnx_windows 1.13.4 (1.13.8 available)
+  source_maps 0.10.13 (0.10.14 available)
+  sqflite_common 2.5.11 (2.5.13 available)
+  sqflite_common_ffi 2.4.2 (2.4.3 available)
+  sqflite_sqlcipher 3.4.0 (3.4.1 available)
+  sqlite3 3.5.0 (3.6.0 available)
+  stack_trace 1.12.1 (1.12.2 available)
+  synchronized 3.4.1+1 (3.4.2 available)
+  test 1.31.0 (1.32.0 available)
+  test_api 0.7.11 (0.7.14 available)
+  test_core 0.6.17 (0.6.20 available)
+  tray_manager 0.5.3 (0.7.0 available)
+  url_launcher_android 6.3.32 (6.3.33 available)
+  url_launcher_ios 6.4.1 (6.4.2 available)
+  url_launcher_linux 3.2.2 (3.2.3 available)
+  url_launcher_macos 3.2.5 (3.2.6 available)
+  url_launcher_windows 3.1.5 (3.1.6 available)
+  uuid 4.5.3 (4.6.0 available)
+  vector_math 2.2.0 (2.4.3 available)
+  vm_service 15.2.0 (15.3.0 available)
+  win32 6.3.0 (6.4.0 available)
+  workmanager 0.9.0+3 (0.10.10 available)
+  workmanager_android 0.9.0+2 (0.10.9 available)
+  workmanager_apple 0.9.1+2 (0.9.11 available)
+  workmanager_platform_interface 0.9.1+1 (0.10.5 available)
+  yaml 3.1.3 (3.1.4 available)
+Got dependencies!
+100 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+Analyzing mobile...                                             
+
+   info • Angle brackets will be interpreted as HTML. Try using backticks around the content with angle brackets, or try replacing `<` with `&lt;` and `>` with `&gt;` • lib/features/chat/domain/chat_context_builder.dart:139:19 • unintended_html_in_doc_comment
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • lib/features/confession/presentation/confession_screen.dart:112:9 • use_null_aware_elements
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • lib/features/confession/presentation/confession_screen.dart:113:9 • use_null_aware_elements
+   info • Don't use 'BuildContext's across async gaps. Try rewriting the code to not use the 'BuildContext', or guard the use with a 'mounted' check • lib/features/data_control/presentation/export_tile.dart:68:44 • use_build_context_synchronously
+   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/features/morning_briefing/domain/morning_briefing.dart:396:9 • curly_braces_in_flow_control_structures
+   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/features/morning_briefing/domain/morning_briefing_preferences.dart:66:7 • curly_braces_in_flow_control_structures
+   info • Use an initializing formal to assign a parameter to a field. Try using an initialing formal ('this._accessKey') to initialize the field • lib/features/web_search/data/searxng_backend.dart:28:9 • prefer_initializing_formals
+   info • Unnecessary use of multiple underscores. Try using '_' • test/features/backup/backup_settings_screen_test.dart:85:24 • unnecessary_underscores
+   info • Unnecessary use of multiple underscores. Try using '_' • test/features/backups/workmanager_automatic_backup_work_test.dart:152:26 • unnecessary_underscores
+   info • The import of 'dart:ui' is unnecessary because all of the used elements are also provided by the import of 'package:flutter_test/flutter_test.dart'. Try removing the import directive • test/features/brain3d/node_hit_test_test.dart:6:8 • unnecessary_import
+warning • Unused import: 'package:lifeos/features/chat/presentation/chat_providers.dart'. Try removing the import directive • test/features/chat/presentation/history_failure_test.dart:12:8 • unused_import
+warning • Unused import: 'package:lifeos/features/chat/presentation/chat_providers.dart'. Try removing the import directive • test/features/chat/presentation/history_reopen_test.dart:22:8 • unused_import
+warning • A value for optional parameter 'edges' isn't ever given. Try removing the unused parameter • test/features/data_control/export_service_test.dart:15:32 • unused_element_parameter
+   info • Use a function declaration rather than a variable assignment to bind a function to a name. Try rewriting the closure assignment as a function declaration • test/features/memory/domain/recall_timezone_test.dart:24:9 • prefer_function_declarations_over_variables
+   info • Use a function declaration rather than a variable assignment to bind a function to a name. Try rewriting the closure assignment as a function declaration • test/features/memory/domain/recall_timezone_test.dart:25:9 • prefer_function_declarations_over_variables
+warning • Unused import: 'package:lifeos/features/morning_briefing/domain/morning_briefing.dart'. Try removing the import directive • test/features/morning_briefing/domain/hacker_news_tema_test.dart:16:8 • unused_import
+warning • Unused import: 'dart:typed_data'. Try removing the import directive • test/features/settings/synced_settings_store_test.dart:8:8 • unused_import
+warning • Unused import: 'package:lifeos/core/graph/graph_records.dart'. Try removing the import directive • test/features/settings/synced_settings_store_test.dart:11:8 • unused_import
+   info • Use the null-aware marker '?' rather than a null check via an 'if'. Try using '?' • tool/device_security_probe/probe_progress.dart:56:9 • use_null_aware_elements
+
+19 issues found. (ran in 11.3s)

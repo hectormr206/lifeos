@@ -1,0 +1,25 @@
+{
+  "mode": "delete",
+  "actions": [
+    {
+      "path": "/tmp/lifeos-english-candidate2-1024.apk",
+      "kind": "file",
+      "sha256": "a934f62da9985efed746d158b278c6607d9d7dc4a21cd61f66f62664ce6cef9f"
+    },
+    {
+      "path": "/tmp/lifeos-english-candidate-1024.apk",
+      "kind": "file",
+      "sha256": "1cf8fe1044f00e26afa06d9c1ddb7cf31bb1ec4885d40682af989fb1702b58d5"
+    },
+    {
+      "path": "/tmp/lifeos-english-fixtures.tar",
+      "kind": "file",
+      "sha256": "fbe114c8f81d6d035f9acb64aa59f3e7e1791787ec0911723835d62ad16133a4"
+    },
+    {
+      "path": "/tmp/lifeos-english-capture-v333.tar.gz",
+      "kind": "file",
+      "sha256": "9b30e813e8191329ba8025dc80cb0f198fb0a318960a3b5c15395cf675c9c638"
+    }
+  ]
+}

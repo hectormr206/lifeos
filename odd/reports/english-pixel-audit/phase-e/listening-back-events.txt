@@ -1,0 +1,4 @@
+before=14955
+after=14955
+scrcpy_exit=0
+events=[('listen_tap', 2.093415971030481), ('ui_before_back', 7.155707734054886, [('Escuchar', 'false'), ('Comprobar', 'false')]), ('back', 9.210146643046755)]

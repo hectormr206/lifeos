@@ -1,0 +1,41 @@
+{
+  "verified_hashes": {
+    "QA-English-corrupt.mp3": "00599c7382d1274e4d84cbfa41108017eff4eb72d1dcfcfa88a054490e978ccf",
+    "QA-English-silence.wav": "6b454e58dda23568eb196d6b02ae2c360112fa817da431e1c633979ecd166bb3",
+    "QA-English-lesson.mp4": "6161e4e7fc066ea8c3e4be16fab02610b8c6399136164f2580fbb2a36750fc25",
+    "QA-English-short.wav": "7af096f16375a8e354cd3c9321eff1d1e211b07306f642b8848c41757d484f73",
+    "qa-transcript.txt": "c3f15654a59feef9857e72f7bcaf91e7c7cabb98f105ed96bc181c5db7b6bfa6"
+  },
+  "deleted_owned_rows": [
+    {
+      "path": "/storage/emulated/0/Download/LifeOS-English-QA/qa-transcript.txt",
+      "result": "Prior delete returned empty stdout; independent post-read confirmed both row and file absent. Not replayed."
+    },
+    {
+      "id": "1000127740",
+      "path": "/storage/emulated/0/Download/LifeOS-English-QA/QA-English-corrupt.mp3",
+      "command_output": "",
+      "verified_absent": true
+    },
+    {
+      "id": "1000127741",
+      "path": "/storage/emulated/0/Download/LifeOS-English-QA/QA-English-silence.wav",
+      "command_output": "",
+      "verified_absent": true
+    },
+    {
+      "id": "1000127742",
+      "path": "/storage/emulated/0/Download/LifeOS-English-QA/QA-English-lesson.mp4",
+      "command_output": "",
+      "verified_absent": true
+    },
+    {
+      "id": "1000127743",
+      "path": "/storage/emulated/0/Download/LifeOS-English-QA/QA-English-short.wav",
+      "command_output": "",
+      "verified_absent": true
+    }
+  ],
+  "folder_removed": true,
+  "final_media_query": "No result found."
+}

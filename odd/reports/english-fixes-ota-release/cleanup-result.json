@@ -1,0 +1,15 @@
+{
+  "removedDevboxRoot": "/home/hectormr/work/lifeos-english-ota-0.20.2-1029",
+  "ownedBuildProcesses": [],
+  "originalInputsPreserved": true,
+  "sdkAndGlobalCachesUntouched": true,
+  "secureErasureClaim": false,
+  "removedGamaBundles": [
+    "/tmp/lifeos-english-ota-1029.bundle",
+    "/tmp/lifeos-english-ota-1030.bundle"
+  ],
+  "bundleHashes": [
+    "70f34c1e942ea060564483a69dbdcf2341f7ba3dcb23ed7be64c276648b2af2c",
+    "367e3b6ef93cf980e0a280be638dae1f95d1bbb98738fda99f85c531e1245a83"
+  ]
+}

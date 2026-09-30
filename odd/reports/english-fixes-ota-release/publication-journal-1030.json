@@ -1,0 +1,15 @@
+{
+  "head": "92967b77acf72a81a7e7ccc60e1942638717a661",
+  "versionCode": 1030,
+  "startedAt": "2026-09-27T19:54:17Z",
+  "confirmedOperations": [
+    "android-apk",
+    "android-manifest",
+    "android-current-link",
+    "linux-tarball",
+    "linux-installer",
+    "linux-manifest"
+  ],
+  "pendingOperation": null,
+  "publicVerification": "PASS"
+}

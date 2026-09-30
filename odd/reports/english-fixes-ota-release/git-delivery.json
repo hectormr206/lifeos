@@ -1,0 +1,8 @@
+{
+  "branch": "sync-over-vpn-pr1-mesh-trust",
+  "head": "92967b77acf72a81a7e7ccc60e1942638717a661",
+  "commitCount": 1030,
+  "ordinaryFastForward": true,
+  "normalPushVerified": true,
+  "sourceHashesMatched": 19
+}

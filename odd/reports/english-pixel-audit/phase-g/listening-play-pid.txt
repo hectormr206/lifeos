@@ -1,0 +1,3 @@
+before=14936
+after=14936
+scrcpy_exit=0

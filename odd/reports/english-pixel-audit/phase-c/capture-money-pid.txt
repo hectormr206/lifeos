@@ -1,0 +1,3 @@
+before: 14955
+after: 14955
+scrcpy_exit: 0

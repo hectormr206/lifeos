@@ -1,0 +1,168 @@
+Resolving dependencies...
+Downloading packages...
+  _fe_analyzer_shared 99.0.0 (108.0.0 available)
+  analyzer 12.1.0 (14.4.0 available)
+  archive 4.0.9 (4.3.0 available)
+  background_downloader 9.5.6 (9.6.3 available)
+  cli_util 0.4.2 (0.6.0 available)
+  clock 1.1.2 (1.1.3 available)
+  code_assets 1.2.1 (2.1.0 available)
+  copy_with_extension 7.1.0 (18.0.0 available)
+  cross_file 0.3.5+4 (0.4.0 available)
+  dart_sentencepiece_tokenizer 1.3.2 (1.4.1 available)
+  dbus 0.7.13 (0.8.0 available)
+  dio 5.10.0 (5.11.1 available)
+  dio_web_adapter 2.2.0 (2.2.2 available)
+  file_selector_linux 0.9.4 (0.9.4+1 available)
+  file_selector_macos 0.9.5 (0.9.5+1 available)
+  file_selector_windows 0.9.3+5 (0.9.3+6 available)
+  flutter_gemma 1.3.1 (1.11.1 available)
+  flutter_gemma_embeddings 1.0.2 (2.2.1 available)
+  flutter_gemma_litertlm 1.1.0 (1.8.4 available)
+  flutter_local_notifications 22.1.0 (22.3.1 available)
+  flutter_local_notifications_platform_interface 12.0.1 (12.2.0 available)
+  flutter_riverpod 3.3.2 (3.4.3 available)
+  flutter_secure_storage 10.3.1 (11.2.0 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.3 available)
+  flutter_secure_storage_linux 3.0.1 (3.0.3 available)
+  flutter_secure_storage_platform_interface 2.0.1 (2.1.1 available)
+  flutter_timezone 4.1.1 (5.1.0 available)
+  glob 2.1.3 (2.2.0 available)
+  go_router 17.3.0 (18.0.1 available)
+  hooks 2.0.2 (2.2.0 available)
+  image 4.9.1 (4.10.1 available)
+  image_picker_android 0.8.13+19 (0.8.13+23 available)
+  image_picker_ios 0.8.13+6 (0.8.13+8 available)
+  intl 0.20.2 (0.20.3 available)
+  io 1.0.5 (1.1.0 available)
+  jni 1.0.0 (1.0.3 available)
+  jni_flutter 1.0.1 (1.0.3 available)
+  large_file_handler 0.5.0 (0.5.2 available)
+  local_auth_android 2.0.9 (2.2.0 available)
+  local_auth_darwin 2.0.3 (2.0.4 available)
+  local_auth_windows 2.0.1 (2.0.2 available)
+  matcher 0.12.19 (0.12.20 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  meta 1.18.0 (1.19.0 available)
+  mime 2.0.0 (2.1.0 available)
+  native_toolchain_c 0.19.2 (0.19.5 available)
+  objective_c 9.4.1 (9.6.0 available)
+  package_config 2.2.0 (3.0.0 available)
+  permission_handler 12.0.3 (13.0.2 available)
+  permission_handler_android 13.0.1 (14.1.0 available)
+  permission_handler_apple 9.4.10 (9.6.2 available)
+  permission_handler_html 0.1.3+5 (0.1.4+1 available)
+  permission_handler_platform_interface 4.3.0 (4.4.1 available)
+  permission_handler_windows 0.2.1 (0.2.2 available)
+  petitparser 7.0.2 (7.1.0 available)
+  platform 3.1.6 (3.2.0 available)
+  pool 1.5.2 (1.5.3 available)
+  posix 6.5.0 (6.5.2 available)
+  pub_semver 2.2.0 (2.2.1 available)
+  record_android 2.1.2 (2.2.0 available)
+  record_linux 2.1.1 (2.1.2 available)
+  record_use 0.6.0 (1.1.1 available)
+  record_web 2.1.1 (2.1.3 available)
+  record_windows 2.2.2 (2.3.0 available)
+  riverpod 3.3.2 (3.4.3 available)
+  shared_preferences_android 2.4.27 (2.4.28 available)
+  shared_preferences_foundation 2.5.6 (2.5.7 available)
+  sherpa_onnx 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_arm64 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_armeabi 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_x86 1.13.4 (1.13.8 available)
+  sherpa_onnx_android_x86_64 1.13.4 (1.13.8 available)
+  sherpa_onnx_ios 1.13.4 (1.13.8 available)
+  sherpa_onnx_linux 1.13.4 (1.13.8 available)
+  sherpa_onnx_macos 1.13.4 (1.13.8 available)
+  sherpa_onnx_windows 1.13.4 (1.13.8 available)
+  source_maps 0.10.13 (0.10.14 available)
+  sqflite_common 2.5.11 (2.5.13 available)
+  sqflite_common_ffi 2.4.2 (2.4.3 available)
+  sqflite_sqlcipher 3.4.0 (3.4.1 available)
+  sqlite3 3.5.0 (3.6.0 available)
+  stack_trace 1.12.1 (1.12.2 available)
+  synchronized 3.4.1+1 (3.4.2 available)
+  test 1.31.0 (1.32.0 available)
+  test_api 0.7.11 (0.7.14 available)
+  test_core 0.6.17 (0.6.20 available)
+  tray_manager 0.5.3 (0.7.0 available)
+  url_launcher_android 6.3.32 (6.3.33 available)
+  url_launcher_ios 6.4.1 (6.4.2 available)
+  url_launcher_linux 3.2.2 (3.2.3 available)
+  url_launcher_macos 3.2.5 (3.2.6 available)
+  url_launcher_windows 3.1.5 (3.1.6 available)
+  uuid 4.5.3 (4.6.0 available)
+  vector_math 2.2.0 (2.4.3 available)
+  vm_service 15.2.0 (15.3.0 available)
+  win32 6.3.0 (6.4.0 available)
+  workmanager 0.9.0+3 (0.10.10 available)
+  workmanager_android 0.9.0+2 (0.10.9 available)
+  workmanager_apple 0.9.1+2 (0.9.11 available)
+  workmanager_platform_interface 0.9.1+1 (0.10.5 available)
+  xml 7.0.1 (7.1.0 available)
+  yaml 3.1.3 (3.1.4 available)
+Got dependencies!
+102 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+{"protocolVersion":"0.1.1","runnerVersion":"1.31.0","pid":868696,"type":"start","time":0}
+{"suite":{"id":0,"platform":"vm","path":"/home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"suite","time":0}
+{"test":{"id":1,"name":"loading /home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart","suiteID":0,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":1}
+{"suite":{"id":2,"platform":"vm","path":"/home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"suite","time":4}
+{"test":{"id":3,"name":"loading /home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart","suiteID":2,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":4}
+{"suite":{"id":4,"platform":"vm","path":"/home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"suite","time":5}
+{"test":{"id":5,"name":"loading /home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart","suiteID":4,"groupIDs":[],"metadata":{"skip":false,"skipReason":null},"line":null,"column":null,"url":null},"type":"testStart","time":5}
+{"count":3,"time":6,"type":"allSuites"}
+{"testID":1,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":3043}
+{"group":{"id":6,"suiteID":0,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":5,"line":null,"column":null,"url":null},"type":"group","time":3046}
+{"test":{"id":7,"name":"Local Model displays both optional resources without downloading on entry","suiteID":0,"groupIDs":[6],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":173,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"testStart","time":3047}
+{"testID":3,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":3306}
+{"group":{"id":8,"suiteID":2,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":7,"line":null,"column":null,"url":null},"type":"group","time":3306}
+{"group":{"id":9,"suiteID":2,"parentID":8,"name":"lifeOsModelsReadyProvider","metadata":{"skip":false,"skipReason":null},"testCount":5,"line":91,"column":3,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"group","time":3306}
+{"test":{"id":10,"name":"lifeOsModelsReadyProvider is TRUE only when all four models are installed","suiteID":2,"groupIDs":[8,9],"metadata":{"skip":false,"skipReason":null},"line":92,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3307}
+{"testID":10,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3430}
+{"test":{"id":11,"name":"lifeOsModelsReadyProvider is FALSE when any model is missing, and lists it as pending","suiteID":2,"groupIDs":[8,9],"metadata":{"skip":false,"skipReason":null},"line":107,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3430}
+{"testID":11,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3440}
+{"test":{"id":12,"name":"lifeOsModelsReadyProvider a fresh device (nothing installed) is not ready","suiteID":2,"groupIDs":[8,9],"metadata":{"skip":false,"skipReason":null},"line":123,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3440}
+{"testID":12,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3448}
+{"test":{"id":13,"name":"lifeOsModelsReadyProvider the SYSTEM-voice sentinel satisfies the TTS slot — deleting the last voice never locks chat behind \"Preparando LifeOS\"","suiteID":2,"groupIDs":[8,9],"metadata":{"skip":false,"skipReason":null},"line":131,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3448}
+{"testID":13,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3458}
+{"test":{"id":14,"name":"lifeOsModelsReadyProvider Descargar todo never tries to download the system sentinel","suiteID":2,"groupIDs":[8,9],"metadata":{"skip":false,"skipReason":null},"line":157,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3458}
+{"testID":14,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3475}
+{"group":{"id":15,"suiteID":2,"parentID":8,"name":"Descargar todo","metadata":{"skip":false,"skipReason":null},"testCount":2,"line":178,"column":3,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"group","time":3475}
+{"test":{"id":16,"name":"Descargar todo downloads the MISSING models and never re-downloads the installed brain","suiteID":2,"groupIDs":[8,15],"metadata":{"skip":false,"skipReason":null},"line":179,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3475}
+{"testID":16,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3487}
+{"test":{"id":17,"name":"Descargar todo with everything already installed, Descargar todo downloads nothing","suiteID":2,"groupIDs":[8,15],"metadata":{"skip":false,"skipReason":null},"line":213,"column":5,"url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/required_models_test.dart"},"type":"testStart","time":3488}
+{"testID":17,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":3499}
+{"testID":5,"result":"success","skipped":false,"hidden":true,"type":"testDone","time":3688}
+{"group":{"id":18,"suiteID":4,"parentID":null,"name":"","metadata":{"skip":false,"skipReason":null},"testCount":10,"line":null,"column":null,"url":null},"type":"group","time":3689}
+{"test":{"id":19,"name":"renders the unified required-models manager","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":100,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":3689}
+{"testID":7,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":4226}
+{"test":{"id":20,"name":"Spanish labels, installed Lessac and ZIPA are ready without selecting or downloading","suiteID":0,"groupIDs":[6],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":194,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"testStart","time":4226}
+{"testID":20,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":4368}
+{"test":{"id":21,"name":"checks disk before offering downloads","suiteID":0,"groupIDs":[6],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":234,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"testStart","time":4369}
+{"testID":21,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":4507}
+{"test":{"id":22,"name":"independent progress, single-flight and shared state after remount","suiteID":0,"groupIDs":[6],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":253,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"testStart","time":4508}
+{"testID":22,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":4842}
+{"test":{"id":23,"name":"each failed download offers a retry independently","suiteID":0,"groupIDs":[6],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":327,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/english_models_manager_test.dart"},"type":"testStart","time":4842}
+{"testID":19,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":4926}
+{"test":{"id":24,"name":"no longer shows the removed legacy single-brain controls","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":105,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":4927}
+{"testID":23,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5078}
+{"testID":24,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5078}
+{"test":{"id":25,"name":"shows the \"nuevo modelo disponible\" banner when the manifest is newer","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":118,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5083}
+{"testID":25,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5193}
+{"test":{"id":26,"name":"no update banner when the installed model is current","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":133,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5194}
+{"testID":26,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5289}
+{"test":{"id":27,"name":"tapping \"Actualizar modelo\" runs the update through the gateway","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":144,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5289}
+{"testID":27,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5469}
+{"test":{"id":28,"name":"picking CPU persists the choice and releases the loaded model","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":167,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5469}
+{"testID":28,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5628}
+{"test":{"id":29,"name":"la pantalla explica que «Automático» depende del aparato","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":184,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5629}
+{"testID":29,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5733}
+{"test":{"id":30,"name":"a stored forced backend comes back selected","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":192,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5733}
+{"testID":30,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5836}
+{"test":{"id":31,"name":"elegir «No» persiste la elección y suelta el modelo cargado","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":210,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5836}
+{"testID":31,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":5964}
+{"test":{"id":32,"name":"una elección guardada vuelve seleccionada","suiteID":4,"groupIDs":[18],"metadata":{"skip":false,"skipReason":null},"line":174,"column":5,"url":"package:flutter_test/src/widget_tester.dart","root_line":225,"root_column":3,"root_url":"file:///home/hectormr/work/lifeos-english-model-settings/repo/mobile/test/features/local_model/presentation/local_model_screen_test.dart"},"type":"testStart","time":5964}
+{"testID":32,"result":"success","skipped":false,"hidden":false,"type":"testDone","time":6083}
+{"success":true,"type":"done","time":6117}

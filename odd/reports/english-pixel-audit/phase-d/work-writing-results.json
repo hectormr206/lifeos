@@ -1,0 +1,30 @@
+[
+  {
+    "id": "work-writing-update",
+    "title": "Correo de avance",
+    "feedback": [
+      "This week I finish the page next week I adds tests\nThis week I finish the page next week I add tests\nel verbo debe ser simple presente para hábitos o rutinas"
+    ],
+    "visible_tail": [
+      "Write an email to a client saying what you finished this week and what comes next.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "This week I finish the page. Next week I adds tests.",
+      "Revisar",
+      "This week I finish the page next week I adds tests\nThis week I finish the page next week I add tests\nel verbo debe ser simple presente para hábitos o rutinas"
+    ]
+  },
+  {
+    "id": "work-writing-pull-request",
+    "title": "Descripción de un pull request",
+    "feedback": [
+      "This change fix a bug\nThis change fixes a bug\nfalta la 's' en el verbo para concordar con 'change'"
+    ],
+    "visible_tail": [
+      "Describe in a few sentences what your code change does and how to test it.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "This change fix a bug. You can test by opening the page.",
+      "Revisar",
+      "This change fix a bug\nThis change fixes a bug\nfalta la 's' en el verbo para concordar con 'change'"
+    ]
+  }
+]

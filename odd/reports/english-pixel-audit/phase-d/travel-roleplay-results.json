@@ -1,0 +1,55 @@
+[
+  {
+    "id": "travel-hotel",
+    "title": "Llegar al hotel",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Haz el check-in y pregunta por el desayuno y el wifi.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Good evening, welcome to the Riverside Hotel. Do you have a reservation?",
+        "Hello. I have a reservation. When is breakfast?",
+        "Breakfast is at eight in the morning. Do you need anything else?",
+        "Hablar"
+      ],
+      [
+        "Good evening, welcome to the Riverside Hotel. Do you have a reservation?",
+        "Hello. I have a reservation. When is breakfast?",
+        "Breakfast is at eight in the morning. Do you need anything else?",
+        "Thank you. What can I do next?",
+        "You can check out at noon. Do you need a room key now?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  },
+  {
+    "id": "travel-airport",
+    "title": "En el mostrador del aeropuerto",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Documenta tu maleta y pregunta por tu puerta de embarque.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Hello. Where are you flying today?",
+        "I need to check a bag. Where is my gate?",
+        "Please show me your passport. Where is your flight to?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  },
+  {
+    "id": "travel-directions",
+    "title": "Pedir indicaciones",
+    "reply_evidence": [
+      [
+        "Tu objetivo: Pregunta cómo llegar a un lugar.",
+        "Escribe o di tu respuesta en inglés. El personaje no te corrige: al terminar, te señalo lo más importante.",
+        "Hi, you look a little lost. Can I help you?",
+        "Excuse me. How do I get to the museum?",
+        "The museum is on the next street. Do you have a map?",
+        "Hablar"
+      ]
+    ],
+    "feedback_labels": []
+  }
+]

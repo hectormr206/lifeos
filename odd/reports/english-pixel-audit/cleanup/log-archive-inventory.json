@@ -1,0 +1,7 @@
+{
+  "archive": "/home/hectormr/work/lifeos-english-pixel-audit/screened-evidence-logs.tar.gz",
+  "sha256": "876515a235fdfcd73e4c504660eec6f7f91934158373d94d6dd4ab2d007e2f44",
+  "included": ["analyze.log", "audio-verification/transcripts-e.log", "audio-verification/transcripts.log", "candidate-2-build.log", "candidate-apk.sha256", "empty-actions-analyze.log", "empty-actions-tests.log", "f1-targeted.log", "f2-boundary-targeted.log", "final-candidate-analyze.log", "final-candidate-test-events.jsonl", "final-candidate-test-events.stderr", "full-suite.log", "pixel-candidate-build.log", "reminder-mapped-tests-v2.log", "reminder-mapped-tests.log", "test-events.jsonl", "test-events.stderr"],
+  "excluded": [],
+  "transport_note": "Remote archive creation and secret-value screening succeeded. Initial local inventory write failed because cleanup/ did not exist; this receipt was then saved with the directory-creating write tool. Archive creation was not replayed."
+}

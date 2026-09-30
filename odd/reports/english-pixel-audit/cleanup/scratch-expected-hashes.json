@@ -1,0 +1,27 @@
+{
+  "captures": {
+    "/tmp/lifeos-qa-money.flac": "cd1f1fed83817b979022446a4e443a260945e683d9e35eedd3df80242d2a712f",
+    "/tmp/lifeos-qa-software.flac": "123693578604e1f092ee9873bd62bfc40f3f00c3e29831f893a1992976603112",
+    "/tmp/lifeos-qa-listening.flac": "33412a35a493f9d5b60607aac3b65cdf9cf1d71afac9d7e5cbce399d3e8bb60f",
+    "/tmp/lifeos-qa-import-wav.flac": "e39605ea249953735eb1ca793a325e97ffc49ba1da958b8fc446cc02543c9094",
+    "/tmp/lifeos-qa-import-mp4.flac": "9eb298f0ab425fe7ff8e811cd3c76b6a42894adadd4b6e6d918eaec8d132bdfa",
+    "/tmp/lifeos-qa-f3-stop.flac": "593efef2cfe389ac7adc2c83c5fd0ad8c297e4e1e02eb11dc7efd1582c7ac04d",
+    "/tmp/lifeos-qa-f3-slow-restart-stop.flac": "137ade6323398b4e7bf24abc2ad63cee55c4e5b331f2b080505da1938f3e5b3f",
+    "/tmp/lifeos-qa-phase-d-work-call.flac": "a0779300efcad40ccc9973251a02bbec270977a1727479fc810867f3fe8b0a32",
+    "/tmp/lifeos-qa-phase-e-voice-daniela-preview.flac": "66cc74fd3ac3894ffb7befde10ec410379c83e712a99ae0655dbfdffd41e00ab",
+    "/tmp/lifeos-qa-phase-e-reader-listen.flac": "6805775f42fd5a49f9dc952e157bd87754c89b0890ed43ffe49935b52107d606",
+    "/tmp/lifeos-qa-phase-e-archive-playback.flac": "dc076d1f6f26be4829c79eee065d65dcbe7b86ff179595bf574f78da414e7dbe",
+    "/tmp/lifeos-qa-phase-e-neighbor-listen.flac": "23919f59785ab3c2e7cebb26f30f9e0731c8836c1710bfda035392c84e830112",
+    "/tmp/lifeos-qa-phase-e-listening-back.flac": "c13f5da1191121e57d4a0083169f3d4fc78b60b4ba55fa245a371052382a56c1",
+    "/tmp/lifeos-qa-phase-g-reader-play.flac": "b59085f63a0cba8f8a3af5bbed3c5d102fcc0a76fe3820decf893f3c16b38f27",
+    "/tmp/lifeos-qa-phase-g-daniela-preview.flac": "9d123da5b94b103973abe269dec450ab324b8934e414bab332eb4a3140a40d98",
+    "/tmp/lifeos-qa-phase-g-listening-play.flac": "f23b4fb48597b427bf38782b8a56dccfa78333828892429a2027e946b02056a3"
+  },
+  "fixtures": {
+    "QA-English-corrupt.mp3": "00599c7382d1274e4d84cbfa41108017eff4eb72d1dcfcfa88a054490e978ccf",
+    "QA-English-silence.wav": "6b454e58dda23568eb196d6b02ae2c360112fa817da431e1c633979ecd166bb3",
+    "QA-English-lesson.mp4": "6161e4e7fc066ea8c3e4be16fab02610b8c6399136164f2580fbb2a36750fc25",
+    "QA-English-short.wav": "7af096f16375a8e354cd3c9321eff1d1e211b07306f642b8848c41757d484f73",
+    "qa-transcript.txt": "c3f15654a59feef9857e72f7bcaf91e7c7cabb98f105ed96bc181c5db7b6bfa6"
+  }
+}

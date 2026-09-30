@@ -1,0 +1,16 @@
+{
+  "platform": "android",
+  "versionName": "0.20.2",
+  "versionCode": 1030,
+  "head": "92967b77acf72a81a7e7ccc60e1942638717a661",
+  "apk": "/home/hectormr/work/lifeos-english-ota-0.20.2-1029/repo/mobile/build/app/outputs/flutter-apk/app-release.apk",
+  "sizeBytes": 336715791,
+  "sha256": "8b03d496055bfe567732f9709b07a58bb967b42cc06e611e05a4e1bc2765369a",
+  "signerSha256": "247f99664691ca35aba85970aa4a7d8cb54048bedd275c33700ac94bf5bbaaf7",
+  "bakedConfigGuard": "PASS",
+  "metadataRule": "AndroidManifest via aapt, independently verified; no version.json asset required",
+  "independentVerifier": "muk7xoug-1l-dti5",
+  "buildExit": 0,
+  "buildSeconds": 146,
+  "sourceHashesMatched": 19
+}

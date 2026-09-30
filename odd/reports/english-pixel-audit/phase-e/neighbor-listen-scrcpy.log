@@ -1,0 +1,9 @@
+/tmp/lifeos-english-capture-v333/scrcpy-server: 1 file pushed, 0 skipped. 152.5 MB/s (90164 bytes in 0.001s)
+[server] INFO: Device: [Google] google Pixel 7 Pro (Android 17)
+scrcpy 3.3.3 <https://github.com/Genymobile/scrcpy>
+INFO: ADB device found:
+INFO:     -->   (usb)  29291FDH300LVM                  device  Pixel_7_Pro
+INFO: Recording started to flac file: /tmp/lifeos-qa-phase-e-neighbor-listen.flac
+INFO: Time limit reached
+INFO: Recording complete to flac file: /tmp/lifeos-qa-phase-e-neighbor-listen.flac
+WARN: Killing the server...

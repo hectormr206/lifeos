@@ -1,0 +1,33 @@
+{
+  "platform": "linux",
+  "arch": "x64",
+  "versionName": "0.20.2",
+  "versionCode": 1030,
+  "assetVersion": {
+    "app_name": "lifeos",
+    "version": "0.20.2",
+    "build_number": "1030",
+    "package_name": "lifeos"
+  },
+  "head": "92967b77acf72a81a7e7ccc60e1942638717a661",
+  "bundle": "/home/hectormr/work/lifeos-english-ota-0.20.2-1029/repo/mobile/build/linux/x64/release/bundle",
+  "tarball": "/home/hectormr/work/lifeos-english-ota-0.20.2-1029/payload/lifeos-linux-x64-0.20.2-1030.tar.gz",
+  "filename": "lifeos-linux-x64-0.20.2-1030.tar.gz",
+  "sizeBytes": 58666736,
+  "sha256": "cddf5b63593a232f51d639db6dd4fdfa9142dbed3d505c00f0cdec1efe6631ad",
+  "bakedConfigGuard": "PASS",
+  "audioDecoderPlugin": "libaudio_decoder_plugin.so",
+  "runtimeDependencies": "no missing executable/decoder libraries",
+  "sourceHashesMatched": 19,
+  "trackedSourceClean": true,
+  "buildExit": 0,
+  "elapsedSeconds": 16,
+  "stagedUnits": [
+    "lifeos-updater.service",
+    "lifeos-updater.timer",
+    "lifeos-updater.path",
+    "lifeos-briefing.service",
+    "lifeos-briefing.timer"
+  ],
+  "payloadPermissions": "directories0755/files0644/executables0755"
+}

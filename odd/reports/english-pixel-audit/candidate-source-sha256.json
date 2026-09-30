@@ -1,0 +1,13 @@
+{
+  "mobile/lib/features/english/presentation/english_listening_screen.dart": "36b60a2841cca76b3cfdfdf1f87c222a77f85f50b4e81d2066a855e521a56e94",
+  "mobile/lib/features/tts/data/piper_model_metadata.dart": "a963aa93ca930c3ba57479b1dc27629a8bbca6b7bc0c3e4b716c061bfa9f9be7",
+  "mobile/lib/features/tts/data/sherpa_piper_speech_synthesizer.dart": "8a03aca3998e16d0cead04074dd9f7fc5a9d34e1f27d960225e5015d7d420ad4",
+  "mobile/lib/l10n/app_en.arb": "fbd982a56b2a2d8738ab636cd271388a2a58755137c8adf4c3d057494e30fbf0",
+  "mobile/lib/l10n/app_es.arb": "18d1279528b63ab8030538e3d16c9a7fa72ebbc59c92378782d42e327ad2d1ab",
+  "mobile/lib/l10n/app_localizations.dart": "51620735e8bea1040510a2f0a642cd20044374315ed3b9da6495f2de7553958f",
+  "mobile/lib/l10n/app_localizations_en.dart": "e93d5a32b89fc21b12d413b7a391994f01c3686c90123bc1952b17a3db874580",
+  "mobile/lib/l10n/app_localizations_es.dart": "71e35d59cb1b108f4436dfab74cc77d82cde324f966e5c45dd056fdcf1a9d06a",
+  "mobile/test/features/english/presentation/english_listening_screen_test.dart": "232f502438cb1afbf6fa6316d6d720d59d99687399098f89e5be72c449e51bfb",
+  "mobile/test/features/tts/data/piper_model_metadata_test.dart": "41d54545f4048b2ba4c3d20b8be82769f2fc02406ab0b334f3bc21911d530c48",
+  "mobile/test/features/tts/data/sherpa_piper_speech_synthesizer_test.dart": "24f219c7eeffede08c0c8a4ae26413b57186832042002415344b7d12014a5b47"
+}

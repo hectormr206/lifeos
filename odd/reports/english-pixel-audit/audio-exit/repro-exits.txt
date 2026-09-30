@@ -1,0 +1,3 @@
+Source: ssh asus 'pct exec 212 -- adb -s 29291FDH300LVM shell dumpsys activity exit-info com.lifeos.lifeos'; immediate excerpts after controlled taps.
+Money / PID 10731: timestamp=2026-09-26 23:39:04.631; reason=1 (EXIT_SELF); subreason=0 (UNKNOWN); status=255. PID-scoped logcat capture did not start (directory absent).
+Database / PID 11875: timestamp=2026-09-26 23:41:18.198; reason=1 (EXIT_SELF); subreason=0 (UNKNOWN); status=255. PID-scoped logcat had already started, and logged missing sample_rate metadata at 23:41:18.069 (lines 111-112 of database-pid-logcat.txt).

@@ -1,0 +1,4 @@
+--------- beginning of system
+09-26 23:18:41.529  9687  9703 I DisplayManager: Choreographer implicitly registered for the refresh rate.
+09-26 23:18:41.778  9687  9687 D InsetsController: hide(ime())
+09-26 23:18:41.778  9687  9687 I ImeTracker: com.lifeos.lifeos:ab63e7e0: onCancelled at PHASE_CLIENT_ALREADY_HIDDEN

@@ -1,0 +1,44 @@
+[
+  {
+    "id": "travel-writing-hotel-email",
+    "title": "Correo al hotel",
+    "feedback": [
+      "Can I check in early I arrives at noon\nCan I check in early I arrive at noon\nEl verbo arrive debe estar en presente simple."
+    ],
+    "visible_tail": [
+      "Write an email to a hotel asking if you can check in early.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "Can I check in early? I arrives at noon.",
+      "Revisar",
+      "Can I check in early I arrives at noon\nCan I check in early I arrive at noon\nEl verbo arrive debe estar en presente simple."
+    ]
+  },
+  {
+    "id": "travel-writing-review",
+    "title": "Reseña de un lugar",
+    "feedback": [
+      "The restaurant was good we enjoys the food\nThe restaurant was good we enjoy the food\nel verbo debe ir en plural cuando el sujeto es we"
+    ],
+    "visible_tail": [
+      "Write a short review of a restaurant you visited on a trip.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "The restaurant was good. We enjoys the food.",
+      "Revisar",
+      "The restaurant was good we enjoys the food\nThe restaurant was good we enjoy the food\nel verbo debe ir en plural cuando el sujeto es we"
+    ]
+  },
+  {
+    "id": "travel-writing-lost-bag",
+    "title": "Maleta perdida",
+    "feedback": [
+      "My bag do not arrive\nMy bag does not arrive\nError en la conjugación del verbo to be (does not)"
+    ],
+    "visible_tail": [
+      "Write a message to the airline because your bag did not arrive.",
+      "Escribe en inglés. Luego revísalo: te señalo como mucho dos errores, los que más importan.",
+      "My bag do not arrive. Please find it.",
+      "Revisar",
+      "My bag do not arrive\nMy bag does not arrive\nError en la conjugación del verbo to be (does not)"
+    ]
+  }
+]

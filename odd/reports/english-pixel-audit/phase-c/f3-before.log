@@ -1,0 +1,3 @@
+--------- beginning of main
+09-27 01:28:13.005 14955 22312 E m.lifeos.lifeos: Failed to query component interface for required system resources: 6
+09-27 01:28:54.718 14955 22413 E NuMediaExtractor: initMediaExtractor: failed to create MediaExtractor

@@ -1,0 +1,4 @@
+before=14955
+after=14955
+scrcpy_exit=0
+during=['Detener']; immediate=['Escuchar']; after11s=['Escuchar']; second=['second tap not needed']
