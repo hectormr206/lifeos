@@ -33,7 +33,7 @@ class _Digest extends DailyDigestNotifier {
       const DailyDigestState(schedule: DailyDigestSchedule(enabled: false));
 }
 
-Widget _screen(Widget child, {List<String> sources = const []}) => ProviderScope(
+Widget _screen(Widget child, {List<String> sources = const [], bool dark = false}) => ProviderScope(
       overrides: [
         appVersionInfoProvider.overrideWithValue(_Version()),
         morningBriefingPreferencesProvider.overrideWithValue(
@@ -48,7 +48,8 @@ Widget _screen(Widget child, {List<String> sources = const []}) => ProviderScope
         dailyDigestNotifierProvider.overrideWith(_Digest.new),
       ],
       child: MaterialApp(
-        theme: goldenTheme(),
+        debugShowCheckedModeBanner: false,
+        theme: dark ? goldenDarkTheme() : goldenTheme(),
         locale: const Locale('es'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
@@ -95,15 +96,16 @@ void main() {
         matching: find.byType(GroupedList)), findsOneWidget);
   });
 
-  for (final (name, screen, tall) in [
-    ('settings_hub.png', const SettingsHubScreen(), true),
-    ('settings_briefing.png', const MorningBriefingScreen(), false),
-    ('settings_daily_digest.png', const DailyDigestScreen(), false),
+  for (final (name, screen, tall, dark) in [
+    ('settings_hub.png', const SettingsHubScreen(), true, false),
+    ('settings_hub_dark.png', const SettingsHubScreen(), true, true),
+    ('settings_briefing.png', const MorningBriefingScreen(), false, false),
+    ('settings_daily_digest.png', const DailyDigestScreen(), false, false),
   ]) {
     testWidgets('golden: $name', (tester) async {
       useGoldenSurface(tester);
       if (tall) tester.view.physicalSize = const Size(390, 1950) * kGoldenDpr;
-      await tester.pumpWidget(_screen(screen));
+      await tester.pumpWidget(_screen(screen, dark: dark));
       await tester.pumpAndSettle();
       await tester.pump(const Duration(seconds: 1));
       await expectLater(find.byWidget(screen), matchesGoldenFile('images/$name'));

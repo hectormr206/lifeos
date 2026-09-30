@@ -122,7 +122,7 @@ class _DigestView extends StatelessWidget {
         const SizedBox(height: 8),
         if (digest.wrapUp.isNotEmpty) ...[
           Card(
-            color: Theme.of(context).colorScheme.secondaryContainer,
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
             child: Padding(
               padding: const EdgeInsets.all(16),
               child: Text(digest.wrapUp),

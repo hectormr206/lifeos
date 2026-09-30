@@ -88,12 +88,17 @@ void main() {
     reminders: const [],
   );
 
-  for (final dark in [false, true]) {
-    testWidgets('golden: Mi vida — 2 people, 2 domains, dark=$dark', (tester) async {
+  for (final (dark, wide) in [(false, false), (true, false), (false, true)]) {
+    testWidgets('golden: Mi vida — 2 people, 2 domains, dark=$dark wide=$wide', (tester) async {
       useGoldenSurface(tester);
       // A tall portrait captures every group in this scrolling page so visual
       // review includes the second person and domain, not only the first fold.
       tester.view.physicalSize = const Size(390, 1100) * kGoldenDpr;
+      if (wide) {
+        tester.view.physicalSize = const Size(1280, 800);
+        tester.view.devicePixelRatio = 1;
+        addTearDown(tester.view.resetDevicePixelRatio);
+      }
       await tester.pumpWidget(
         ProviderScope(
           overrides: [
@@ -102,6 +107,7 @@ void main() {
             dailyDigestNotifierProvider.overrideWith(_FixedDigest.new),
           ],
           child: MaterialApp(
+            debugShowCheckedModeBanner: false,
             theme: dark ? goldenDarkTheme() : goldenTheme(),
             locale: const Locale('es'),
             localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -114,9 +120,11 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300));
       await expectLater(
         find.byType(MiVidaScreen),
-        matchesGoldenFile(dark
-            ? 'images/mi_vida_screen_dark.png'
-            : 'images/mi_vida_screen.png'),
+        matchesGoldenFile(wide
+            ? 'images/mi_vida_screen_wide_light.png'
+            : dark
+                ? 'images/mi_vida_screen_dark.png'
+                : 'images/mi_vida_screen.png'),
       );
     });
   }

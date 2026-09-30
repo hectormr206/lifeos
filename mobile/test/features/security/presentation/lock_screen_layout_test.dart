@@ -38,5 +38,6 @@ void main() {
 
     final title = tester.widget<Text>(find.text('LifeOS está bloqueado'));
     expect(title.style?.fontSize, lifeosLightTheme.textTheme.headlineMedium?.fontSize);
+    expect(title.style?.fontFamily, lifeosLightTheme.textTheme.headlineMedium?.fontFamily);
   });
 }

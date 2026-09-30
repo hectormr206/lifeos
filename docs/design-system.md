@@ -29,6 +29,10 @@ light / dark values (hex RGB); remaining error roles come from the teal seed.
 The bright `LifeOSColors.teal` fills primary actions in *both* themes with
 dark ink. Light-mode text and icons use the darker scheme `primary` instead.
 
+Pink is Axi-only. Selection states (selected segments, selected/checked chips)
+use `primaryContainer` with `onPrimaryContainer`, never `secondary` pink; the
+theme sets this for `SegmentedButton` and `ChoiceChip`/`FilterChip`.
+
 ## Typography
 
 Both bundled OFL families are declared in `mobile/pubspec.yaml`, with no network
@@ -36,6 +40,9 @@ font fetching. Bricolage Grotesque (700–800) is for display, headlines and
 `titleLarge`; Atkinson Hyperlegible Next is for `titleMedium/Small`, body and
 labels. Body sizes/line heights: 17/26, 15/22, 13/18. Use the theme text styles
 rather than local font declarations; they carry on-surface colors and weights.
+List titles are `bodyLarge` at w600 and subtitles `bodyMedium` in
+`onSurfaceVariant`; `ListTileTheme` carries both, so `GroupedRow` and plain
+`ListTile`s match without local overrides.
 
 ## Shape and layout
 

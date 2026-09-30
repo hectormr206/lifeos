@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_palette.dart';
 import '../../../theme/lifeos_tokens.dart';
 import '../../tts/domain/tts_voice.dart';
 import '../domain/voice_catalog.dart';
@@ -66,8 +67,10 @@ class VoiceCatalogScreen extends ConsumerWidget {
               children: [
                 for (final (index, voice) in group.voices.indexed) ...[
                   if (index > 0)
-                    const Divider(
+                    Divider(
                       height: Space.md,
+                      color: groupedDividerColor(
+                          Theme.of(context).colorScheme, LifeOSPalette.of(context)),
                       indent: Space.lg,
                       endIndent: Space.lg,
                     ),

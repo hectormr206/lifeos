@@ -203,6 +203,8 @@ ThemeData _buildTheme(ColorScheme scheme) {
     ),
     listTileTheme: ListTileThemeData(
       iconColor: scheme.onSurfaceVariant,
+      titleTextStyle: type.bodyLarge?.copyWith(fontWeight: FontWeight.w600, color: scheme.onSurface),
+      subtitleTextStyle: type.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
       contentPadding: const EdgeInsets.symmetric(horizontal: 20),
     ),
     inputDecorationTheme: InputDecorationThemeData(
@@ -219,9 +221,20 @@ ThemeData _buildTheme(ColorScheme scheme) {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.chip)),
       side: BorderSide(color: scheme.outlineVariant),
       labelStyle: type.labelMedium,
+      selectedColor: scheme.primaryContainer,
+      secondarySelectedColor: scheme.primaryContainer,
+      checkmarkColor: scheme.onPrimaryContainer,
     ),
-    segmentedButtonTheme: const SegmentedButtonThemeData(
-      style: ButtonStyle(shape: WidgetStatePropertyAll(StadiumBorder())),
+    segmentedButtonTheme: SegmentedButtonThemeData(
+      style: ButtonStyle(
+        shape: const WidgetStatePropertyAll(StadiumBorder()),
+        backgroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? scheme.primaryContainer : null,
+        ),
+        foregroundColor: WidgetStateProperty.resolveWith(
+          (states) => states.contains(WidgetState.selected) ? scheme.onPrimaryContainer : null,
+        ),
+      ),
     ),
     dialogTheme: DialogThemeData(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(Radii.panel)),

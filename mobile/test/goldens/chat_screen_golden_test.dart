@@ -57,11 +57,16 @@ class _FakeChatRepository implements ChatRepository {
 }
 
 void main() {
-  for (final dark in [false, true]) {
+  for (final (dark, wide) in [(false, false), (true, false), (false, true)]) {
     testWidgets(
-      'golden: chat ${dark ? 'dark' : 'light'} — user, Axi and voice bubbles',
+      'golden: chat ${dark ? 'dark' : 'light'}${wide ? ' wide' : ''} — user, Axi and voice bubbles',
       (tester) async {
         useGoldenSurface(tester);
+        if (wide) {
+          tester.view.physicalSize = const Size(1280, 800);
+          tester.view.devicePixelRatio = 1;
+          addTearDown(tester.view.resetDevicePixelRatio);
+        }
 
         final ts = DateTime.utc(2026, 7, 22, 10, 30);
         final repo = _FakeChatRepository([
@@ -93,6 +98,7 @@ void main() {
         // On-device baseline: readiness gate + banners pinned quiet (mirrors the
         // working chat_screen_test baseline) via a nested ProviderScope.
         final app = MaterialApp(
+          debugShowCheckedModeBanner: false,
           theme: dark ? goldenDarkTheme() : goldenTheme(),
           locale: const Locale('es'),
           localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -128,7 +134,8 @@ void main() {
 
         await expectLater(
           find.byType(ChatScreen),
-          matchesGoldenFile('images/chat_screen${dark ? '_dark' : ''}.png'),
+          matchesGoldenFile(
+              'images/chat_screen${wide ? '_wide_light' : dark ? '_dark' : ''}.png'),
         );
       },
     );

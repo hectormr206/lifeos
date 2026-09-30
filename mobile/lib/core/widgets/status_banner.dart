@@ -42,8 +42,13 @@ class StatusBanner extends StatelessWidget {
         borderRadius: BorderRadius.circular(Radii.input),
       ),
       child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, size: 20, color: foreground),
+          // 1px lines the 20px icon up with the centre of a 22px first text line.
+          Padding(
+            padding: const EdgeInsets.only(top: 1),
+            child: Icon(icon, size: 20, color: foreground),
+          ),
           const SizedBox(width: Space.md),
           Expanded(
             child: DefaultTextStyle.merge(

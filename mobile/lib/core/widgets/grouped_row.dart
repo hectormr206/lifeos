@@ -62,17 +62,13 @@ class GroupedRow extends StatelessWidget {
               ),
               child: Icon(icon, size: 20, color: foreground),
             ),
-      title: Text(
-        title,
-        style: theme.textTheme.bodyLarge?.copyWith(fontWeight: FontWeight.w600),
-      ),
+      title: Text(title),
       subtitle: subtitle == null
           ? null
           : Text(
               subtitle!,
               maxLines: subtitleMaxLines,
               overflow: subtitleMaxLines == null ? TextOverflow.visible : TextOverflow.ellipsis,
-              style: theme.textTheme.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
             ),
       trailing: trailing ??
           (showChevron && enabled && onTap != null
