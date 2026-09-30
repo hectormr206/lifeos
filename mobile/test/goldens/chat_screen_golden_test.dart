@@ -57,68 +57,80 @@ class _FakeChatRepository implements ChatRepository {
 }
 
 void main() {
-  testWidgets('golden: chat — user, Axi and voice bubbles', (tester) async {
-    useGoldenSurface(tester);
+  for (final dark in [false, true]) {
+    testWidgets(
+      'golden: chat ${dark ? 'dark' : 'light'} — user, Axi and voice bubbles',
+      (tester) async {
+        useGoldenSurface(tester);
 
-    final ts = DateTime.utc(2026, 7, 22, 10, 30);
-    final repo = _FakeChatRepository([
-      ChatMessage(
-        id: 'u1',
-        role: ChatRole.user,
-        text: '122 77 55 pulsos, corrí 5km en la mañana',
-        timestamp: ts,
-        status: ChatMessageStatus.delivered,
-      ),
-      ChatMessage(
-        id: 'a1',
-        role: ChatRole.axi,
-        text: 'Anotado: presión 122/77 y tu carrera de 5 km. ¡Buen ritmo!',
-        timestamp: ts,
-      ),
-      ChatMessage(
-        id: 'v1',
-        role: ChatRole.user,
-        text: '',
-        timestamp: ts,
-        kind: ChatMessageKind.voice,
-        audioPath: '/tmp/fake-voice-note.m4a',
-        audioDuration: const Duration(seconds: 4),
-        transcription: 'recuérdame comprar leche',
-      ),
-    ]);
+        final ts = DateTime.utc(2026, 7, 22, 10, 30);
+        final repo = _FakeChatRepository([
+          ChatMessage(
+            id: 'u1',
+            role: ChatRole.user,
+            text: '122 77 55 pulsos, corrí 5km en la mañana',
+            timestamp: ts,
+            status: ChatMessageStatus.delivered,
+          ),
+          ChatMessage(
+            id: 'a1',
+            role: ChatRole.axi,
+            text: 'Anotado: presión 122/77 y tu carrera de 5 km. ¡Buen ritmo!',
+            timestamp: ts,
+          ),
+          ChatMessage(
+            id: 'v1',
+            role: ChatRole.user,
+            text: '',
+            timestamp: ts,
+            kind: ChatMessageKind.voice,
+            audioPath: '/tmp/fake-voice-note.m4a',
+            audioDuration: const Duration(seconds: 4),
+            transcription: 'recuérdame comprar leche',
+          ),
+        ]);
 
-    // On-device baseline: readiness gate + banners pinned quiet (mirrors the
-    // working chat_screen_test baseline) via a nested ProviderScope.
-    final app = MaterialApp(
-      theme: goldenTheme(),
-      locale: const Locale('es'),
-      localizationsDelegates: AppLocalizations.localizationsDelegates,
-      supportedLocales: AppLocalizations.supportedLocales,
-      home: ProviderScope(
-        overrides: [
-          lifeOsModelsReadyProvider.overrideWithValue(true),
-          localLlmEngineProvider
-              .overrideWithValue(FakeLocalLlmEngine(installed: true)),
-          localModelLoadProvider.overrideWith(_ReadyLoadNotifier.new),
-          sttModelDownloadProvider
-              .overrideWith(() => _FixedSttStatusNotifier(const SttModelReady())),
-        ],
-        child: const ChatScreen(),
-      ),
+        // On-device baseline: readiness gate + banners pinned quiet (mirrors the
+        // working chat_screen_test baseline) via a nested ProviderScope.
+        final app = MaterialApp(
+          theme: dark ? goldenDarkTheme() : goldenTheme(),
+          locale: const Locale('es'),
+          localizationsDelegates: AppLocalizations.localizationsDelegates,
+          supportedLocales: AppLocalizations.supportedLocales,
+          home: ProviderScope(
+            overrides: [
+              lifeOsModelsReadyProvider.overrideWithValue(true),
+              localLlmEngineProvider
+                  .overrideWithValue(FakeLocalLlmEngine(installed: true)),
+              localModelLoadProvider.overrideWith(_ReadyLoadNotifier.new),
+              sttModelDownloadProvider.overrideWith(
+                () => _FixedSttStatusNotifier(const SttModelReady()),
+              ),
+            ],
+            child: const ChatScreen(),
+          ),
+        );
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [chatRepositoryProvider.overrideWithValue(repo)],
+            child: app,
+          ),
+        );
+        // Decode the new AppBar mark before capture, including on a cold cache.
+        // FakeAsync pumping alone can leave the first image frame blank.
+        await tester.runAsync(() => precacheImage(
+          const AssetImage('assets/branding/axi-512.png'),
+          tester.element(find.byType(ChatScreen)),
+        ));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        await expectLater(
+          find.byType(ChatScreen),
+          matchesGoldenFile('images/chat_screen${dark ? '_dark' : ''}.png'),
+        );
+      },
     );
-
-    await tester.pumpWidget(
-      ProviderScope(
-        overrides: [chatRepositoryProvider.overrideWithValue(repo)],
-        child: app,
-      ),
-    );
-    await tester.pump();
-    await tester.pump(const Duration(milliseconds: 300));
-
-    await expectLater(
-      find.byType(ChatScreen),
-      matchesGoldenFile('images/chat_screen.png'),
-    );
-  });
+  }
 }
