@@ -165,25 +165,22 @@ class _NodeList extends StatelessWidget {
         ),
       );
     }
-    return ListView(
+    return GroupedListView.builder(
       padding: EdgeInsets.fromLTRB(
         kPageGutter,
         Space.sm,
         kPageGutter,
         Space.xxxl + MediaQuery.paddingOf(context).bottom,
       ),
-      children: [
-        GroupedList(
-          children: [
-            for (final node in state.nodes)
-              GroupedRow(
-                title: node.label.isNotEmpty ? node.label : '(sin título)',
-                subtitle: _subtitle(node),
-                onTap: () => context.push('/settings/graph/${node.uuid}'),
-              ),
-          ],
-        ),
-      ],
+      itemCount: state.nodes.length,
+      itemBuilder: (context, index) {
+        final node = state.nodes[index];
+        return GroupedRow(
+          title: node.label.isNotEmpty ? node.label : '(sin título)',
+          subtitle: _subtitle(node),
+          onTap: () => context.push('/settings/graph/${node.uuid}'),
+        );
+      },
     );
   }
 

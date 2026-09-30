@@ -41,33 +41,30 @@ class ConflictHistoryScreen extends StatelessWidget {
       appBar: AppBar(title: const Text('Historial de conflictos')),
       body: conflicts.isEmpty
           ? const _Empty()
-          : PageBody(
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(bottom: Space.lg),
-                  child: Text(
-                    'Cuando dos dispositivos cambian lo mismo, se conserva '
-                    'una versión y la otra queda aquí. Nunca se borra sola.',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      color: theme.colorScheme.onSurfaceVariant,
-                    ),
+          : GroupedListView.builder(
+              header: Padding(
+                padding: const EdgeInsets.only(bottom: Space.lg),
+                child: Text(
+                  'Cuando dos dispositivos cambian lo mismo, se conserva '
+                  'una versión y la otra queda aquí. Nunca se borra sola.',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
                   ),
                 ),
-                GroupedList(
-                  children: [
-                    for (final c in conflicts)
-                      GroupedRow(
-                        title: c.losingLabel,
-                        subtitle: 'Desde ${c.deviceLabel(nicknamesByUuid)} · '
-                            '${_when(c.resolvedAt)}',
-                        trailing: TextButton(
-                          onPressed: () => onRestore(c),
-                          child: const Text('Restaurar'),
-                        ),
-                      ),
-                  ],
-                ),
-              ],
+              ),
+              itemCount: conflicts.length,
+              itemBuilder: (context, index) {
+                final c = conflicts[index];
+                return GroupedRow(
+                  title: c.losingLabel,
+                  subtitle: 'Desde ${c.deviceLabel(nicknamesByUuid)} · '
+                      '${_when(c.resolvedAt)}',
+                  trailing: TextButton(
+                    onPressed: () => onRestore(c),
+                    child: const Text('Restaurar'),
+                  ),
+                );
+              },
             ),
     );
   }

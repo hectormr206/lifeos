@@ -180,6 +180,25 @@ void main() {
     expect(find.byType(RefreshIndicator), findsOneWidget);
   });
 
+  testWidgets('a large reminder list builds rows lazily', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final scheduler = _Scheduler();
+    final service = LocalRemindersService(LocalRemindersRepository(_Graph()), scheduler);
+    for (var i = 0; i < 500; i++) {
+      await service.create(text: 'Reminder $i', dueAt: DateTime(2026, 9, 26, 9, 30));
+    }
+    await tester.pumpWidget(ProviderScope(overrides: [
+      clockProvider.overrideWithValue(_Clock()),
+      reminderSchedulerProvider.overrideWithValue(scheduler),
+      localRemindersServiceProvider.overrideWith((ref) async => service),
+    ], child: MaterialApp(theme: lifeosLightTheme, home: const RemindersScreen())));
+    await tester.pumpAndSettle();
+    expect(find.byType(ListTile), findsWidgets);
+    expect(find.byType(ListTile).evaluate().length, lessThan(50));
+    expect(find.text('Reminder 499'), findsNothing);
+  });
+
   for (final width in [320.0, 390.0, 1280.0]) {
     testWidgets('reminder time uses tabular display figures at width $width', (tester) async {
       await tester.binding.setSurfaceSize(Size(width, 844));
@@ -196,8 +215,8 @@ void main() {
       final time = tester.widget<Text>(find.text('09:30'));
       expect(time.style?.fontFeatures, contains(const FontFeature.tabularFigures()));
       expect(time.style?.fontFamily, lifeosLightTheme.textTheme.titleLarge?.fontFamily);
-      expect(find.ancestor(of: find.text('Llamar al doctor'), matching: find.byType(GroupedList)), findsOneWidget);
-      expect(tester.getSize(find.byType(GroupedList)).width, lessThanOrEqualTo(kContentMaxWidth - 2 * kPageGutter));
+      expect(find.ancestor(of: find.text('Llamar al doctor'), matching: find.byType(GroupedListView)), findsOneWidget);
+      expect(tester.getSize(find.byType(ListTile)).width, lessThanOrEqualTo(kContentMaxWidth - 2 * kPageGutter));
       expect(tester.getSize(find.byType(TextField)).width, lessThanOrEqualTo(kContentMaxWidth - 2 * kPageGutter));
       expect(tester.takeException(), isNull);
     });

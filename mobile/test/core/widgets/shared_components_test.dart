@@ -66,6 +66,132 @@ void main() {
     expect(find.text('Third'), findsOneWidget);
   });
 
+  group('GroupedListView.builder', () {
+    Future<int> pumpLarge(WidgetTester tester, {int count = 10000}) async {
+      tester.view.physicalSize = const Size(390, 844);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      var built = 0;
+      await show(
+        tester,
+        GroupedListView.builder(
+          itemCount: count,
+          itemBuilder: (context, i) {
+            built++;
+            return GroupedRow(title: 'Row $i');
+          },
+        ),
+      );
+      return built;
+    }
+
+    testWidgets('builds only the visible rows of a huge list', (tester) async {
+      final built = await pumpLarge(tester);
+      expect(built, lessThan(100));
+      expect(built, greaterThan(0));
+      expect(find.byType(ListTile).evaluate().length, lessThan(100));
+    });
+
+    testWidgets('dividers sit between visible rows, not after the last', (tester) async {
+      await pumpLarge(tester);
+      final rows = find.byType(ListTile).evaluate().length;
+      expect(find.byType(Divider), findsNWidgets(rows));
+      await show(tester, GroupedListView.builder(
+        itemCount: 3,
+        itemBuilder: (_, i) => GroupedRow(title: 'Row $i'),
+      ));
+      expect(find.byType(Divider), findsNWidgets(2));
+    });
+
+    BorderRadius outline(WidgetTester tester, String title) {
+      final material = find
+          .ancestor(of: find.text(title), matching: find.byType(Material))
+          .evaluate()
+          .map((e) => e.widget as Material)
+          .firstWhere((m) => m.shape != null && m.clipBehavior == Clip.antiAlias);
+      final path = material.shape!.getOuterPath(const Rect.fromLTWH(0, 0, 100, 100));
+      bool inside(double x, double y) => path.contains(Offset(x, y));
+      // Probe just inside each corner: a rounded corner excludes it.
+      final tl = inside(0.5, 0.5), tr = inside(99.5, 0.5);
+      final bl = inside(0.5, 99.5), br = inside(99.5, 99.5);
+      return BorderRadius.only(
+        topLeft: tl ? Radius.zero : const Radius.circular(1),
+        topRight: tr ? Radius.zero : const Radius.circular(1),
+        bottomLeft: bl ? Radius.zero : const Radius.circular(1),
+        bottomRight: br ? Radius.zero : const Radius.circular(1),
+      );
+    }
+
+    testWidgets('first and last rows are rounded, middle rows are square', (tester) async {
+      await show(tester, GroupedListView.builder(
+        itemCount: 3,
+        itemBuilder: (_, i) => GroupedRow(title: 'Row $i'),
+      ));
+      final first = outline(tester, 'Row 0');
+      final middle = outline(tester, 'Row 1');
+      final last = outline(tester, 'Row 2');
+      expect(first.topLeft, isNot(Radius.zero));
+      expect(first.topRight, isNot(Radius.zero));
+      expect(first.bottomLeft, Radius.zero);
+      expect(middle, BorderRadius.zero);
+      expect(last.topLeft, Radius.zero);
+      expect(last.bottomLeft, isNot(Radius.zero));
+      expect(last.bottomRight, isNot(Radius.zero));
+    });
+
+    testWidgets('a single row is rounded on every corner', (tester) async {
+      await show(tester, GroupedListView.builder(
+        itemCount: 1,
+        itemBuilder: (_, i) => GroupedRow(title: 'Only'),
+      ));
+      final only = outline(tester, 'Only');
+      expect(only.topLeft, isNot(Radius.zero));
+      expect(only.bottomRight, isNot(Radius.zero));
+      expect(find.byType(Divider), findsNothing);
+    });
+
+    testWidgets('uses the same fill as GroupedList in light and dark', (tester) async {
+      for (final theme in [lifeosLightTheme, lifeosDarkTheme]) {
+        await show(tester, const GroupedList(children: [GroupedRow(title: 'Eager')]), theme: theme);
+        final eager = tester.widget<Material>(find
+            .ancestor(of: find.text('Eager'), matching: find.byType(Material))
+            .evaluate()
+            .map((e) => find.byWidget(e.widget))
+            .firstWhere((f) => tester.widget<Material>(f).clipBehavior == Clip.antiAlias)).color;
+        await show(tester, GroupedListView.builder(
+          itemCount: 1,
+          itemBuilder: (_, i) => const GroupedRow(title: 'Lazy'),
+        ), theme: theme);
+        final lazy = tester.widget<Material>(find
+            .ancestor(of: find.text('Lazy'), matching: find.byType(Material))
+            .evaluate()
+            .map((e) => find.byWidget(e.widget))
+            .firstWhere((f) => tester.widget<Material>(f).clipBehavior == Clip.antiAlias)).color;
+        expect(lazy, eager);
+      }
+    });
+
+    testWidgets('header scrolls with the list and content is width-capped', (tester) async {
+      tester.view.physicalSize = const Size(1200, 800);
+      tester.view.devicePixelRatio = 1;
+      addTearDown(() {
+        tester.view.resetPhysicalSize();
+        tester.view.resetDevicePixelRatio();
+      });
+      await show(tester, GroupedListView.builder(
+        header: const Text('Header'),
+        itemCount: 2,
+        itemBuilder: (_, i) => GroupedRow(title: 'Row $i'),
+      ));
+      expect(find.text('Header'), findsOneWidget);
+      expect(find.byType(Divider), findsOneWidget);
+      expect(tester.getSize(find.byType(ListTile).first).width, lessThanOrEqualTo(kContentMaxWidth));
+    });
+  });
+
   testWidgets('GroupedRow is a ListTile; tap, subtitle and chevron work', (tester) async {
     var taps = 0;
     await show(tester, GroupedRow(

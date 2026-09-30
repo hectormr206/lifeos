@@ -4,7 +4,25 @@ import '../../theme/lifeos_palette.dart';
 import '../../theme/lifeos_tokens.dart';
 import 'grouped_row.dart';
 
+/// Fill colour shared by every grouped surface.
+Color groupedFill(ColorScheme scheme) => scheme.brightness == Brightness.dark
+    ? scheme.surfaceContainer
+    : scheme.surfaceContainerLowest;
+
+/// Hairline colour of the divider between grouped rows.
+Color groupedDividerColor(ColorScheme scheme, LifeOSPalette palette) =>
+    scheme.brightness == Brightness.dark
+        ? scheme.outlineVariant.withValues(alpha: 0.6)
+        : palette.hairline;
+
+/// Divider inset: aligned to the row's content, past its icon tile if any.
+double groupedDividerIndent(Widget row) =>
+    row is GroupedRow && row.icon != null ? Space.lg + 36 + Space.md : Space.lg;
+
 /// An inset group with dividers aligned to the preceding row's content.
+///
+/// Builds every child eagerly; use [GroupedListView.builder] for unbounded
+/// collections.
 class GroupedList extends StatelessWidget {
   const GroupedList({super.key, required this.children});
 
@@ -16,7 +34,7 @@ class GroupedList extends StatelessWidget {
     final isDark = scheme.brightness == Brightness.dark;
     final palette = LifeOSPalette.of(context);
     return Material(
-      color: isDark ? scheme.surfaceContainer : scheme.surfaceContainerLowest,
+      color: groupedFill(scheme),
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(Radii.card),
         side: isDark ? BorderSide.none : BorderSide(color: palette.hairline),
@@ -31,13 +49,8 @@ class GroupedList extends StatelessWidget {
               Divider(
                 height: 1,
                 thickness: 1,
-                color: isDark
-                    ? scheme.outlineVariant.withValues(alpha: 0.6)
-                    : palette.hairline,
-                indent: children[index] is GroupedRow &&
-                        (children[index] as GroupedRow).icon != null
-                    ? Space.lg + 36 + Space.md
-                    : Space.lg,
+                color: groupedDividerColor(scheme, palette),
+                indent: groupedDividerIndent(children[index]),
               ),
           ],
         ],

@@ -143,6 +143,26 @@ Widget _app(LocalGraphStore store) => ProviderScope(
     );
 
 void main() {
+  testWidgets('a large memory builds rows lazily', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(390, 844));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final store = _FakeLocalGraphStore(nodes: [
+      for (var i = 0; i < 500; i++)
+        _node(
+          uuid: 'n$i',
+          kind: 'fact',
+          label: 'Fact $i',
+          createdAt: DateTime.utc(2026, 1, 1).add(Duration(minutes: i)),
+        ),
+    ]);
+    await tester.pumpWidget(_app(store));
+    await tester.pumpAndSettle();
+
+    expect(find.byType(ListTile), findsWidgets);
+    expect(find.byType(ListTile).evaluate().length, lessThan(50));
+    expect(find.text('Fact 0'), findsNothing);
+  });
+
   testWidgets('empty store shows the friendly empty-state message',
       (tester) async {
     await tester.pumpWidget(_app(_FakeLocalGraphStore()));

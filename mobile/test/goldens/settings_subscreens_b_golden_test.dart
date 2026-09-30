@@ -136,6 +136,7 @@ Widget _app(Widget screen, [List<Override> overrides = const []]) =>
     ProviderScope(
       overrides: overrides,
       child: MaterialApp.router(
+        debugShowCheckedModeBanner: false,
         theme: goldenTheme(),
         locale: const Locale('es'),
         localizationsDelegates: AppLocalizations.localizationsDelegates,
@@ -200,7 +201,10 @@ void main() {
   }
 
   double firstGroupWidth(WidgetTester tester) =>
-      tester.getSize(find.byType(GroupedList).first).width;
+      tester
+          .getSize(find.byWidgetPredicate(
+              (w) => w is GroupedList || w is GroupedListView).first)
+          .width;
 
   Widget syncScreen({SyncConnectivity connectivity = SyncConnectivity.reachable}) =>
       SyncSettingsScreen(
@@ -362,7 +366,7 @@ void main() {
     await pump(tester, const LocalGraphBrowserScreen(),
         overrides: graphOverrides, wide: true);
     expect(find.text('Marta Ríos'), findsOneWidget);
-    expect(find.ancestor(of: find.text('Marta Ríos'), matching: find.byType(GroupedList)),
+    expect(find.ancestor(of: find.text('Marta Ríos'), matching: find.byType(GroupedListView)),
         findsOneWidget);
     expect(firstGroupWidth(tester), lessThanOrEqualTo(kContentMaxWidth));
   });

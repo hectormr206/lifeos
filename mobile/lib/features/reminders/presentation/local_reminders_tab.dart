@@ -274,27 +274,21 @@ class _LocalRemindersTabState extends ConsumerState<LocalRemindersTab> {
         ),
       );
     }
-    return ListView(
+    final notifier = ref.read(localRemindersNotifierProvider.notifier);
+    return GroupedListView.builder(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, Space.xxl),
-      children: [
-        GroupedList(children: [
-          for (final reminder in state.reminders)
-            _LocalReminderTile(
-              reminder: reminder,
-              onDone: () => ref
-                  .read(localRemindersNotifierProvider.notifier)
-                  .complete(reminder),
-              onDelete: () => ref
-                  .read(localRemindersNotifierProvider.notifier)
-                  .remove(reminder),
-              onEdit: () => _edit(reminder),
-              onToggleEnabled: (enabled) => ref
-                  .read(localRemindersNotifierProvider.notifier)
-                  .setEnabled(reminder, enabled),
-            ),
-        ]),
-      ],
+      itemCount: state.reminders.length,
+      itemBuilder: (context, index) {
+        final reminder = state.reminders[index];
+        return _LocalReminderTile(
+          reminder: reminder,
+          onDone: () => notifier.complete(reminder),
+          onDelete: () => notifier.remove(reminder),
+          onEdit: () => _edit(reminder),
+          onToggleEnabled: (enabled) => notifier.setEnabled(reminder, enabled),
+        );
+      },
     );
   }
 }

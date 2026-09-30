@@ -79,6 +79,10 @@ Import `package:lifeos/core/widgets/widgets.dart` for shared page elements:
 | `OfflineBanner` | Show the cached-data notice only while offline with cache | `OfflineBanner()` |
 | `PendingSyncBanner` | Show a queued-mutation count only when nonzero | `PendingSyncBanner()` |
 
+### Lazy lists
+
+`GroupedList` builds every child eagerly, so use it only for short, fixed sections (settings, home). For collections that can grow without bound (memory nodes, reminders, history), use `GroupedListView.builder(itemCount:, itemBuilder:)`: it renders the same inset group lazily, with rounded outer corners, the hairline border and inset dividers drawn per row, and it keeps content within `kContentMaxWidth`. It accepts `padding`, `physics` (for example `AlwaysScrollableScrollPhysics` inside a `RefreshIndicator`), `controller` and an optional scrolling `header`.
+
 ## Golden updates
 
 On a machine with Flutter, sync the mobile package to a dedicated devbox
