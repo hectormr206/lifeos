@@ -215,7 +215,9 @@ void main() {
         peerDeviceId: 'c3d4',
         lastStatus: SyncStatus(
           ok: true,
-          at: DateTime(2026, 7, 21, 8),
+          // Relative to the real clock: the indicator renders "hace …" from
+          // DateTime.now(), so a fixed date made this golden drift daily.
+          at: DateTime.now().subtract(const Duration(hours: 2)),
           applied: 3,
           sent: 1,
           message: null,
