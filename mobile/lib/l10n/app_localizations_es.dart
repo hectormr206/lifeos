@@ -591,6 +591,18 @@ class AppLocalizationsEs extends AppLocalizations {
   String get homeTalkToAxi => 'Hablar con Axi';
 
   @override
+  String get homeGreetingMorning => 'Buenos días';
+
+  @override
+  String get homeGreetingAfternoon => 'Buenas tardes';
+
+  @override
+  String get homeGreetingEvening => 'Buenas noches';
+
+  @override
+  String get homeGreetingPrompt => '¿Qué quieres contarme?';
+
+  @override
   String get homeMyData => 'Registrar por categoría';
 
   @override

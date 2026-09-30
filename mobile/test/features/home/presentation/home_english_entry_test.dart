@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:lifeos/app.dart';
 import 'package:lifeos/core/api/api_providers.dart';
+import 'package:lifeos/core/widgets/grouped_row.dart';
 import 'package:lifeos/l10n/locale_providers.dart';
 
 import '../../../support/fake_token_store.dart';
@@ -30,11 +31,11 @@ void main() {
     // Invoked directly, not tapped: see home_brain_entry_test.dart for why a
     // tap inside the scrolling home menu can land on the AppBar instead.
     tester
-        .widget<OutlinedButton>(find.ancestor(
+        .widget<GroupedRow>(find.ancestor(
           of: find.text('Inglés'),
-          matching: find.byType(OutlinedButton),
+          matching: find.byType(GroupedRow),
         ))
-        .onPressed!();
+        .onTap!();
     // Bounded pumps: the placement watches the local graph store, which never
     // resolves in tests, so pumpAndSettle would wait forever.
     await tester.pump();

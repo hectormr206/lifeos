@@ -1136,6 +1136,30 @@ abstract class AppLocalizations {
   /// **'Talk to Axi'**
   String get homeTalkToAxi;
 
+  /// No description provided for @homeGreetingMorning.
+  ///
+  /// In en, this message translates to:
+  /// **'Good morning'**
+  String get homeGreetingMorning;
+
+  /// No description provided for @homeGreetingAfternoon.
+  ///
+  /// In en, this message translates to:
+  /// **'Good afternoon'**
+  String get homeGreetingAfternoon;
+
+  /// No description provided for @homeGreetingEvening.
+  ///
+  /// In en, this message translates to:
+  /// **'Good evening'**
+  String get homeGreetingEvening;
+
+  /// No description provided for @homeGreetingPrompt.
+  ///
+  /// In en, this message translates to:
+  /// **'What\'s on your mind?'**
+  String get homeGreetingPrompt;
+
   /// No description provided for @homeMyData.
   ///
   /// In en, this message translates to:

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/status_banner.dart';
+
 import '../../../l10n/app_localizations.dart';
 import '../domain/update_initiator.dart';
 import '../domain/update_status.dart';
@@ -37,36 +39,28 @@ class UpdateAvailableBanner extends ConsumerWidget {
     if (!state.updateBannerVisible) return const SizedBox.shrink();
 
     final l10n = AppLocalizations.of(context);
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.primaryContainer,
-      margin: const EdgeInsets.only(bottom: 12),
-      child: ListTile(
-        leading: Icon(Icons.system_update, color: scheme.onPrimaryContainer),
-        title: Text(
-          'Nueva versión disponible',
-          style: TextStyle(color: scheme.onPrimaryContainer, fontWeight: FontWeight.bold),
+    return GestureDetector(
+      onTap: () {
+        ref.read(appUpdateNotifierProvider.notifier)
+            .startUpdate(initiator: UpdateInitiator.user);
+        context.push('/settings/updates');
+      },
+      child: StatusBanner(
+        tone: BannerTone.info,
+        icon: Icons.system_update,
+        message: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Nueva versión disponible',
+                style: TextStyle(fontWeight: FontWeight.bold)),
+            Text('LifeOS ${status.versionName} — toca para actualizar'),
+          ],
         ),
-        subtitle: Text(
-          'LifeOS ${status.versionName} — toca para actualizar',
-          style: TextStyle(color: scheme.onPrimaryContainer),
-        ),
-        trailing: IconButton(
-          icon: Icon(Icons.close, color: scheme.onPrimaryContainer),
+        action: IconButton(
+          icon: const Icon(Icons.close),
           tooltip: l10n.updateBannerDismissTooltip,
-          onPressed: () =>
-              ref.read(appUpdateNotifierProvider.notifier).dismissUpdateBanner(),
+          onPressed: () => ref.read(appUpdateNotifierProvider.notifier).dismissUpdateBanner(),
         ),
-        onTap: () {
-          // One tap: kick off the whole update flow and open the
-          // Actualizaciones screen so progress and — crucially — the OUTCOME
-          // are visible. This is the user pressing the button, so the desktop
-          // flow is allowed to relaunch the app into the new version.
-          ref
-              .read(appUpdateNotifierProvider.notifier)
-              .startUpdate(initiator: UpdateInitiator.user);
-          context.push('/settings/updates');
-        },
       ),
     );
   }

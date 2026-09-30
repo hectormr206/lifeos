@@ -1,13 +1,15 @@
 import 'package:flutter/material.dart';
-
-
-import '../../app_update/presentation/restart_banner.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/clock/clock.dart';
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
+import '../../app_update/presentation/restart_banner.dart';
 import '../../app_update/presentation/update_available_banner.dart';
 import '../../axi_body/presentation/axi_body_widget.dart';
 import '../../connection/domain/connection_status.dart';
@@ -16,10 +18,7 @@ import '../../first_day/presentation/backup_reminder.dart';
 import '../../local_model/presentation/local_model_notifier.dart';
 import 'home_providers.dart';
 
-/// Foundation home screen (design D1 / M0->M1 bridge; spec
-/// mobile-app-shell, M1 slice 1): shows the connection status to the
-/// paired engine and a CTA to connect when unpaired. Deliberately NOT a
-/// chat/domain UI — that is the next slice.
+/// Axi greets you first; the navigation remains available in both connection states.
 class HomeScreen extends ConsumerWidget {
   const HomeScreen({super.key});
 
@@ -27,7 +26,10 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final connection = ref.watch(connectionNotifierProvider);
     final l10n = AppLocalizations.of(context);
-
+    final engineUrl = switch (connection) {
+      ConnectionPaired(engineUrl: final url) => url,
+      _ => null,
+    };
     return Scaffold(
       appBar: AppBar(
         title: const Text('LifeOS'),
@@ -41,25 +43,45 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          // A newer build already installed on disk while this process keeps
-          // running the old one. Measured on the user's laptop: installed at
-          // 07:03, app still running the binary it started at 00:23 — and he
-          // reasonably concluded the update had never arrived, because nothing
-          // told him otherwise. Invisible on Android, where installing an APK
-          // restarts the app.
-          const RestartPendingBanner(),
-          // "Si pierdes este teléfono". Aparece sólo cuando ya hay algo que
-          // perder, y desaparece en cuanto existe una copia.
-          const BackupReminderBanner(),
+          const _HomeBanners(),
           Expanded(
-            child: Center(
-              child: SingleChildScrollView(
-                child: switch (connection) {
-                  ConnectionPaired(engineUrl: final engineUrl) =>
-                    _ConnectedView(engineUrl: engineUrl),
-                  _ => const _UnpairedView(),
-                },
-              ),
+            child: LayoutBuilder(
+              builder: (context, constraints) {
+                if (constraints.maxWidth < 960) {
+                  return PageBody(children: [
+                    _HomeIntroduction(engineUrl: engineUrl),
+                    const SizedBox(height: Space.sm),
+                    const _HomeSections(),
+                  ]);
+                }
+                return Center(
+                  child: ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 1120),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        SizedBox(
+                          width: 380,
+                          child: PageBody(
+                            scrollable: false,
+                            children: [_HomeIntroduction(engineUrl: engineUrl)],
+                          ),
+                        ),
+                        const SizedBox(width: Space.huge),
+                        Expanded(
+                          child: PageBody(
+                            padding: EdgeInsets.fromLTRB(
+                              kPageGutter, Space.huge + Space.huge,
+                              kPageGutter, Space.xxxl,
+                            ),
+                            children: const [_HomeSections()],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         ],
@@ -68,123 +90,128 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _UnpairedView extends ConsumerWidget {
-  const _UnpairedView();
+class _HomeBanners extends StatelessWidget {
+  const _HomeBanners();
+
+  @override
+  Widget build(BuildContext context) => Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: const Column(
+            children: [
+              RestartPendingBanner(),
+              BackupReminderBanner(),
+              UpdateAvailableBanner(),
+            ],
+          ),
+        ),
+      );
+}
+
+class _HomeIntroduction extends ConsumerWidget {
+  const _HomeIntroduction({required this.engineUrl});
+
+  final String? engineUrl;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    // Roadmap SLICE 1: the on-device model needs no engine connection. Once the
-    // weights are installed we offer a one-tap route straight into the offline
-    // chat; until then we route to the model manager to download first.
-    //
-    // App-shell slice: the "Conectar con tu motor" CTA was removed from the
-    // home UI — engine pairing is now reached only from Ajustes (and stays
-    // wired under the hood for the OTA self-update). The offline local-model
-    // path below is the sole home CTA when unpaired.
-    final localModelInstalled = ref.watch(localModelManagerProvider).installed;
     final l10n = AppLocalizations.of(context);
-
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+    final hour = ref.watch(clockProvider).now().hour;
+    final greeting = hour >= 5 && hour < 12
+        ? l10n.homeGreetingMorning
+        : hour >= 12 && hour < 20
+            ? l10n.homeGreetingAfternoon
+            : l10n.homeGreetingEvening;
+    final modelInstalled = ref.watch(localModelManagerProvider).installed;
+    // The bright teal action always carries dark ink, even in dark mode.
+    final actionInk = scheme.brightness == Brightness.dark ? scheme.onPrimary : scheme.onSurface;
     return Column(
-      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Axi's animated body — alive even before pairing (organ taps that
-        // need the engine degrade gracefully on their target screens).
-        const AxiBodyWidget(),
-        // On-device-first: LifeOS presents as complete at startup. Pairing to a
-        // laptop engine is an OPTIONAL future interconnection reached from
-        // Ajustes, never a startup requirement — so there is no "not connected"
-        // message here anymore; the home just offers the offline path.
-        const SizedBox(height: 16),
-        if (localModelInstalled)
-          // Primary offline path: open the chat. Local mode is always on now
-          // (on-device-first), so there is no toggle to flip first.
-          FilledButton.icon(
-            onPressed: () => context.push('/chat'),
-            icon: const Icon(Icons.offline_bolt),
-            label: Text(l10n.homeChatOffline),
-          )
-        else
-          // No weights yet → send the user to the manager to download first.
-          OutlinedButton.icon(
-            onPressed: () => context.push('/settings/local-model'),
-            icon: const Icon(Icons.offline_bolt_outlined),
-            label: Text(l10n.homeUseLocalModel),
-          ),
-        const SizedBox(height: 24),
-        // On-device-first: the SAME full grouped menu the paired view shows, so
-        // every route (records, Axi, notices, system) is reachable at startup —
-        // not just chat + Mi vida.
-        const _HomeSections(),
-        const SizedBox(height: 24),
+        const Align(alignment: Alignment.centerLeft, child: AxiBodyWidget(viewportHeight: 96)),
+        const SizedBox(height: Space.lg),
+        Text(greeting, style: text.displaySmall),
+        const SizedBox(height: Space.xs),
+        Text(l10n.homeGreetingPrompt,
+            style: text.bodyLarge?.copyWith(color: scheme.onSurfaceVariant)),
+        const SizedBox(height: Space.xl),
+        SizedBox(
+          height: 56,
+          child: engineUrl != null || modelInstalled
+              ? FilledButton.icon(
+                  onPressed: () => context.push('/chat'),
+                  icon: Icon(engineUrl != null ? Icons.chat_bubble_outline : Icons.offline_bolt,
+                      color: actionInk),
+                  label: Text(engineUrl != null ? l10n.homeTalkToAxi : l10n.homeChatOffline,
+                      style: text.labelLarge?.copyWith(color: actionInk)),
+                )
+              : OutlinedButton.icon(
+                  onPressed: () => context.push('/settings/local-model'),
+                  icon: const Icon(Icons.offline_bolt_outlined),
+                  label: Text(l10n.homeUseLocalModel),
+                ),
+        ),
+        if (engineUrl != null) ...[
+          const SizedBox(height: Space.md),
+          _EngineStatus(engineUrl: engineUrl!),
+        ],
       ],
     );
   }
 }
 
-class _ConnectedView extends ConsumerWidget {
-  const _ConnectedView({required this.engineUrl});
-
+class _EngineStatus extends ConsumerWidget {
+  const _EngineStatus({required this.engineUrl});
   final String engineUrl;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final reachable = ref.watch(engineReachableProvider);
     final l10n = AppLocalizations.of(context);
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        // Self-hosted OTA update: shows only when an update is available;
-        // taps through to /settings/updates.
-        const SizedBox(width: 340, child: UpdateAvailableBanner()),
-        // Axi's animated body — the soul of the laptop dashboard, ported.
-        // Tap an organ: brain -> Cerebro 3D, memory -> Mi memoria,
-        // heart/lungs -> estado, eyes/ears/mouth -> chat.
-        const AxiBodyWidget(),
-        const SizedBox(height: 8),
-        Text(l10n.homeConnectedTo(engineUrl)),
-        const SizedBox(height: 8),
-        reachable.when(
-          data: (ok) => Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Icon(
-                ok ? Icons.check_circle : Icons.error,
-                color: ok ? Colors.green : Colors.red,
-              ),
-              const SizedBox(width: 8),
-              Text(ok ? l10n.homeEngineReachable : l10n.homeEngineUnreachable),
-            ],
+    final scheme = Theme.of(context).colorScheme;
+    final style = Theme.of(context).textTheme.bodySmall?.copyWith(color: scheme.onSurfaceVariant);
+    return reachable.when(
+      data: (ok) => Row(
+        children: [
+          Container(
+            key: const Key('home-engine-status-dot'),
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: ok ? LifeOSPalette.of(context).success : scheme.error,
+              shape: BoxShape.circle,
+            ),
           ),
-          loading: () => const SizedBox(
-            width: 16,
-            height: 16,
-            child: CircularProgressIndicator(strokeWidth: 2),
+          const SizedBox(width: Space.sm),
+          Expanded(
+            child: Text('${l10n.homeConnectedTo(engineUrl)} · '
+                '${ok ? l10n.homeEngineReachable : l10n.homeEngineUnreachable}',
+                style: style),
           ),
-          error: (_, _) => Text(l10n.homeEngineUnreachable),
+        ],
+      ),
+      loading: () => Row(children: [
+        const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2)),
+        const SizedBox(width: Space.sm),
+        Expanded(child: Text(l10n.homeConnectedTo(engineUrl), style: style)),
+      ]),
+      error: (_, _) => Row(children: [
+        Container(
+          key: const Key('home-engine-status-dot'),
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(color: scheme.error, shape: BoxShape.circle),
         ),
-        const SizedBox(height: 24),
-        // Primary CTA — talking to Axi stays the headline action.
-        FilledButton.icon(
-          onPressed: () => context.push('/chat'),
-          icon: const Icon(Icons.chat_bubble_outline),
-          label: Text(l10n.homeTalkToAxi),
-        ),
-        const SizedBox(height: 24),
-        // Shared grouped menu (records / Axi / notices / system) — identical to
-        // the on-device home so the two views can never drift apart again.
-        const _HomeSections(),
-        const SizedBox(height: 24),
-      ],
+        const SizedBox(width: Space.sm),
+        Expanded(child: Text(l10n.homeEngineUnreachable, style: style)),
+      ]),
     );
   }
 }
 
-/// The full grouped navigation menu shared by BOTH the on-device (unpaired) and
-/// paired home views, so every route is reachable in either state and the two
-/// can never drift apart. Everything is grouped into labeled sections so that
-/// viewing records ("Tus registros") is obvious and prominent, and the
-/// system/plumbing entries sink to the bottom. Constrained to a 340-wide column
-/// for a tidy vertical rhythm consistent with the rest of the home.
+/// Shared navigation: pairing changes the introduction, never the destinations.
 class _HomeSections extends ConsumerWidget {
   const _HomeSections();
 
@@ -192,257 +219,57 @@ class _HomeSections extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final operatingSystem = ref.watch(hostOperatingSystemProvider);
-    return SizedBox(
-      width: 340,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          // 1) Your records — the most prominent group.
-          _SectionHeader(label: l10n.homeSectionRecords),
-          // "Mi vida" is the primary records entry: a filled tonal card
-          // with a subtitle so it clearly stands out from the rest.
-          _RecordCard(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        SectionHeader(l10n.homeSectionRecords),
+        GroupedList(children: [
+          GroupedRow(
             icon: Icons.auto_stories_outlined,
+            tone: RowTone.axi,
             title: l10n.homeMyLife,
             subtitle: l10n.homeMyLifeSubtitle,
             onTap: () => context.push('/mi-vida'),
-            prominent: true,
           ),
-          const SizedBox(height: 8),
-          // Per-domain entry point: browse/add records by category.
-          _RecordCard(
+          GroupedRow(
             icon: Icons.dashboard_outlined,
             title: l10n.homeMyData,
             subtitle: l10n.homeMyDataSubtitle,
             onTap: () => context.push('/domains'),
           ),
-
-          // 2) Axi — the living agent surfaces.
-          _SectionHeader(label: l10n.homeSectionAxi),
-          // "Dictar" — the quick action the user already has on his laptop's
-          // Axi dashboard. Shown wherever the platform can actually record and
-          // transcribe (Android and the desktop shells alike), which is why it
-          // carries no platform conditional between those two.
+        ]),
+        SectionHeader(l10n.homeSectionAxi),
+        GroupedList(children: [
           if (supportsDictation(operatingSystem))
-            _NavButton(
-              icon: Icons.mic_none,
-              label: l10n.homeDictate,
-              onPressed: () => context.push('/dictate'),
-            ),
-          if (supportsDictation(operatingSystem)) const SizedBox(height: 12),
-          // "Cerebro" is the ON-DEVICE 3D memory graph (/brain3d): a native
-          // force layout over the local encrypted store, no network, no
-          // pairing. It used to be reachable ONLY by tapping an unlabelled
-          // region on the mascot's forehead, while this label pointed at the
-          // engine-backed browser below — so the working, autonomous feature
-          // was undiscoverable and the discoverable one was blocked. Pairing is
-          // a sync relationship, not a licence, so the plain label belongs to
-          // the surface that works on this device's own data.
-          _NavButton(
-            icon: Icons.hub_outlined,
-            label: l10n.homeBrain,
-            onPressed: () => context.push('/brain3d'),
-          ),
-          // The engine's knowledge-graph SEARCH (`/graph`), the meetings viewer
-          // (`/meetings`) and Axi's organ health (`/body`) used to sit here.
-          // All three are windows onto the OTHER machine: they render nothing a
-          // device owns, and on an unpaired one they bounced straight to the
-          // pairing screen. LifeOS is autonomous per device — a button that
-          // only works when a laptop is reachable is not a feature of this
-          // device. Removed rather than gated; see
-          // `home_autonomy_contract_test.dart`.
-          //
-          // The spacer stays even though the buttons went: it is the gap between
-          // the last button of this section and the NEXT section header, and
-          // every other section boundary in this file has one. Removing the
-          // buttons took their trailing spacer with them and left "Cerebro"
-          // flush against the following header.
-          const SizedBox(height: 12),
-          // "Desahogo": say the hard thing, be heard, let it go. Named for
-          // what it is FOR, not for the practice it borrows from — "Confesión"
-          // promises a sacrament this cannot give, and a religious label would
-          // shut the door on someone who has no religion.
-          //
-          // On the home screen rather than buried in Settings: the day someone
-          // needs it they are not going to go looking through menus.
-          _NavButton(
-            icon: Icons.self_improvement,
-            label: 'Desahogo',
-            onPressed: () => context.push('/desahogo'),
-          ),
-          const SizedBox(height: 12),
-
-          // Learning. English lives on home and not in Settings because it is
-          // meant to be a daily habit, and a habit needs a door you see.
-          _SectionHeader(label: l10n.homeSectionLearn),
-          _NavButton(
-            icon: Icons.translate,
-            label: l10n.homeEnglish,
-            onPressed: () => context.push('/english'),
-          ),
-          const SizedBox(height: 12),
-
-          // 3) Notices & summaries.
-          _SectionHeader(label: l10n.homeSectionNotices),
-          _NavButton(
-            icon: Icons.notifications_outlined,
-            label: l10n.homeReminders,
-            onPressed: () => context.push('/reminders'),
-          ),
-          const SizedBox(height: 12),
-          // "Boletines" and "Resumen de hoy" now open the ON-DEVICE screens
-          // (`MorningBriefingScreen` / `DailyDigestScreen`), which were already
-          // built and working but reachable only by digging into Settings,
-          // while these prominent labels pointed at the engine's read-only
-          // mirrors and bounced an unpaired device to the pairing screen. Same
-          // defect as "Cerebro", same fix: the plain label belongs to the
-          // surface that works on this device's own data.
-          //
-          // The engine's `/insights` digest preview was removed outright — it
-          // has no on-device twin, it is not "Mi vida"'s summary, and it
-          // synthesizes nothing locally.
-          _NavButton(
-            icon: Icons.campaign_outlined,
-            label: l10n.homeBulletins,
-            onPressed: () => context.push('/settings/briefing'),
-          ),
-          const SizedBox(height: 12),
-          _NavButton(
-            icon: Icons.today_outlined,
-            label: l10n.homeTodaySummary,
-            onPressed: () => context.push('/settings/daily-digest'),
-          ),
-
-          // 4) Settings & system — least prominent, at the bottom.
-          //
-          // No "Ajustes" row here: the app bar's gear already goes to the same
-          // screen, and offering one destination twice makes someone opening
-          // the app for the first time stop and wonder whether they are
-          // different. The two rows below are shortcuts to places INSIDE
-          // Ajustes that are worth reaching in one tap.
-          _SectionHeader(label: l10n.homeSectionSystem),
-          _NavButton(
-            icon: Icons.offline_bolt_outlined,
-            label: l10n.homeLocalModel,
-            onPressed: () => context.push('/settings/local-model'),
-          ),
-          const SizedBox(height: 12),
-          _NavButton(
-            icon: Icons.system_update,
-            label: l10n.homeUpdates,
-            onPressed: () => context.push('/settings/updates'),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-/// Muted, left-aligned label that introduces a group of home entries so the
-/// flat list reads as a small set of scannable sections.
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader({required this.label});
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Padding(
-      padding: const EdgeInsets.only(top: 24, bottom: 8, left: 4),
-      child: Align(
-        alignment: Alignment.centerLeft,
-        child: Text(
-          label,
-          style: theme.textTheme.labelLarge?.copyWith(
-            color: theme.colorScheme.onSurfaceVariant,
-            letterSpacing: 0.4,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// A prominent, subtitle-bearing entry for the "Tus registros" section.
-/// [prominent] tints it with the secondary container so "Mi vida" pops as the
-/// primary way to view records; the non-prominent variant is a plain outlined
-/// card for the per-category entry point.
-class _RecordCard extends StatelessWidget {
-  const _RecordCard({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-    required this.onTap,
-    this.prominent = false,
-  });
-
-  final IconData icon;
-  final String title;
-  final String subtitle;
-  final VoidCallback onTap;
-  final bool prominent;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    return Card(
-      margin: EdgeInsets.zero,
-      color: prominent ? scheme.secondaryContainer : null,
-      shape: prominent
-          ? null
-          : RoundedRectangleBorder(
-              side: BorderSide(color: scheme.outlineVariant),
-              borderRadius: BorderRadius.circular(12),
-            ),
-      child: ListTile(
-        leading: Icon(
-          icon,
-          color: prominent ? scheme.onSecondaryContainer : scheme.primary,
-        ),
-        title: Text(
-          title,
-          style: theme.textTheme.titleMedium?.copyWith(
-            fontWeight: prominent ? FontWeight.w600 : FontWeight.w500,
-            color: prominent ? scheme.onSecondaryContainer : null,
-          ),
-        ),
-        subtitle: Text(
-          subtitle,
-          style: theme.textTheme.bodySmall?.copyWith(
-            color: prominent
-                ? scheme.onSecondaryContainer.withValues(alpha: 0.8)
-                : scheme.onSurfaceVariant,
-          ),
-        ),
-        trailing: const Icon(Icons.chevron_right),
-        onTap: onTap,
-      ),
-    );
-  }
-}
-
-/// Full-width outlined navigation entry — the uniform look for the secondary
-/// sections (Axi, notices, system).
-class _NavButton extends StatelessWidget {
-  const _NavButton({
-    required this.icon,
-    required this.label,
-    required this.onPressed,
-  });
-
-  final IconData icon;
-  final String label;
-  final VoidCallback onPressed;
-
-  @override
-  Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: Icon(icon),
-      label: Text(label),
+            GroupedRow(icon: Icons.mic_none, title: l10n.homeDictate,
+                onTap: () => context.push('/dictate')),
+          GroupedRow(icon: Icons.hub_outlined, title: l10n.homeBrain,
+              onTap: () => context.push('/brain3d')),
+          GroupedRow(icon: Icons.self_improvement, title: 'Desahogo',
+              onTap: () => context.push('/desahogo')),
+        ]),
+        SectionHeader(l10n.homeSectionLearn),
+        GroupedList(children: [
+          GroupedRow(icon: Icons.translate, title: l10n.homeEnglish,
+              onTap: () => context.push('/english')),
+        ]),
+        SectionHeader(l10n.homeSectionNotices),
+        GroupedList(children: [
+          GroupedRow(icon: Icons.notifications_outlined, title: l10n.homeReminders,
+              onTap: () => context.push('/reminders')),
+          GroupedRow(icon: Icons.campaign_outlined, title: l10n.homeBulletins,
+              onTap: () => context.push('/settings/briefing')),
+          GroupedRow(icon: Icons.today_outlined, title: l10n.homeTodaySummary,
+              onTap: () => context.push('/settings/daily-digest')),
+        ]),
+        SectionHeader(l10n.homeSectionSystem),
+        GroupedList(children: [
+          GroupedRow(icon: Icons.offline_bolt_outlined, title: l10n.homeLocalModel,
+              onTap: () => context.push('/settings/local-model')),
+          GroupedRow(icon: Icons.system_update, title: l10n.homeUpdates,
+              onTap: () => context.push('/settings/updates')),
+        ]),
+      ],
     );
   }
 }

@@ -8,6 +8,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/status_banner.dart';
+
 import '../domain/restart_pending.dart';
 import '../presentation/app_update_providers.dart';
 
@@ -54,10 +56,10 @@ class RestartPendingBanner extends ConsumerWidget {
       return const SizedBox.shrink();
     }
 
-    return MaterialBanner(
-      content: Text(restartMessage(installedName: installed.name)),
-      leading: const Icon(Icons.restart_alt),
-      actions: const [SizedBox.shrink()],
+    return StatusBanner(
+      tone: BannerTone.info,
+      icon: Icons.restart_alt,
+      message: Text(restartMessage(installedName: installed.name)),
     );
   }
 }

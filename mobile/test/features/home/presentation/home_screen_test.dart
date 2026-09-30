@@ -81,7 +81,8 @@ void main() {
     await tester.pump();
 
     expect(find.textContaining('Conectado a https://10.66.66.2:8081'), findsOneWidget);
-    expect(find.text('Motor accesible'), findsOneWidget);
+    // The status and connection now share one quiet line below the CTA.
+    expect(find.textContaining('Motor accesible'), findsOneWidget);
   });
 
   testWidgets('hides the "Hablar con Axi" CTA when unpaired', (tester) async {

@@ -7,6 +7,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:lifeos/core/widgets/status_banner.dart';
 import 'package:lifeos/features/first_day/presentation/backup_reminder.dart';
 
 Future<void> _pump(WidgetTester tester, {required bool ask}) async {
@@ -26,6 +27,7 @@ void main() {
     expect(find.text('Si pierdes este teléfono'), findsOneWidget);
     expect(find.widgetWithText(FilledButton, 'Guardar mi copia'), findsOneWidget);
     expect(find.widgetWithText(TextButton, 'Luego'), findsOneWidget);
+    expect(tester.widget<StatusBanner>(find.byType(StatusBanner)).tone, BannerTone.warning);
   });
 
   testWidgets('cuando no toca, no ocupa ni un pixel', (tester) async {
