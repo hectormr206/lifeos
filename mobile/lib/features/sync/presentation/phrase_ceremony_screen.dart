@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/phrase_ceremony.dart';
 
 /// The twelve words: show them, then prove they were written down.
@@ -82,35 +84,36 @@ class _PhraseCeremonyScreenState extends State<PhraseCeremonyScreen> {
               ceremony: widget.ceremony,
               onNext: () => setState(() => _showingWords = false),
             )
-          : ListView(
-              padding: const EdgeInsets.all(16),
+          : PageBody(
               children: [
-                Text(
-                  'Escribe estas palabras de tu frase para confirmar que las '
-                  'anotaste.',
-                  style: text.bodyMedium,
+                Padding(
+                  padding: const EdgeInsets.only(bottom: Space.lg),
+                  child: Text(
+                    'Escribe estas palabras de tu frase para confirmar que las '
+                    'anotaste.',
+                    style: text.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                    ),
+                  ),
                 ),
-                const SizedBox(height: 16),
                 for (final i in widget.ceremony.challengeIndices)
                   Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
+                    padding: const EdgeInsets.only(bottom: Space.md),
                     child: TextField(
                       controller: _answers[i],
                       autocorrect: false,
                       enableSuggestions: false,
-                      decoration: InputDecoration(
-                        labelText: 'Palabra ${i + 1}',
-                        border: const OutlineInputBorder(),
-                      ),
+                      decoration: InputDecoration(labelText: 'Palabra ${i + 1}'),
                     ),
                   ),
                 if (_failed)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(
+                  const StatusBanner(
+                    tone: BannerTone.error,
+                    icon: Icons.error_outline,
+                    margin: EdgeInsets.only(bottom: Space.md),
+                    message: Text(
                       'Alguna palabra no coincide. Revisa tu papel y vuelve a '
                       'intentarlo.',
-                      style: TextStyle(color: scheme.error),
                     ),
                   ),
                 FilledButton(
@@ -138,37 +141,72 @@ class _Words extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
+    final theme = Theme.of(context);
+    final text = theme.textTheme;
+    final count = ceremony.words.length;
+    final perColumn = (count / 2).ceil();
 
-    return ListView(
-      padding: const EdgeInsets.all(16),
+    Widget entry(int i) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: Space.xs),
+          child: Row(
+            children: [
+              SizedBox(
+                width: 36,
+                child: Text(
+                  '${i + 1}.',
+                  style: text.titleMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                    fontFeatures: const [FontFeature.tabularFigures()],
+                  ),
+                ),
+              ),
+              Expanded(child: Text(ceremony.words[i], style: text.titleMedium)),
+            ],
+          ),
+        );
+
+    return PageBody(
       children: [
         Text(
           'Escribe estas doce palabras en papel y guárdalas en un lugar seguro.',
           style: text.titleMedium,
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: Space.sm),
         Text(
           'Son la única forma de recuperar tu información si pierdes todos tus '
           'dispositivos. Nadie más las tiene: ni nosotros, ni el servidor. Si '
           'las pierdes, no hay manera de recuperarlas.',
-          style: text.bodyMedium,
+          style: text.bodyMedium?.copyWith(
+            color: theme.colorScheme.onSurfaceVariant,
+          ),
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: Space.xl),
         // A plain numbered grid. No copy button on purpose — see the class doc.
-        for (var i = 0; i < ceremony.words.length; i++)
-          ListTile(
-            dense: true,
-            leading: SizedBox(
-              width: 28,
-              child: Text('${i + 1}.', style: text.bodySmall),
-            ),
-            title: Text(
-              ceremony.words[i],
-              style: text.titleMedium?.copyWith(fontFeatures: null),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding: const EdgeInsets.all(Space.lg),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                for (var column = 0; column < 2; column++) ...[
+                  if (column > 0) const SizedBox(width: Space.md),
+                  Expanded(
+                    child: Column(
+                      children: [
+                        for (var i = column * perColumn;
+                            i < (column + 1) * perColumn && i < count;
+                            i++)
+                          entry(i),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
             ),
           ),
-        const SizedBox(height: 20),
+        ),
+        const SizedBox(height: Space.xl),
         FilledButton(
           onPressed: onNext,
           child: const Text('Ya las anoté'),

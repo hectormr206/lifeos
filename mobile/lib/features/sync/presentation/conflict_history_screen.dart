@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/sync_conflict.dart';
 
 /// "Ajustes → Sincronizar → Historial de conflictos".
@@ -33,39 +35,39 @@ class ConflictHistoryScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final text = Theme.of(context).textTheme;
+    final theme = Theme.of(context);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Historial de conflictos')),
       body: conflicts.isEmpty
-          ? _Empty(text: text)
-          : ListView.separated(
-              itemCount: conflicts.length + 1,
-              separatorBuilder: (_, _) => const Divider(height: 1),
-              itemBuilder: (context, index) {
-                if (index == 0) {
-                  return Padding(
-                    padding: const EdgeInsets.all(16),
-                    child: Text(
-                      'Cuando dos dispositivos cambian lo mismo, se conserva '
-                      'una versión y la otra queda aquí. Nunca se borra sola.',
-                      style: text.bodyMedium,
+          ? const _Empty()
+          : PageBody(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: Space.lg),
+                  child: Text(
+                    'Cuando dos dispositivos cambian lo mismo, se conserva '
+                    'una versión y la otra queda aquí. Nunca se borra sola.',
+                    style: theme.textTheme.bodyMedium?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
                     ),
-                  );
-                }
-                final c = conflicts[index - 1];
-                return ListTile(
-                  title: Text(c.losingLabel),
-                  subtitle: Text(
-                    'Desde ${c.deviceLabel(nicknamesByUuid)} · '
-                    '${_when(c.resolvedAt)}',
                   ),
-                  trailing: TextButton(
-                    onPressed: () => onRestore(c),
-                    child: const Text('Restaurar'),
-                  ),
-                );
-              },
+                ),
+                GroupedList(
+                  children: [
+                    for (final c in conflicts)
+                      GroupedRow(
+                        title: c.losingLabel,
+                        subtitle: 'Desde ${c.deviceLabel(nicknamesByUuid)} · '
+                            '${_when(c.resolvedAt)}',
+                        trailing: TextButton(
+                          onPressed: () => onRestore(c),
+                          child: const Text('Restaurar'),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
             ),
     );
   }
@@ -76,35 +78,19 @@ class ConflictHistoryScreen extends StatelessWidget {
 }
 
 class _Empty extends StatelessWidget {
-  const _Empty({required this.text});
-  final TextTheme text;
+  const _Empty();
 
   @override
   Widget build(BuildContext context) {
-    return Center(
-      child: Padding(
-        padding: const EdgeInsets.all(32),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.check_circle_outline, size: 48),
-            const SizedBox(height: 16),
-            Text(
-              'Sin conflictos',
-              style: text.titleMedium,
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 8),
-            Text(
-              // Says what the emptiness MEANS. "Nada aquí" would leave the user
-              // unsure whether the feature works or simply has nothing to show.
-              'Tus dispositivos no han cambiado lo mismo al mismo tiempo. Si '
-              'llega a pasar, la versión que no quede aparecerá aquí.',
-              style: text.bodyMedium,
-              textAlign: TextAlign.center,
-            ),
-          ],
-        ),
+    return const Padding(
+      padding: EdgeInsets.all(Space.xxxl),
+      child: EmptyState(
+        icon: Icons.check_circle_outline,
+        title: 'Sin conflictos',
+        // Says what the emptiness MEANS. "Nada aquí" would leave the user
+        // unsure whether the feature works or simply has nothing to show.
+        message: 'Tus dispositivos no han cambiado lo mismo al mismo tiempo. Si '
+            'llega a pasar, la versión que no quede aparecerá aquí.',
       ),
     );
   }

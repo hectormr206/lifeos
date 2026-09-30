@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/backup_info.dart';
 import 'data_control_providers.dart';
 
@@ -103,95 +105,80 @@ class _BackupsScreenState extends ConsumerState<BackupsScreen> {
         data: (all) {
           final autos = all.where((b) => b.kind == BackupKind.auto).toList();
           final manuals = all.where((b) => b.kind != BackupKind.auto).toList();
-          return ListView(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+          return PageBody(
             children: [
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                child: FilledButton.icon(
-                  onPressed: _working ? null : _createNow,
-                  icon: _working
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Icon(Icons.save_outlined),
-                  label: Text(l10n.backupsCreateNow),
-                ),
+              FilledButton.icon(
+                onPressed: _working ? null : _createNow,
+                icon: _working
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_outlined),
+                label: Text(l10n.backupsCreateNow),
               ),
+              const SizedBox(height: Space.lg),
               // Everything above this line lives on the phone, and dies with
               // it. Offer the off-device destination right here rather than in
               // a distant settings entry: a user looking at their backups is
               // exactly the user who should learn these copies are not safe
               // from losing the device.
               // TODO(i18n): hardcoded neutral Spanish pending the i18n sweep.
-              ListTile(
-                leading: const Icon(Icons.cloud_upload_outlined),
-                title: const Text('Guardar en mi servidor'),
-                subtitle: const Text(
-                  'Estas copias viven solo en este dispositivo. Envía una copia '
-                  'cifrada a un servidor tuyo.',
-                ),
-                trailing: const Icon(Icons.chevron_right),
-                onTap: () => context.push('/settings/backups/server'),
+              GroupedList(
+                children: [
+                  GroupedRow(
+                    icon: Icons.cloud_upload_outlined,
+                    title: 'Guardar en mi servidor',
+                    subtitle:
+                        'Estas copias viven solo en este dispositivo. Envía una copia '
+                        'cifrada a un servidor tuyo.',
+                    subtitleMaxLines: null,
+                    onTap: () => context.push('/settings/backups/server'),
+                  ),
+                ],
               ),
-              const Divider(),
               if (all.isEmpty)
                 Padding(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.only(top: Space.lg),
                   child: Text(
                     l10n.backupsEmpty,
-                    style: TextStyle(
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
                   ),
                 ),
               if (autos.isNotEmpty) ...[
-                _SectionHeader(l10n.backupsAutoSection),
-                for (final backup in autos)
-                  _BackupTile(
-                    backup: backup,
-                    // Automatic copies rotate on their own (retention cap);
-                    // only manual/pre-restore copies expose delete.
-                    onDelete: null,
-                    onTap: _working ? null : () => _confirmRestore(backup),
-                  ),
+                SectionHeader(l10n.backupsAutoSection),
+                GroupedList(
+                  children: [
+                    for (final backup in autos)
+                      _BackupTile(
+                        backup: backup,
+                        // Automatic copies rotate on their own (retention cap);
+                        // only manual/pre-restore copies expose delete.
+                        onDelete: null,
+                        onTap: _working ? null : () => _confirmRestore(backup),
+                      ),
+                  ],
+                ),
               ],
               if (manuals.isNotEmpty) ...[
-                _SectionHeader(l10n.backupsManualSection),
-                for (final backup in manuals)
-                  _BackupTile(
-                    backup: backup,
-                    onDelete: _working ? null : () => _delete(backup),
-                    onTap: _working ? null : () => _confirmRestore(backup),
-                  ),
+                SectionHeader(l10n.backupsManualSection),
+                GroupedList(
+                  children: [
+                    for (final backup in manuals)
+                      _BackupTile(
+                        backup: backup,
+                        onDelete: _working ? null : () => _delete(backup),
+                        onTap: _working ? null : () => _confirmRestore(backup),
+                      ),
+                  ],
+                ),
               ],
             ],
           );
         },
-      ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-          color: scheme.primary,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.4,
-        ),
       ),
     );
   }
@@ -219,18 +206,14 @@ class _BackupTile extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
-    return ListTile(
-      leading: Icon(
-        backup.isPreRestore
-            ? Icons.settings_backup_restore
-            : Icons.archive_outlined,
-      ),
-      title: Text(formatDate(backup.createdAt)),
-      subtitle: Text(
-        backup.isPreRestore
-            ? '${l10n.backupsPreRestoreLabel} · ${formatSize(backup.sizeBytes)}'
-            : formatSize(backup.sizeBytes),
-      ),
+    return GroupedRow(
+      icon: backup.isPreRestore
+          ? Icons.settings_backup_restore
+          : Icons.archive_outlined,
+      title: formatDate(backup.createdAt),
+      subtitle: backup.isPreRestore
+          ? '${l10n.backupsPreRestoreLabel} · ${formatSize(backup.sizeBytes)}'
+          : formatSize(backup.sizeBytes),
       trailing: onDelete == null
           ? null
           : IconButton(

@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
+
 import '../data/sync_status_store.dart';
 import '../domain/sync_connectivity.dart';
 import '../domain/sync_disclosure.dart';
@@ -83,11 +86,11 @@ class SyncSettingsScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final text = Theme.of(context).textTheme;
+    final quiet = text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant);
 
     return Scaffold(
       appBar: AppBar(title: const Text('Sincronizar dispositivos')),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
+      body: PageBody(
         children: [
           if (_enabled) ...[
             SyncPairIndicator(
@@ -102,95 +105,92 @@ class SyncSettingsScreen extends StatelessWidget {
             // indicator above pushed that row off a phone screen entirely —
             // "no hay ningún botón de Sincronizar ahora" — so the widget meant
             // to make sync legible had hidden its only control.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
-              child: FilledButton.icon(
-                onPressed: onSyncNow,
-                icon: const Icon(Icons.sync),
-                label: const Text('Sincronizar ahora'),
-              ),
+            FilledButton.icon(
+              onPressed: onSyncNow,
+              icon: const Icon(Icons.sync),
+              label: const Text('Sincronizar ahora'),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              padding: const EdgeInsets.only(top: Space.sm, bottom: Space.lg),
               child: Text(
                 'Funciona también con datos móviles. La automática espera Wi-Fi.',
-                style: text.bodySmall,
+                style: quiet,
                 textAlign: TextAlign.center,
               ),
             ),
           ],
-          _StatusTile(connectivity: connectivity, scheme: scheme),
-          const Divider(),
-
-          SwitchListTile(
-            value: _enabled,
-            // Null while unknown: disables the tile, so the state cannot be
-            // flipped from a value we have not actually read yet.
-            onChanged: enablementKnown
-                ? (want) => want ? onEnable() : onDisable()
-                : null,
-            title: const Text('Sincronizar entre mis dispositivos'),
-            subtitle: Text(
-              enablementKnown
-                  ? 'Tus dispositivos comparten la misma información. Todo '
-                      'viaja cifrado y el servidor no puede leerlo.'
-                  : 'Comprobando…',
-            ),
-          ),
-
-          if (_enabled) ...[
-            ListTile(
-              leading: const Icon(Icons.devices_outlined),
-              title: const Text('Este dispositivo'),
-              subtitle: Text(deviceNickname),
-            ),
-            ListTile(
-              leading: const Icon(Icons.schedule),
-              title: const Text('Última sincronización'),
-              subtitle: Text(lastSyncLine),
-            ),
-            ListTile(
-              leading: const Icon(Icons.history_toggle_off),
-              title: const Text('Historial de conflictos'),
-              subtitle: const Text(
-                'Cuando dos dispositivos cambian lo mismo, se guarda la '
-                'versión que no quedó. Nunca se pierde.',
+          GroupedList(
+            children: [
+              _StatusTile(connectivity: connectivity, scheme: scheme),
+              SwitchListTile(
+                value: _enabled,
+                // Null while unknown: disables the tile, so the state cannot be
+                // flipped from a value we have not actually read yet.
+                onChanged: enablementKnown
+                    ? (want) => want ? onEnable() : onDisable()
+                    : null,
+                title: const Text('Sincronizar entre mis dispositivos'),
+                subtitle: Text(
+                  enablementKnown
+                      ? 'Tus dispositivos comparten la misma información. Todo '
+                          'viaja cifrado y el servidor no puede leerlo.'
+                      : 'Comprobando…',
+                ),
               ),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: onOpenConflicts,
+            ],
+          ),
+          if (_enabled) ...[
+            const SizedBox(height: Space.lg),
+            GroupedList(
+              children: [
+                GroupedRow(
+                  icon: Icons.devices_outlined,
+                  title: 'Este dispositivo',
+                  subtitle: deviceNickname,
+                ),
+                GroupedRow(
+                  icon: Icons.schedule,
+                  title: 'Última sincronización',
+                  subtitle: lastSyncLine,
+                ),
+                GroupedRow(
+                  icon: Icons.history_toggle_off,
+                  title: 'Historial de conflictos',
+                  subtitle: 'Cuando dos dispositivos cambian lo mismo, se guarda '
+                      'la versión que no quedó. Nunca se pierde.',
+                  subtitleMaxLines: null,
+                  onTap: onOpenConflicts,
+                ),
+              ],
             ),
           ],
-
-          const Divider(),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('Qué puede ver el servidor', style: text.titleMedium),
-          ),
+          const SectionHeader('Qué puede ver el servidor'),
           // Rendered from the SAME constants the test asserts against, not
           // retyped here. Retyped copy is copy that drifts.
-          for (final o in kRelayCanSee)
-            ListTile(
-              dense: true,
-              leading: const Icon(Icons.visibility_outlined, size: 20),
-              title: Text(o.what),
-              subtitle: Text(o.why),
-            ),
-
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-            child: Text('Qué NO puede ver', style: text.titleMedium),
+          GroupedList(
+            children: [
+              for (final o in kRelayCanSee)
+                ListTile(
+                  leading: const Icon(Icons.visibility_outlined, size: 20),
+                  title: Text(o.what),
+                  subtitle: Text(o.why),
+                ),
+            ],
           ),
-          for (final line in kRelayCannotSee)
-            ListTile(
-              dense: true,
-              leading: Icon(Icons.visibility_off_outlined,
-                  size: 20, color: scheme.primary),
-              title: Text(line),
-            ),
-
+          const SectionHeader('Qué NO puede ver'),
+          GroupedList(
+            children: [
+              for (final line in kRelayCannotSee)
+                ListTile(
+                  leading: Icon(Icons.visibility_off_outlined,
+                      size: 20, color: scheme.primary),
+                  title: Text(line),
+                ),
+            ],
+          ),
           Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
-            child: Text(kRelayRetention, style: text.bodySmall),
+            padding: const EdgeInsets.only(top: Space.lg),
+            child: Text(kRelayRetention, style: quiet),
           ),
         ],
       ),

@@ -156,6 +156,8 @@ void main() {
       for (var i = 0; i < WipeConfirmGate.countdownSeconds; i++) {
         await tester.pump(const Duration(seconds: 1));
       }
+      await tester.ensureVisible(find.byType(FilledButton));
+      await tester.pump();
       await tester.tap(find.byType(FilledButton));
       await tester.pump(); // build with _wiping = true
       await tester.pump(const Duration(milliseconds: 200)); // wipeAll + invalidations

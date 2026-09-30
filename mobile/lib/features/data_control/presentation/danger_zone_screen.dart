@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/presentation/chat_notifier.dart';
 import '../../daily_digest/presentation/daily_digest_notifier.dart';
 import '../../domains/presentation/local_domain_notifier.dart';
@@ -149,35 +151,34 @@ class _DangerZoneScreenState extends ConsumerState<DangerZoneScreen> {
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.wipeTitle)),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: PageBody(
         children: [
-          _InfoCard(
-            color: scheme.errorContainer,
-            onColor: scheme.onErrorContainer,
+          _Notice(
+            tone: BannerTone.error,
             icon: Icons.delete_forever_outlined,
             title: l10n.wipeDeletesTitle,
             body: l10n.wipeDeletesBody,
           ),
-          const SizedBox(height: 12),
-          _InfoCard(
-            color: scheme.secondaryContainer,
-            onColor: scheme.onSecondaryContainer,
+          _Notice(
+            tone: BannerTone.info,
             icon: Icons.shield_outlined,
             title: l10n.wipeKeepsTitle,
             body: l10n.wipeKeepsBody,
           ),
-          const SizedBox(height: 12),
-          CheckboxListTile(
-            value: _backupFirst,
-            onChanged: _wiping
-                ? null
-                : (value) => setState(() => _backupFirst = value ?? true),
-            title: Text(l10n.wipeBackupFirst),
-            controlAffinity: ListTileControlAffinity.leading,
-            contentPadding: EdgeInsets.zero,
+          const SizedBox(height: Space.md),
+          GroupedList(
+            children: [
+              CheckboxListTile(
+                value: _backupFirst,
+                onChanged: _wiping
+                    ? null
+                    : (value) => setState(() => _backupFirst = value ?? true),
+                title: Text(l10n.wipeBackupFirst),
+                controlAffinity: ListTileControlAffinity.leading,
+              ),
+            ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.lg),
           TextField(
             controller: _confirmController,
             enabled: !_wiping,
@@ -186,10 +187,9 @@ class _DangerZoneScreenState extends ConsumerState<DangerZoneScreen> {
             decoration: InputDecoration(
               labelText: l10n.wipeTypePrompt(word),
               hintText: word,
-              border: const OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           FilledButton.icon(
             style: FilledButton.styleFrom(
               backgroundColor: scheme.error,
@@ -212,46 +212,31 @@ class _DangerZoneScreenState extends ConsumerState<DangerZoneScreen> {
   }
 }
 
-class _InfoCard extends StatelessWidget {
-  const _InfoCard({
-    required this.color,
-    required this.onColor,
+class _Notice extends StatelessWidget {
+  const _Notice({
+    required this.tone,
     required this.icon,
     required this.title,
     required this.body,
   });
 
-  final Color color;
-  final Color onColor;
+  final BannerTone tone;
   final IconData icon;
   final String title;
   final String body;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(12),
-      ),
-      padding: const EdgeInsets.all(14),
-      child: Column(
+    return StatusBanner(
+      tone: tone,
+      icon: icon,
+      margin: const EdgeInsets.only(bottom: Space.md),
+      message: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            children: [
-              Icon(icon, color: onColor, size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  title,
-                  style: TextStyle(color: onColor, fontWeight: FontWeight.w700),
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 8),
-          Text(body, style: TextStyle(color: onColor, height: 1.4)),
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: Space.xs),
+          Text(body),
         ],
       ),
     );

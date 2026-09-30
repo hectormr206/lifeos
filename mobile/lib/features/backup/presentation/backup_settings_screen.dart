@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../backups/data/automatic_backup_passphrase_store.dart';
 import '../../backups/data/automatic_backup_settings_store.dart';
 import '../../backups/data/automatic_backup_status_store.dart';
@@ -337,15 +339,13 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
       );
     }
 
+    final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: const Text('Respaldos')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
+      body: PageBody(
         children: [
           const _PassphraseWarning(),
-          const SizedBox(height: 24),
-          Text('Servidor', style: Theme.of(context).textTheme.titleMedium),
-          const SizedBox(height: 8),
+          const SectionHeader('Servidor'),
           TextField(
             controller: _addressController,
             keyboardType: TextInputType.url,
@@ -354,10 +354,9 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
               labelText: 'Dirección',
               hintText: 'http://10.66.66.1:8099',
               helperText: 'La dirección privada de tu servidor, por la VPN.',
-              border: OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           TextField(
             controller: _keyController,
             autocorrect: false,
@@ -365,10 +364,9 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
             decoration: const InputDecoration(
               labelText: 'Clave de acceso',
               helperText: 'La que generaste al instalar el servidor.',
-              border: OutlineInputBorder(),
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           FilledButton.icon(
             onPressed: _checking ? null : _checkConnection,
             icon: _checking
@@ -381,52 +379,53 @@ class _BackupSettingsScreenState extends ConsumerState<BackupSettingsScreen> {
             label: Text(_checking ? 'Comprobando…' : 'Comprobar conexión'),
           ),
           if (_diagnosis != null) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Space.lg),
             _DiagnosisCard(diagnosis: _diagnosis!),
           ],
           // Only offered once the host has actually answered as ready. An
           // upload button that appears before the connection is proven invites
           // a user to believe a backup happened when nothing could have.
           if (_diagnosis?.isReady ?? false) ...[
-            const SizedBox(height: 24),
-            const Divider(),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.lg),
             FilledButton.tonalIcon(
               onPressed: _busy ? null : _backUpNow,
               icon: const Icon(Icons.cloud_upload_outlined),
               label: const Text('Respaldar ahora'),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             TextButton.icon(
               onPressed: _busy ? null : _restoreFromServer,
               icon: const Icon(Icons.settings_backup_restore),
               label: const Text('Restaurar desde el servidor'),
             ),
           ],
-          const SizedBox(height: 24),
-          const Divider(),
-          const SizedBox(height: 8),
-          Text('Respaldo automático', style: Theme.of(context).textTheme.titleMedium),
+          const SectionHeader('Respaldo automático'),
           // The ONE deliberate exception to "the user activates things
           // himself" — so unlike every other automatic feature in this app,
           // it needs an explicit off switch that persists (spec).
-          SwitchListTile(
-            contentPadding: EdgeInsets.zero,
-            value: _automaticEnabled,
-            onChanged: _setAutomaticEnabled,
-            title: const Text('Respaldar automáticamente por la VPN'),
-            subtitle: const Text(
-              'Solo cuando este dispositivo puede probar que está conectado '
-              'a tu VPN, y con Wi-Fi si el respaldo es pesado.',
-            ),
+          GroupedList(
+            children: [
+              SwitchListTile(
+                value: _automaticEnabled,
+                onChanged: _setAutomaticEnabled,
+                title: const Text('Respaldar automáticamente por la VPN'),
+                subtitle: const Text(
+                  'Solo cuando este dispositivo puede probar que está conectado '
+                  'a tu VPN, y con Wi-Fi si el respaldo es pesado.',
+                ),
+              ),
+            ],
           ),
-          if (_automaticStatusMessage() != null) ...[
-            const SizedBox(height: 4),
-            Text(
-              _automaticStatusMessage()!,
-              style: Theme.of(context).textTheme.bodySmall,
+          if (_automaticStatusMessage() != null)
+            Padding(
+              padding: const EdgeInsets.only(top: Space.md),
+              child: Text(
+                _automaticStatusMessage()!,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                ),
+              ),
             ),
-          ],
         ],
       ),
     );
@@ -441,42 +440,25 @@ class _PassphraseWarning extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(Icons.key, color: scheme.onErrorContainer),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Tu frase de recuperación',
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(color: scheme.onErrorContainer),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Tus respaldos se cifran en este dispositivo con una frase que solo '
-              'tú conoces. Ni el servidor ni nosotros podemos abrirlos.\n\n'
-              'Si olvidas esa frase, los respaldos se pierden para siempre. '
-              'No hay forma de recuperarlos. Anótala en un lugar seguro.',
-              style: Theme.of(context)
-                  .textTheme
-                  .bodyMedium
-                  ?.copyWith(color: scheme.onErrorContainer),
-            ),
-          ],
-        ),
+    return const StatusBanner(
+      tone: BannerTone.error,
+      icon: Icons.key,
+      margin: EdgeInsets.zero,
+      message: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Tu frase de recuperación',
+            style: TextStyle(fontWeight: FontWeight.w700),
+          ),
+          SizedBox(height: Space.sm),
+          Text(
+            'Tus respaldos se cifran en este dispositivo con una frase que solo '
+            'tú conoces. Ni el servidor ni nosotros podemos abrirlos.\n\n'
+            'Si olvidas esa frase, los respaldos se pierden para siempre. '
+            'No hay forma de recuperarlos. Anótala en un lugar seguro.',
+          ),
+        ],
       ),
     );
   }
@@ -489,47 +471,23 @@ class _DiagnosisCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final ok = diagnosis.isReady;
-    return Card(
-      color: ok ? scheme.secondaryContainer : scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(
-              ok ? Icons.check_circle : Icons.error_outline,
-              color: ok ? scheme.onSecondaryContainer : scheme.onErrorContainer,
-            ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    diagnosis.message,
-                    style: TextStyle(
-                      color: ok
-                          ? scheme.onSecondaryContainer
-                          : scheme.onErrorContainer,
-                    ),
-                  ),
-                  if (ok && diagnosis.freeBytes != null) ...[
-                    const SizedBox(height: 4),
-                    Text(
-                      '${_gigabytes(diagnosis.freeBytes!)} libres · '
-                      '${diagnosis.backupCount ?? 0} respaldos guardados',
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                            color: scheme.onSecondaryContainer,
-                          ),
-                    ),
-                  ],
-                ],
-              ),
+    return StatusBanner(
+      tone: ok ? BannerTone.success : BannerTone.error,
+      icon: ok ? Icons.check_circle : Icons.error_outline,
+      margin: EdgeInsets.zero,
+      message: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(diagnosis.message),
+          if (ok && diagnosis.freeBytes != null) ...[
+            const SizedBox(height: Space.xs),
+            Text(
+              '${_gigabytes(diagnosis.freeBytes!)} libres · '
+              '${diagnosis.backupCount ?? 0} respaldos guardados',
             ),
           ],
-        ),
+        ],
       ),
     );
   }

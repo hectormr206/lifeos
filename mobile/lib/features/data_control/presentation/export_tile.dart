@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/graph/graph_providers.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/export_service.dart';
 
 class ExportTile extends ConsumerWidget {
@@ -34,11 +35,15 @@ class ExportTile extends ConsumerWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(
+                  Space.lg, Space.lg, Space.lg, Space.sm),
               child: Text(
                 'Se exporta TODO lo que LifeOS sabe de ti: tus registros, tus '
                 'personas, las relaciones entre ellos y lo que has borrado.',
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
               ),
             ),
             ListTile(

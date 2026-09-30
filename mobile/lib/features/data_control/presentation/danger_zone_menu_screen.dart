@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
 
 /// "Zona de peligro" MENU (data-control kit).
@@ -20,14 +21,18 @@ class DangerZoneMenuScreen extends StatelessWidget {
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       appBar: AppBar(title: Text(l10n.sectionDangerZone)),
-      body: ListView(
+      body: PageBody(
         children: [
-          ListTile(
-            leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
-            title: Text(l10n.wipeNavTitle, style: TextStyle(color: scheme.error)),
-            subtitle: Text(l10n.wipeNavSubtitle),
-            trailing: Icon(Icons.chevron_right, color: scheme.error),
-            onTap: () => context.push('/settings/danger'),
+          GroupedList(
+            children: [
+              ListTile(
+                leading: Icon(Icons.delete_forever_outlined, color: scheme.error),
+                title: Text(l10n.wipeNavTitle, style: TextStyle(color: scheme.error)),
+                subtitle: Text(l10n.wipeNavSubtitle),
+                trailing: Icon(Icons.chevron_right, color: scheme.error),
+                onTap: () => context.push('/settings/danger'),
+              ),
+            ],
           ),
         ],
       ),
