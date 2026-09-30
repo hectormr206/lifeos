@@ -5,9 +5,13 @@ import 'package:go_router/go_router.dart';
 import '../../../core/widgets/status_banner.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/update_initiator.dart';
 import '../domain/update_status.dart';
 import 'app_update_notifier.dart';
+
+const _defaultMargin =
+    EdgeInsets.symmetric(horizontal: kPageGutter, vertical: Space.sm);
 
 /// The in-app reminder that a new version is waiting, surfaced on Home when
 /// the status is [UpdateAvailable]. Renders nothing otherwise, so it is safe to
@@ -29,7 +33,10 @@ import 'app_update_notifier.dart';
 /// notification cannot cold-start the app into a route the way an Android tap
 /// can, so the banner is the reliable path there, not a fallback.
 class UpdateAvailableBanner extends ConsumerWidget {
-  const UpdateAvailableBanner({super.key});
+  const UpdateAvailableBanner({super.key, this.margin});
+
+  /// Overrides [StatusBanner]'s default margin, for hosts that already pad.
+  final EdgeInsetsGeometry? margin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -46,6 +53,7 @@ class UpdateAvailableBanner extends ConsumerWidget {
         context.push('/settings/updates');
       },
       child: StatusBanner(
+        margin: margin ?? _defaultMargin,
         tone: BannerTone.info,
         icon: Icons.system_update,
         message: Column(

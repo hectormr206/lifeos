@@ -43,9 +43,15 @@ final shouldAskForBackupProvider = FutureProvider<bool>((ref) async {
   );
 });
 
+const _defaultMargin =
+    EdgeInsets.symmetric(horizontal: kPageGutter, vertical: Space.sm);
+
 /// La tarjeta. Aparece sola, dice qué se pierde y ofrece la salida en un toque.
 class BackupReminderBanner extends ConsumerWidget {
-  const BackupReminderBanner({super.key});
+  const BackupReminderBanner({super.key, this.margin});
+
+  /// Overrides [StatusBanner]'s default margin, for hosts that already pad.
+  final EdgeInsetsGeometry? margin;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -56,6 +62,7 @@ class BackupReminderBanner extends ConsumerWidget {
 
     final text = Theme.of(context).textTheme;
     return StatusBanner(
+      margin: margin ?? _defaultMargin,
       tone: BannerTone.warning,
       icon: Icons.shield_outlined,
       message: Column(

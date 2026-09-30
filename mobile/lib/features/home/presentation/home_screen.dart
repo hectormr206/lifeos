@@ -43,13 +43,14 @@ class HomeScreen extends ConsumerWidget {
       ),
       body: Column(
         children: [
-          const _HomeBanners(),
+          const _PinnedBanners(),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
                 if (constraints.maxWidth < 960) {
                   return PageBody(children: [
                     _HomeIntroduction(engineUrl: engineUrl),
+                    const _HomeNotices(),
                     const SizedBox(height: Space.sm),
                     const _HomeSections(),
                   ]);
@@ -74,7 +75,7 @@ class HomeScreen extends ConsumerWidget {
                               kPageGutter, Space.huge + Space.huge,
                               kPageGutter, Space.xxxl,
                             ),
-                            children: const [_HomeSections()],
+                            children: const [_HomeNotices(), _HomeSections()],
                           ),
                         ),
                       ],
@@ -90,21 +91,32 @@ class HomeScreen extends ConsumerWidget {
   }
 }
 
-class _HomeBanners extends StatelessWidget {
-  const _HomeBanners();
+/// Urgent and desktop-only (the running binary is stale): stays pinned.
+class _PinnedBanners extends StatelessWidget {
+  const _PinnedBanners();
 
   @override
   Widget build(BuildContext context) => Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
-          child: const Column(
-            children: [
-              RestartPendingBanner(),
-              BackupReminderBanner(),
-              UpdateAvailableBanner(),
-            ],
-          ),
+          child: const RestartPendingBanner(),
         ),
+      );
+}
+
+/// Reminders that scroll with the content, so the greeting stays first.
+/// PageBody already pads horizontally, hence the vertical-only margin.
+class _HomeNotices extends StatelessWidget {
+  const _HomeNotices();
+
+  static const _margin = EdgeInsets.symmetric(vertical: Space.sm);
+
+  @override
+  Widget build(BuildContext context) => const Column(
+        children: [
+          BackupReminderBanner(margin: _margin),
+          UpdateAvailableBanner(margin: _margin),
+        ],
       );
 }
 
