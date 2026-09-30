@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
+
 import '../domain/briefing_source.dart';
 import 'morning_briefing_notifier.dart';
 
@@ -51,7 +54,10 @@ class _MorningBriefingSourcesScreenState
 
     return Scaffold(
       appBar: AppBar(title: const Text('Fuentes del boletín')),
-      body: Column(
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
@@ -98,33 +104,29 @@ class _MorningBriefingSourcesScreenState
               ],
             ),
           ),
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Align(
               alignment: Alignment.centerLeft,
               child: Text(
                 'Se admiten feeds RSS/Atom o páginas de noticias. '
                 'Una fuente que falle se omite sin afectar al resto.',
-                style: TextStyle(fontSize: 12),
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             ),
           ),
-          const Divider(height: 24),
           Expanded(
             child: sources.isEmpty
                 ? const Center(child: Text('No hay fuentes configuradas.'))
-                : ListView(
+                : PageBody(
                     children: [
                       for (final entry in groupBriefingSources(
                         sources,
                       ).entries) ...[
-                        Padding(
-                          padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
-                          child: Text(
-                            '${entry.key} · ${entry.value.length}',
-                            style: Theme.of(context).textTheme.titleSmall,
-                          ),
-                        ),
+                        SectionHeader('${entry.key} · ${entry.value.length}'),
+                        GroupedList(children: [
                         for (final source in entry.value)
                           ListTile(
                             leading: const Icon(Icons.rss_feed),
@@ -173,11 +175,14 @@ class _MorningBriefingSourcesScreenState
                               ],
                             ),
                           ),
+                        ]),
                       ],
                     ],
                   ),
           ),
         ],
+      ),
+        ),
       ),
     );
   }

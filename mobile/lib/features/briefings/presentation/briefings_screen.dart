@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import '../../../core/widgets/offline_banner.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/briefing.dart';
 import 'briefings_notifier.dart';
 
@@ -35,10 +37,10 @@ class BriefingsScreen extends ConsumerWidget {
 
   Widget _buildBody(WidgetRef ref, BriefingsUiState state) {
     if (state.loading) {
-      return const _ScrollableCenter(child: CircularProgressIndicator());
+      return const ScrollableCenter(child: CircularProgressIndicator());
     }
     if (state.error != null) {
-      return _ScrollableCenter(
+      return ScrollableCenter(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
@@ -53,34 +55,20 @@ class BriefingsScreen extends ConsumerWidget {
       );
     }
     if (state.briefings.isEmpty) {
-      return const _ScrollableCenter(child: Text('Aún no tienes boletines.'));
+      return const ScrollableCenter(child: Text('Aún no tienes boletines.'));
     }
-    return ListView.builder(
-      physics: const AlwaysScrollableScrollPhysics(),
-      itemCount: state.briefings.length,
-      itemBuilder: (context, index) => _BriefingTile(briefing: state.briefings[index]),
-    );
-  }
-}
-
-/// Wraps non-list content (loading/error/empty) in a scrollable so
-/// [RefreshIndicator]'s pull-to-refresh keeps working.
-class _ScrollableCenter extends StatelessWidget {
-  const _ScrollableCenter({required this.child});
-
-  final Widget child;
-
-  @override
-  Widget build(BuildContext context) {
-    return LayoutBuilder(
-      builder: (context, constraints) => ListView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        children: [
-          SizedBox(
-            height: constraints.maxHeight,
-            child: Center(child: child),
+    return Center(
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+        child: ListView.builder(
+          physics: const AlwaysScrollableScrollPhysics(),
+          padding: const EdgeInsets.symmetric(horizontal: kPageGutter, vertical: Space.sm),
+          itemCount: state.briefings.length,
+          itemBuilder: (context, index) => Padding(
+            padding: const EdgeInsets.only(bottom: Space.sm),
+            child: GroupedList(children: [_BriefingTile(briefing: state.briefings[index])]),
           ),
-        ],
+        ),
       ),
     );
   }
@@ -93,10 +81,12 @@ class _BriefingTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final palette = LifeOSPalette.of(context);
     return ExpansionTile(
       leading: Icon(
         briefing.result == null ? Icons.schedule : (briefing.result!.ok ? Icons.check_circle : Icons.error),
-        color: briefing.result == null ? Colors.grey : (briefing.result!.ok ? Colors.green : Colors.red),
+        color: briefing.result == null ? scheme.onSurfaceVariant : (briefing.result!.ok ? palette.success : scheme.error),
       ),
       title: Text(briefing.message),
       subtitle: Text(_subtitleFor(briefing)),

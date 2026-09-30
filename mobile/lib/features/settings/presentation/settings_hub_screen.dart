@@ -7,10 +7,11 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../../../core/platform/app_platform.dart';
 import '../../../core/platform/platform_providers.dart';
+import '../../../core/widgets/widgets.dart';
 import '../../../l10n/app_localizations.dart';
 import '../../../l10n/language_preference.dart';
 import '../../../l10n/locale_providers.dart';
-import '../../../theme/lifeos_theme.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../../theme/theme_providers.dart';
 import '../../app_update/domain/app_version_info.dart';
 import '../../app_update/presentation/app_update_providers.dart';
@@ -42,23 +43,22 @@ class SettingsHubScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.settingsTitle)),
-      body: ListView(
-        padding: const EdgeInsets.symmetric(vertical: 8),
-        children: [
-          _SectionHeader(l10n.sectionAppearance),
-          _AppearanceTile(
+      body: PageBody(children: [
+          SectionHeader(l10n.sectionAppearance),
+          GroupedList(children: [_AppearanceTile(
             themeMode: themeMode,
             onChanged: (mode) => ref.read(themeModeProvider.notifier).setThemeMode(mode),
           ),
-          const Divider(),
+          ]),
           // i18n slice: the "Región" section — pick the app language.
-          _SectionHeader(l10n.sectionRegion),
-          _LanguageTile(
+          SectionHeader(l10n.sectionRegion),
+          GroupedList(children: [_LanguageTile(
             language: language,
             onChanged: (value) => ref.read(languageProvider.notifier).setLanguage(value),
           ),
-          const Divider(),
-          _SectionHeader(l10n.sectionGeneral),
+          ]),
+          SectionHeader(l10n.sectionGeneral),
+          GroupedList(children: [
           ListTile(
             leading: const Icon(Icons.offline_bolt_outlined),
             title: Text(l10n.localModelTitle),
@@ -128,9 +128,10 @@ class SettingsHubScreen extends ConsumerWidget {
               trailing: const Icon(Icons.chevron_right),
               onTap: () => ref.read(assistantChannelProvider).openAssistantSettings(),
             ),
-          const Divider(),
+          ]),
           // Optional biometric app lock. Offline-reachable, opt-in, default OFF.
-          _SectionHeader(l10n.sectionSecurity),
+          SectionHeader(l10n.sectionSecurity),
+          GroupedList(children: [
           const _AppLockTile(),
           // ON-DEVICE memory browser (roadmap SLICE C5). Offline-reachable, not
           // pairing-gated — reads the local encrypted graph store.
@@ -186,12 +187,10 @@ class SettingsHubScreen extends ConsumerWidget {
           // the wrong shape for it. It also renders as NOTHING unless the
           // paired engine reports a GPU, so on the Pixel-only setup this costs
           // no space at all.
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: GameModeTile(),
-          ),
-          const Divider(),
-          _SectionHeader(l10n.sectionAdvanced),
+          const GameModeTile(),
+          ]),
+          SectionHeader(l10n.sectionAdvanced),
+          GroupedList(children: [
           // The remote engine's config editor (laptop `/config` parity) used to
           // sit here. It configures the OTHER machine, so it is meaningless on a
           // device that is not paired to one — and it bounced to the pairing
@@ -208,11 +207,10 @@ class SettingsHubScreen extends ConsumerWidget {
             trailing: Icon(Icons.chevron_right, color: scheme.error),
             onTap: () => context.push('/settings/danger-zone'),
           ),
-          const Divider(),
-          _SectionHeader(l10n.sectionAbout),
-          const _AboutTile(),
-        ],
-      ),
+          ]),
+          SectionHeader(l10n.sectionAbout),
+          const GroupedList(children: [_AboutTile()]),
+        ]),
     );
   }
 }
@@ -273,7 +271,7 @@ class _LanguageTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.all(Space.lg),
       child: SegmentedButton<AppLanguage>(
         segments: [
           ButtonSegment(value: AppLanguage.system, label: Text(l10n.languageSystem)),
@@ -283,28 +281,6 @@ class _LanguageTile extends StatelessWidget {
         selected: {language},
         showSelectedIcon: false,
         onSelectionChanged: (selection) => onChanged(selection.first),
-      ),
-    );
-  }
-}
-
-class _SectionHeader extends StatelessWidget {
-  const _SectionHeader(this.label);
-
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        label,
-        style: Theme.of(context).textTheme.labelLarge?.copyWith(
-              color: scheme.primary,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.4,
-            ),
       ),
     );
   }
@@ -321,8 +297,10 @@ class _AppearanceTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final l10n = AppLocalizations.of(context);
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-      child: SegmentedButton<ThemeMode>(
+      padding: const EdgeInsets.all(Space.lg),
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: SegmentedButton<ThemeMode>(
         segments: [
           ButtonSegment(
             value: ThemeMode.light,
@@ -343,6 +321,7 @@ class _AppearanceTile extends StatelessWidget {
         selected: {themeMode},
         showSelectedIcon: false,
         onSelectionChanged: (selection) => onChanged(selection.first),
+      ),
       ),
     );
   }
@@ -392,15 +371,15 @@ class _AboutTile extends ConsumerWidget {
             width: 44,
             height: 44,
             decoration: BoxDecoration(
-              color: LifeOSColors.softPink.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
+              color: scheme.secondaryContainer,
+              borderRadius: BorderRadius.circular(Radii.chip),
             ),
             clipBehavior: Clip.antiAlias,
             child: Image.asset(
               'assets/branding/axi-512.png',
               fit: BoxFit.contain,
               errorBuilder: (context, error, stack) =>
-                  const Icon(Icons.pets, color: LifeOSColors.pink),
+                  Icon(Icons.pets, color: scheme.secondary),
             ),
           ),
           title: const Text('LifeOS'),

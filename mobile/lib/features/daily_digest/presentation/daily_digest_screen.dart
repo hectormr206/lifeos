@@ -3,6 +3,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+
 import '../domain/daily_digest.dart';
 import '../domain/daily_digest_schedule.dart';
 import 'daily_digest_notifier.dart';
@@ -27,9 +29,7 @@ class _DailyDigestScreenState extends ConsumerState<DailyDigestScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('Resumen del día')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+      body: PageBody(children: [
           _ScheduleCard(schedule: state.schedule, notifier: notifier),
           const SizedBox(height: 12),
           FilledButton.icon(
@@ -71,9 +71,8 @@ class _ScheduleCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     String two(int n) => n.toString().padLeft(2, '0');
-    return Card(
-      child: Column(
-        children: [
+    return GroupedList(
+      children: [
           SwitchListTile(
             title: const Text('Resumen automático'),
             subtitle: const Text('Se prepara solo cada día (integrado, no se puede eliminar).'),
@@ -100,7 +99,6 @@ class _ScheduleCard extends StatelessWidget {
                 : null,
           ),
         ],
-      ),
     );
   }
 }
@@ -132,7 +130,7 @@ class _DigestView extends StatelessWidget {
           ),
           const SizedBox(height: 12),
         ],
-        Text('Detalle de hoy', style: Theme.of(context).textTheme.titleSmall),
+        const SectionHeader('Detalle de hoy'),
         const SizedBox(height: 4),
         Text(digest.deterministicText),
       ],
