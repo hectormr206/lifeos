@@ -3,17 +3,37 @@ import 'package:flutter/material.dart';
 import 'lifeos_palette.dart';
 import 'lifeos_tokens.dart';
 
-/// Brand colors retained for existing feature callers.
+/// Brand colors lifted from the Axi axolotl mark
+/// (`axi/src/axi/static/axi-mark.svg`). The full token set lives in the color
+/// schemes below and in [LifeOSPalette]; see docs/design-system.md.
 class LifeOSColors {
   const LifeOSColors._();
 
+  /// Gill teal: the action color. Excellent as a FILL (9.6:1 under [dark]).
   static const Color teal = Color(0xFF00D4AA);
+
+  /// Accent pink.
   static const Color pink = Color(0xFFFF4D88);
+
+  /// Axi's skin: reserved for Axi's own presence (avatar, bubbles).
   static const Color softPink = Color(0xFFFE8FAF);
+
+  /// Axi's eyes: ink on light surfaces and the dark theme's page.
   static const Color dark = Color(0xFF14131F);
+
+  /// A lifted dark surface for containers in the dark theme.
   static const Color darkSurfaceHigh = Color(0xFF201E2E);
+
+  /// [teal] darkened for text on light surfaces. The bright teal measures
+  /// 1.82:1 on a near-white page (WCAG asks 4.5:1 for text); this keeps the
+  /// hue at 5.5:1. Pinned by test/theme/contrast_test.dart.
   static const Color tealOnLight = Color(0xFF007159);
+
+  /// [pink] darkened for text on light surfaces, same reasoning: 3.0 -> 5.6.
   static const Color pinkOnLight = Color(0xFFC0155B);
+
+  /// Light-theme divider: 2.0:1, an edge the eye finds without the line
+  /// shouting (the seeded default measured 1.62:1).
   static const Color dividerOnLight = Color(0xFFBFAAB2);
 }
 
