@@ -120,8 +120,9 @@ class _WebSearchSettingsScreenState
               ref
                   .read(webSearchSettingsProvider.notifier)
                   .setSearxngBaseUrl(value);
-              if (_testState != _TestState.idle)
+              if (_testState != _TestState.idle) {
                 setState(() => _testState = _TestState.idle);
+              }
             },
           ),
           const SizedBox(height: Space.sm),
@@ -191,8 +192,9 @@ class _WebSearchSettingsScreenState
   void _selectProvider(WebSearchProvider? provider) {
     if (provider == null) return;
     ref.read(webSearchSettingsProvider.notifier).setProvider(provider);
-    if (_testState != _TestState.idle)
+    if (_testState != _TestState.idle) {
       setState(() => _testState = _TestState.idle);
+    }
   }
 
   /// Runs a throwaway search against the ENTERED URL and reports whether the
