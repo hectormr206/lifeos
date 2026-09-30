@@ -14,6 +14,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/vocab_placement_scoring.dart';
 import '../domain/vocab_placement_session.dart';
 import '../data/activity_log.dart';
@@ -79,19 +80,26 @@ class _EnglishPlacementScreenState
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishPlacementTitle)),
       body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: ref.watch(vocabBankProvider).when(
-                loading: () => const Center(child: CircularProgressIndicator()),
-                error: (_, _) => Center(child: Text(l10n.englishPlacementLoadError)),
-                data: (bank) {
-                  final result = _result;
-                  if (result != null) return _resultView(l10n, bank, result);
-                  final session = _session;
-                  if (session != null) return _wordView(l10n, session);
-                  return _introView(l10n, bank);
-                },
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+            child: Padding(
+              padding: const EdgeInsets.symmetric(
+                horizontal: kPageGutter, vertical: Space.xxl,
               ),
+              child: ref.watch(vocabBankProvider).when(
+                    loading: () => const Center(child: CircularProgressIndicator()),
+                    error: (_, _) => Center(child: Text(l10n.englishPlacementLoadError)),
+                    data: (bank) {
+                      final result = _result;
+                      if (result != null) return _resultView(l10n, bank, result);
+                      final session = _session;
+                      if (session != null) return _wordView(l10n, session);
+                      return _introView(l10n, bank);
+                    },
+                  ),
+            ),
+          ),
         ),
       ),
     );
@@ -102,21 +110,21 @@ class _EnglishPlacementScreenState
     return ListView(
       children: [
         Text(l10n.englishPlacementIntro),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         Text(
           l10n.englishPlacementWarning,
           style: const TextStyle(fontWeight: FontWeight.bold),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         Text(l10n.englishPlacementLength),
         if (last != null) ...[
-          const SizedBox(height: 24),
+          const SizedBox(height: Space.xxl),
           Text(l10n.englishPlacementLast(
             last.result.cefr.name.toUpperCase(),
             last.result.estimatedWords,
           )),
         ],
-        const SizedBox(height: 24),
+        const SizedBox(height: Space.xxl),
         FilledButton(
           onPressed: () => _start(bank),
           child: Text(l10n.englishPlacementStart),
@@ -129,14 +137,17 @@ class _EnglishPlacementScreenState
     return Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
-        Text(l10n.englishPlacementProgress(_answered + 1)),
-        const SizedBox(height: 32),
+        Text(l10n.englishPlacementProgress(_answered + 1),
+            style: Theme.of(context).textTheme.labelLarge?.copyWith(
+              color: Theme.of(context).colorScheme.onSurfaceVariant,
+            )),
+        const SizedBox(height: Space.xxxl),
         Text(
           session.current!.text,
           key: const Key('english-placement-word'),
-          style: Theme.of(context).textTheme.displaySmall,
+          style: Theme.of(context).textTheme.displayMedium,
         ),
-        const SizedBox(height: 48),
+        const SizedBox(height: Space.huge),
         Row(
           children: [
             Expanded(
@@ -146,7 +157,7 @@ class _EnglishPlacementScreenState
                 child: Text(l10n.englishPlacementDontKnow),
               ),
             ),
-            const SizedBox(width: 16),
+            const SizedBox(width: Space.lg),
             Expanded(
               child: FilledButton(
                 key: const Key('english-placement-yes'),
@@ -170,25 +181,25 @@ class _EnglishPlacementScreenState
       children: [
         if (result.reliable) ...[
           Text(englishWordsLabel(l10n, result.estimatedWords), style: headline),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           Text(l10n.englishPlacementLevel(result.cefr.name.toUpperCase())),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           Text(l10n.englishPlacementScope),
         ] else
           Text(l10n.englishPlacementUnreliable),
         if (_saveFailed) ...[
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           Text(
             l10n.englishPlacementSaveFailed,
             style: TextStyle(color: Theme.of(context).colorScheme.error),
           ),
         ],
-        const SizedBox(height: 24),
+        const SizedBox(height: Space.xxl),
         OutlinedButton(
           onPressed: () => _start(bank),
           child: Text(l10n.englishPlacementRetake),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: Space.sm),
         FilledButton(
           onPressed: () => Navigator.of(context).maybePop(),
           child: Text(l10n.englishPlacementDone),

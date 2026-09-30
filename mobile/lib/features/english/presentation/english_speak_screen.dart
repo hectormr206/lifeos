@@ -20,6 +20,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../data/passage_speaker.dart';
@@ -213,11 +215,10 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
       appBar: AppBar(title: Text(l10n.englishSpeakTitle)),
       body: _sentences.isEmpty
           ? const SizedBox.shrink()
-          : ListView(
-              padding: const EdgeInsets.all(24),
+          : PageBody(
               children: [
                 Text(l10n.englishSpeakHint, style: theme.textTheme.bodySmall),
-                const SizedBox(height: 16),
+                const SizedBox(height: Space.lg),
                 if (score == null)
                   Text(_sentence, style: theme.textTheme.titleLarge)
                 else
@@ -238,12 +239,12 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
                       ],
                     ],
                   )),
-                const SizedBox(height: 24),
+                const SizedBox(height: Space.xxl),
                 OutlinedButton(
                   onPressed: _phase == _Phase.recording ? null : _listen,
                   child: Text(l10n.englishListen),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: Space.sm),
                 switch (_phase) {
                   _Phase.recording => FilledButton(
                       onPressed: _finish, child: Text(l10n.englishSpeakStop)),
@@ -252,13 +253,13 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
                       onPressed: _record, child: Text(l10n.englishSpeakRecord)),
                 },
                 if (score != null) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: Space.lg),
                   Text(l10n.englishSpeakScore(
                       (score.intelligibility * 100).round())),
                   Text(l10n.englishSpeakHeard(_heard)),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: Space.xs),
                   Text(l10n.englishSpeakCaveat, style: theme.textTheme.bodySmall),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: Space.lg),
                   SoundTipsSection(
                     status: soundModel,
                     tips: _tips,
@@ -268,10 +269,10 @@ class _EnglishSpeakScreenState extends ConsumerState<EnglishSpeakScreen> {
                   ),
                 ],
                 if (_problem != null) ...[
-                  const SizedBox(height: 16),
+                  const SizedBox(height: Space.lg),
                   Text(_problem!, style: TextStyle(color: error)),
                 ],
-                const SizedBox(height: 24),
+                const SizedBox(height: Space.xxl),
                 TextButton(onPressed: _next, child: Text(l10n.englishSpeakNext)),
               ],
             ),

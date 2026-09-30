@@ -13,6 +13,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
+import '../../../theme/lifeos_palette.dart';
+import '../../../theme/lifeos_theme.dart';
 import '../../chat/presentation/chat_providers.dart';
 import '../../stt/presentation/stt_providers.dart';
 import '../data/passage_speaker.dart';
@@ -167,96 +170,148 @@ class _EnglishRoleplayScreenState extends ConsumerState<EnglishRoleplayScreen> {
           ),
         ],
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Text(
-                  l10n.englishTalkGoal(widget.scenario.task),
-                  style: theme.textTheme.titleSmall,
-                ),
-                Text(l10n.englishTalkHint, style: theme.textTheme.bodySmall),
-              ],
-            ),
-          ),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                for (final turn in _turns)
-                  Align(
-                    alignment: turn.fromLearner
-                        ? Alignment.centerRight
-                        : Alignment.centerLeft,
-                    child: Card(
-                      color: turn.fromLearner
-                          ? theme.colorScheme.primaryContainer
-                          : null,
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Flexible(child: Text(turn.text)),
-                            if (!turn.fromLearner)
-                              IconButton(
-                                tooltip: l10n.englishListen,
-                                icon: const Icon(Icons.volume_up, size: 20),
-                                onPressed: () => _listen(turn.text),
-                              ),
-                          ],
-                        ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(kPageGutter, Space.md, kPageGutter, 0),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(Space.md),
+                      decoration: BoxDecoration(
+                        color: theme.colorScheme.surfaceContainerLow,
+                        borderRadius: BorderRadius.circular(Radii.card),
+                      ),
+                      child: Text(
+                        l10n.englishTalkGoal(widget.scenario.task),
+                        style: theme.textTheme.titleSmall,
                       ),
                     ),
-                  ),
-                if (_waiting) const LinearProgressIndicator(),
-                if (_noReply)
-                  Text(
-                    l10n.englishTalkNoReply,
-                    style: TextStyle(color: theme.colorScheme.error),
-                  ),
-                if (_reviewing) Text(l10n.englishReviewing),
-                if (_reviewed) ...[
-                  const SizedBox(height: 16),
-                  EnglishFeedbackView(feedback: _feedback),
-                ],
-              ],
-            ),
-          ),
-          SafeArea(
-            child: Padding(
-              padding: const EdgeInsets.all(8),
-              child: Row(
-                children: [
-                  IconButton(
-                    tooltip: _recording
-                        ? l10n.englishTalkDoneSpeaking
-                        : l10n.englishTalkSpeak,
-                    icon: Icon(_recording ? Icons.stop : Icons.mic),
-                    onPressed: _toggleSpeaking,
-                  ),
-                  Expanded(
-                    child: TextField(
-                      controller: _input,
-                      textInputAction: TextInputAction.send,
-                      onSubmitted: (_) => _send(),
-                    ),
-                  ),
-                  IconButton(
-                    tooltip: l10n.englishTalkSend,
-                    icon: const Icon(Icons.send),
-                    onPressed: _waiting || _input.text.trim().isEmpty
-                        ? null
-                        : _send,
-                  ),
-                ],
+                    const SizedBox(height: Space.sm),
+                    Text(l10n.englishTalkHint, style: theme.textTheme.bodySmall),
+                  ],
+                ),
               ),
-            ),
+              Expanded(
+                child: ListView(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: kPageGutter, vertical: Space.lg,
+                  ),
+                  children: [
+                    for (final turn in _turns)
+                      Align(
+                        alignment: turn.fromLearner
+                            ? Alignment.centerRight
+                            : Alignment.centerLeft,
+                        child: Card(
+                          color: turn.fromLearner
+                              ? theme.colorScheme.primaryContainer
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.all(Space.md),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(child: Text(turn.text)),
+                                if (!turn.fromLearner)
+                                  IconButton(
+                                    tooltip: l10n.englishListen,
+                                    icon: const Icon(Icons.volume_up, size: 20),
+                                    onPressed: () => _listen(turn.text),
+                                  ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (_waiting) const LinearProgressIndicator(),
+                    if (_noReply)
+                      Text(
+                        l10n.englishTalkNoReply,
+                        style: TextStyle(color: theme.colorScheme.error),
+                      ),
+                    if (_reviewing) Text(l10n.englishReviewing),
+                    if (_reviewed) ...[
+                      const SizedBox(height: Space.lg),
+                      EnglishFeedbackView(feedback: _feedback),
+                    ],
+                  ],
+                ),
+              ),
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    kPageGutter, Space.sm, kPageGutter, Space.sm,
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Expanded(
+                        child: Container(
+                          decoration: BoxDecoration(
+                            color: theme.brightness == Brightness.dark
+                                ? theme.colorScheme.surfaceContainer
+                                : theme.colorScheme.surfaceContainerLowest,
+                            borderRadius: BorderRadius.circular(28),
+                            border: theme.brightness == Brightness.dark
+                                ? null
+                                : Border.all(color: LifeOSPalette.of(context).hairline),
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                tooltip: _recording
+                                    ? l10n.englishTalkDoneSpeaking
+                                    : l10n.englishTalkSpeak,
+                                icon: Icon(_recording ? Icons.stop : Icons.mic),
+                                onPressed: _toggleSpeaking,
+                              ),
+                              Expanded(
+                                child: TextField(
+                                  controller: _input,
+                                  textInputAction: TextInputAction.send,
+                                  onSubmitted: (_) => _send(),
+                                  decoration: const InputDecoration(
+                                    border: InputBorder.none,
+                                    enabledBorder: InputBorder.none,
+                                    focusedBorder: InputBorder.none,
+                                    filled: false,
+                                    contentPadding: EdgeInsets.only(right: Space.lg),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: Space.sm),
+                      SizedBox(
+                        width: 48,
+                        height: 48,
+                        child: IconButton.filled(
+                          style: IconButton.styleFrom(
+                            backgroundColor: LifeOSColors.teal,
+                            foregroundColor: LifeOSColors.dark,
+                            shape: const CircleBorder(),
+                          ),
+                          tooltip: l10n.englishTalkSend,
+                          icon: const Icon(Icons.send),
+                          onPressed: _waiting || _input.text.trim().isEmpty
+                              ? null
+                              : _send,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }

@@ -13,6 +13,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/activity_log.dart';
 import '../data/passage_speaker.dart';
 import '../domain/daily_plan.dart';
@@ -189,7 +190,7 @@ class _EnglishListeningScreenState
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(l10n.englishListenNoVoice),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           if (status is TtsVoiceDownloading)
             Text(l10n.englishVoiceDownloading((status.progress * 100).round()))
           else ...[
@@ -208,7 +209,15 @@ class _EnglishListeningScreenState
     }
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishListeningTitle)),
-      body: Padding(padding: const EdgeInsets.all(24), child: body),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, Space.xxl),
+            child: body,
+          ),
+        ),
+      ),
     );
   }
 
@@ -219,13 +228,13 @@ class _EnglishListeningScreenState
       children: [
         if (_number == 1) ...[
           Text(l10n.englishListeningIntro),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
         ],
         Text(
           l10n.englishListeningSentence(_number),
           style: theme.textTheme.titleMedium,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         OutlinedButton.icon(
           onPressed: _playing || _plays >= _maxPlays || score != null
               ? null
@@ -235,7 +244,7 @@ class _EnglishListeningScreenState
         ),
         if (_playing) const Center(child: CircularProgressIndicator()),
         if (_playFailed) Text(l10n.englishListenFailed),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         TextField(
           controller: _typed,
           onChanged: (_) => setState(() {}),
@@ -244,7 +253,7 @@ class _EnglishListeningScreenState
           maxLines: 4,
           decoration: const InputDecoration(border: OutlineInputBorder()),
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         if (score == null) ...[
           FilledButton(
             onPressed: _heard && !_playing && _typed.text.trim().isNotEmpty
@@ -262,9 +271,9 @@ class _EnglishListeningScreenState
             l10n.englishListeningScore((score * 100).round()),
             style: theme.textTheme.titleMedium,
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: Space.xs),
           Text(_session.current!.sentence),
-          const SizedBox(height: 12),
+          const SizedBox(height: Space.md),
           FilledButton(
             onPressed: _advancing ? null : _next,
             child: Text(l10n.englishListeningNext),
@@ -296,9 +305,9 @@ class _EnglishListeningScreenState
               : l10n.englishListeningResult(level.name.toUpperCase()),
           style: Theme.of(context).textTheme.headlineSmall,
         ),
-        const SizedBox(height: 12),
+        const SizedBox(height: Space.md),
         Text(l10n.englishListeningCaveat),
-        const SizedBox(height: 24),
+        const SizedBox(height: Space.xxl),
         FilledButton(
           onPressed: () => Navigator.of(context).maybePop(),
           child: Text(l10n.englishPlacementDone),

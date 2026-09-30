@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/activity_log.dart';
 import '../data/word_gloss.dart';
 import '../domain/daily_plan.dart';
@@ -122,15 +124,13 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
     final l10n = AppLocalizations.of(context);
     final theme = Theme.of(context);
     final prep = _prep;
-    final header = theme.textTheme.titleMedium;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishRealTitle)),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
+      body: PageBody(
         children: [
           Text(l10n.englishRealIntro),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           TextField(
             key: const Key('real-talk-situation'),
             controller: _situation,
@@ -141,26 +141,24 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
             minLines: 2,
             maxLines: 4,
           ),
-          const SizedBox(height: 24),
-          Text(l10n.englishRealBefore, style: header),
-          const SizedBox(height: 8),
+          SectionHeader(l10n.englishRealBefore),
           FilledButton(
             onPressed: _busy || _situationText.isEmpty ? null : _prepare,
             child: Text(l10n.englishRealPrepare),
           ),
           if (prep != null) ...[
-            const SizedBox(height: 12),
+            const SizedBox(height: Space.md),
             Text(l10n.englishRealPhrases, style: theme.textTheme.titleSmall),
             for (final p in prep.phrases) Text(p),
             if (prep.questions.isNotEmpty) ...[
-              const SizedBox(height: 8),
+              const SizedBox(height: Space.sm),
               Text(
                 l10n.englishRealQuestions,
                 style: theme.textTheme.titleSmall,
               ),
               for (final q in prep.questions) Text(q),
             ],
-            const SizedBox(height: 8),
+            const SizedBox(height: Space.sm),
             OutlinedButton(
               onPressed: () => Navigator.of(context).push(
                 MaterialPageRoute<void>(
@@ -175,9 +173,7 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
               child: Text(l10n.englishRealRehearse),
             ),
           ],
-          const SizedBox(height: 24),
-          Text(l10n.englishRealAfter, style: header),
-          const SizedBox(height: 8),
+          SectionHeader(l10n.englishRealAfter),
           TextField(
             key: const Key('real-talk-wanted'),
             controller: _wanted,
@@ -188,7 +184,7 @@ class _EnglishRealTalkScreenState extends ConsumerState<EnglishRealTalkScreen> {
             minLines: 3,
             maxLines: 6,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           FilledButton(
             onPressed: _busy || wantedLines(_wanted.text).isEmpty
                 ? null

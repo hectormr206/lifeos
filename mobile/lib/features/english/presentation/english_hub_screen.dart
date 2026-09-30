@@ -12,6 +12,9 @@ library;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
+import '../../../theme/lifeos_palette.dart';
 import '../../../l10n/app_localizations.dart';
 import 'english_providers.dart';
 import 'english_milestones_view.dart';
@@ -26,89 +29,99 @@ class EnglishHubScreen extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
-    final title = Theme.of(context).textTheme.titleMedium;
+    final theme = Theme.of(context);
+    final detail = theme.textTheme.bodyMedium?.copyWith(
+      color: theme.colorScheme.onSurfaceVariant,
+    );
     final placement = ref.watch(latestPlacementProvider).value;
     final listening = ref.watch(latestListeningProvider).value;
 
     return Scaffold(
       appBar: AppBar(title: Text(l10n.englishHubTitle)),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
+      body: PageBody(
         children: [
-          // Today's plan first: the habit is the point.
-          if (placement != null) ...[
-            const EnglishTodayCard(),
-            const SizedBox(height: 8),
-            const EnglishReminderTile(),
-            const EnglishMilestonesView(),
-            const SizedBox(height: 16),
-          ],
-          Text(l10n.englishHubLevelTitle, style: title),
-          const SizedBox(height: 8),
-          if (placement == null) ...[
-            Text(l10n.englishHubNoLevel),
-            const SizedBox(height: 12),
-            FilledButton(
-              onPressed: () =>
-                  openEnglishScreen(context, ref, '/english/placement'),
-              child: Text(l10n.englishHubTakePlacement),
+          if (placement != null) const EnglishTodayCard(),
+          SectionHeader(l10n.englishHubLevelTitle),
+          Card(
+            margin: EdgeInsets.zero,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(Radii.panel),
+              side: theme.brightness == Brightness.dark
+                  ? BorderSide.none
+                  : BorderSide(color: LifeOSPalette.of(context).hairline),
             ),
-          ] else ...[
-            Text(
-              englishWordsLabel(l10n, placement.result.estimatedWords),
-              style: Theme.of(context).textTheme.headlineSmall,
-            ),
-            Text(
-              l10n.englishHubLevel(placement.result.cefr.name.toUpperCase()),
-            ),
-            const SizedBox(height: 12),
-            OutlinedButton(
-              onPressed: () =>
-                  openEnglishScreen(context, ref, '/english/placement'),
-              child: Text(l10n.englishPlacementRetake),
-            ),
-          ],
-          const SizedBox(height: 8),
-          // Listening is measured on its own: what is read and what is heard
-          // are often far apart.
-          if (listening != null)
-            Text(l10n.englishListeningLevel(
-                listening.level?.name.toUpperCase() ?? '< A1')),
-          TextButton(
-            onPressed: () => openEnglishScreen(context, ref, '/english/listening'),
-            child: Text(l10n.englishListeningMeasure),
-          ),
-          const SizedBox(height: 16),
-          // Always offered: the reading list itself says what is missing
-          // (level or goal), which is clearer than a button that is greyed out.
-          FilledButton.tonal(
-            onPressed: () => openEnglishScreen(context, ref, '/english/read'),
-            child: Text(l10n.englishReadTitle),
-          ),
-          const SizedBox(height: 8),
-          // The count is what is waiting TODAY (due words plus the day's new
-          // ones), so a 0 is an honest "nothing to do", not a broken button.
-          OutlinedButton(
-            onPressed: () => openEnglishScreen(context, ref, '/english/review'),
-            child: Text(
-              l10n.englishReviewButton(
-                ref.watch(reviewDueCountProvider).value ?? 0,
+            child: Padding(
+              padding: const EdgeInsets.all(Space.lg),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (placement == null) ...[
+                    Text(l10n.englishHubNoLevel),
+                    const SizedBox(height: Space.md),
+                    FilledButton(
+                      onPressed: () => openEnglishScreen(context, ref, '/english/placement'),
+                      child: Text(l10n.englishHubTakePlacement),
+                    ),
+                  ] else ...[
+                    Text(
+                      englishWordsLabel(l10n, placement.result.estimatedWords),
+                      style: theme.textTheme.headlineMedium,
+                    ),
+                    const SizedBox(height: Space.xs),
+                    Text(l10n.englishHubLevel(placement.result.cefr.name.toUpperCase()), style: detail),
+                  ],
+                  if (listening != null)
+                    Text(l10n.englishListeningLevel(
+                      listening.level?.name.toUpperCase() ?? '< A1'), style: detail),
+                  const SizedBox(height: Space.sm),
+                  Wrap(
+                    spacing: Space.sm,
+                    children: [
+                      if (placement != null)
+                        TextButton(
+                          onPressed: () => openEnglishScreen(context, ref, '/english/placement'),
+                          child: Text(l10n.englishPlacementRetake),
+                        ),
+                      TextButton(
+                        onPressed: () => openEnglishScreen(context, ref, '/english/listening'),
+                        child: Text(l10n.englishListeningMeasure),
+                      ),
+                    ],
+                  ),
+                ],
               ),
             ),
           ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () =>
-                openEnglishScreen(context, ref, '/english/practice'),
-            child: Text(l10n.englishPracticeTitle),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: () =>
-                openEnglishScreen(context, ref, '/english/recordings'),
-            child: Text(l10n.englishRecordingsTitle),
-          ),
-          const SizedBox(height: 32),
+          const SizedBox(height: Space.xxl),
+          // Always offered: each destination explains its missing prerequisites.
+          GroupedList(children: [
+            GroupedRow(
+              icon: Icons.auto_stories_outlined,
+              tone: RowTone.action,
+              title: l10n.englishReadTitle,
+              onTap: () => openEnglishScreen(context, ref, '/english/read'),
+            ),
+            // Count due words plus today's new ones, including an honest zero.
+            GroupedRow(
+              icon: Icons.style_outlined,
+              title: l10n.englishReviewButton(ref.watch(reviewDueCountProvider).value ?? 0),
+              onTap: () => openEnglishScreen(context, ref, '/english/review'),
+            ),
+            GroupedRow(
+              icon: Icons.forum_outlined,
+              title: l10n.englishPracticeTitle,
+              onTap: () => openEnglishScreen(context, ref, '/english/practice'),
+            ),
+            GroupedRow(
+              icon: Icons.mic_none,
+              title: l10n.englishRecordingsTitle,
+              onTap: () => openEnglishScreen(context, ref, '/english/recordings'),
+            ),
+          ]),
+          if (placement != null) ...[
+            const EnglishReminderTile(),
+            const EnglishMilestonesView(),
+          ],
           const EnglishGoalPicker(),
         ],
       ),

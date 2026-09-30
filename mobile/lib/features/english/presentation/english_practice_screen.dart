@@ -10,6 +10,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../domain/practice.dart';
 import 'english_goal_picker.dart';
 import 'english_feedback_view.dart';
@@ -26,19 +28,16 @@ class EnglishPracticeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final l10n = AppLocalizations.of(context);
     final goal = ref.watch(englishGoalProvider);
-    final theme = Theme.of(context);
 
     Widget body;
     if (goal.isLoading) {
       body = const Center(child: CircularProgressIndicator());
     } else if (goal.value == null) {
-      body = ListView(
-        padding: const EdgeInsets.all(24),
+      body = PageBody(
         children: const [EnglishGoalPicker()],
       );
     } else {
-      body = ListView(
-        padding: const EdgeInsets.all(16),
+      body = PageBody(
         children: [
           // With people: the part the app does not replace, first in view.
           FilledButton.tonal(
@@ -47,26 +46,28 @@ class EnglishPracticeScreen extends ConsumerWidget {
             )),
             child: Text(l10n.englishRealEntry),
           ),
-          const SizedBox(height: 16),
-          Text(l10n.englishPracticeTalk, style: theme.textTheme.titleMedium),
-          for (final scenario in roleplaysFor(goal.value!))
-            ListTile(
-              title: Text(scenario.title),
-              subtitle: Text(scenario.task),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => EnglishRoleplayScreen(scenario: scenario),
-              )),
-            ),
-          const SizedBox(height: 16),
-          Text(l10n.englishPracticeWrite, style: theme.textTheme.titleMedium),
-          for (final task in writingTasksFor(goal.value!))
-            ListTile(
-              title: Text(task.title),
-              subtitle: Text(task.prompt),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-                builder: (_) => EnglishWritingScreen(task: task),
-              )),
-            ),
+          SectionHeader(l10n.englishPracticeTalk),
+          GroupedList(children: [
+            for (final scenario in roleplaysFor(goal.value!))
+              GroupedRow(
+                title: scenario.title,
+                subtitle: scenario.task,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => EnglishRoleplayScreen(scenario: scenario),
+                )),
+              ),
+          ]),
+          SectionHeader(l10n.englishPracticeWrite),
+          GroupedList(children: [
+            for (final task in writingTasksFor(goal.value!))
+              GroupedRow(
+                title: task.title,
+                subtitle: task.prompt,
+                onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+                  builder: (_) => EnglishWritingScreen(task: task),
+                )),
+              ),
+          ]),
         ],
       );
     }
@@ -130,13 +131,12 @@ class _EnglishWritingScreenState extends ConsumerState<EnglishWritingScreen> {
     final theme = Theme.of(context);
     return Scaffold(
       appBar: AppBar(title: Text(widget.task.title)),
-      body: ListView(
-        padding: const EdgeInsets.all(24),
+      body: PageBody(
         children: [
           Text(widget.task.prompt, style: theme.textTheme.titleMedium),
-          const SizedBox(height: 8),
+          const SizedBox(height: Space.sm),
           Text(l10n.englishWriteHint, style: theme.textTheme.bodySmall),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           TextField(
             controller: _text,
             minLines: 5,
@@ -144,13 +144,13 @@ class _EnglishWritingScreenState extends ConsumerState<EnglishWritingScreen> {
             onChanged: (_) => setState(() {}),
             decoration: const InputDecoration(border: OutlineInputBorder()),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: Space.lg),
           FilledButton(
             onPressed: _reviewing || _text.text.trim().isEmpty ? null : _review,
             child: Text(_reviewing ? l10n.englishReviewing : l10n.englishWriteReview),
           ),
           if (_reviewed) ...[
-            const SizedBox(height: 24),
+            const SizedBox(height: Space.xxl),
             EnglishFeedbackView(feedback: _feedback),
           ],
         ],

@@ -12,6 +12,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
+import '../../../theme/lifeos_tokens.dart';
 import '../data/wikimedia_reading.dart';
 import '../domain/lexical_coverage.dart';
 import 'english_providers.dart';
@@ -39,7 +41,7 @@ class EnglishReadingListScreen extends ConsumerWidget {
       );
     } else if (goal.value == null) {
       body = ListView(
-        padding: const EdgeInsets.all(24),
+        padding: EdgeInsets.zero,
         children: const [EnglishGoalPicker()],
       );
     } else {
@@ -59,7 +61,15 @@ class EnglishReadingListScreen extends ConsumerWidget {
           ),
         ],
       ),
-      body: Padding(padding: const EdgeInsets.all(24), child: body),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: kContentMaxWidth),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(kPageGutter, Space.sm, kPageGutter, Space.xxl),
+            child: body,
+          ),
+        ),
+      ),
     );
   }
 }
@@ -73,15 +83,16 @@ class _List extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     void again() => ref.invalidate(readingListProvider);
     final note = Text(l10n.englishReadNote,
-        style: Theme.of(context).textTheme.bodySmall);
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Theme.of(context).colorScheme.onSurfaceVariant));
 
     return ref.watch(readingListProvider).when(
           loading: () => Column(
             children: [
               const LinearProgressIndicator(),
-              const SizedBox(height: 16),
+              const SizedBox(height: Space.lg),
               Text(l10n.englishReadLoading),
-              const SizedBox(height: 8),
+              const SizedBox(height: Space.sm),
               note,
             ],
           ),
@@ -100,12 +111,14 @@ class _List extends ConsumerWidget {
                 )
               : ListView(
                   children: [
-                    for (final reading in readings)
-                      _ReadingTile(reading: reading, l10n: l10n),
-                    const SizedBox(height: 16),
+                    GroupedList(children: [
+                      for (final reading in readings)
+                        _ReadingTile(reading: reading, l10n: l10n),
+                    ]),
+                    const SizedBox(height: Space.lg),
                     OutlinedButton(
                         onPressed: again, child: Text(l10n.englishReadAgain)),
-                    const SizedBox(height: 16),
+                    const SizedBox(height: Space.lg),
                     note,
                   ],
                 ),
@@ -128,19 +141,16 @@ class _ReadingTile extends StatelessWidget {
       TextFit.atLevel => l10n.englishFitAtLevel,
       TextFit.hard || TextFit.empty => l10n.englishFitHard,
     };
-    return Card(
-      child: ListTile(
-        title: Text(reading.article.title),
-        subtitle: Text([
-          if (section.isNotEmpty) section,
-          l10n.englishFitLine(fit, (report.coverage * 100).round()),
-          l10n.englishReadNewWords(report.unknownLemmas.length),
-        ].join('\n')),
-        isThreeLine: true,
-        onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-          builder: (_) => EnglishReaderScreen(reading: reading),
-        )),
-      ),
+    return GroupedRow(
+      title: reading.article.title,
+      subtitle: [
+        if (section.isNotEmpty) section,
+        l10n.englishFitLine(fit, (report.coverage * 100).round()),
+        l10n.englishReadNewWords(report.unknownLemmas.length),
+      ].join('\n'),
+      onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => EnglishReaderScreen(reading: reading),
+      )),
     );
   }
 }
@@ -158,7 +168,7 @@ class _Message extends StatelessWidget {
         children: [
           Text(text),
           if (action != null) ...[
-            const SizedBox(height: 16),
+            const SizedBox(height: Space.lg),
             FilledButton(onPressed: onAction, child: Text(action!)),
           ],
         ],

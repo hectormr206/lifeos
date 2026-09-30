@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../core/widgets/widgets.dart';
 import 'english_providers.dart';
 
 final _reminderTimeProvider = FutureProvider.autoDispose<TimeOfDay?>(
@@ -48,18 +49,21 @@ class _EnglishReminderTileState extends ConsumerState<EnglishReminderTile> {
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         if (time != null)
-          Text(l10n.englishReminderSet(
-              MaterialLocalizations.of(context).formatTimeOfDay(time,
-                  alwaysUse24HourFormat: true)))
+          SectionHeader(l10n.englishReminderSet(
+            MaterialLocalizations.of(context).formatTimeOfDay(time,
+                alwaysUse24HourFormat: true)))
         else
-          OutlinedButton.icon(
-            onPressed: _set,
-            icon: const Icon(Icons.alarm),
-            label: Text(l10n.englishReminderButton),
+          InkWell(
+            onTap: _set,
+            child: SectionHeader(
+              l10n.englishReminderButton,
+              trailing: const Icon(Icons.alarm),
+            ),
           ),
         if (_failed)
           Text(l10n.englishReminderFailed,
-              style: TextStyle(color: Theme.of(context).colorScheme.error)),
+              style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                color: Theme.of(context).colorScheme.error)),
       ],
     );
   }

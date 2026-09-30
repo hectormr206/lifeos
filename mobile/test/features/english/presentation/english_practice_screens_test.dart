@@ -77,6 +77,8 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('Primera llamada con un cliente'), findsOneWidget);
+    // The writing group is below the conversation group in the readable column.
+    await tester.scrollUntilVisible(find.text('Propuesta para un cliente'), 200);
     expect(find.text('Propuesta para un cliente'), findsOneWidget);
     expect(find.text('En un restaurante'), findsNothing);
     expect(find.text('Correo a la escuela'), findsNothing);

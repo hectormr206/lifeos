@@ -13,6 +13,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../l10n/app_localizations.dart';
+import '../../../theme/lifeos_tokens.dart';
+import '../../../theme/lifeos_palette.dart';
 import '../domain/daily_plan.dart';
 import 'english_providers.dart';
 
@@ -44,19 +46,29 @@ class EnglishTodayCard extends ConsumerWidget {
     };
 
     return Card(
+      margin: EdgeInsets.zero,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(Radii.panel),
+        side: theme.brightness == Brightness.dark
+            ? BorderSide.none
+            : BorderSide(color: LifeOSPalette.of(context).hairline),
+      ),
       child: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(Space.lg),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Text(l10n.englishTodayTitle(phase.minutes),
                 style: theme.textTheme.titleMedium),
-            const SizedBox(height: 4),
+            const SizedBox(height: Space.xs),
             Text(day.done
                 ? l10n.englishTodayDone(day.minutesToday)
                 : day.floorOnly
                     ? l10n.englishTodayFloor
-                    : l10n.englishTodayProgress(day.minutesToday, phase.minutes)),
+                    : l10n.englishTodayProgress(day.minutesToday, phase.minutes),
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: theme.colorScheme.onSurfaceVariant,
+                )),
             for (final step in steps)
               ListTile(
                 dense: true,
@@ -65,14 +77,15 @@ class EnglishTodayCard extends ConsumerWidget {
                     ? Icons.check_circle
                     : Icons.radio_button_unchecked),
                 title: Text(l10n.englishStepMinutes(
-                    _stepLabel(l10n, step.kind), step.minutes)),
+                    _stepLabel(l10n, step.kind), step.minutes),
+                    style: theme.textTheme.bodyMedium),
                 onTap: () =>
                     openEnglishScreen(context, ref, _stepRoute(step.kind)),
               ),
             Text(l10n.englishTodayWeek(day.daysThisWeek),
                 style: theme.textTheme.bodySmall),
             if (proposal != null) ...[
-              const SizedBox(height: 12),
+              const SizedBox(height: Space.md),
               Text(proposal == StudyPhase.build
                   ? l10n.englishProposeBuild
                   : l10n.englishProposeCruise),
@@ -95,8 +108,11 @@ class EnglishTodayCard extends ConsumerWidget {
               ),
             if (placement != null &&
                 reassessmentDue(placement.takenAt, now: now)) ...[
-              const SizedBox(height: 12),
-              Text(l10n.englishReassess),
+              const SizedBox(height: Space.md),
+              Text(l10n.englishReassess,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: theme.colorScheme.onSurfaceVariant,
+                  )),
               Align(
                 alignment: Alignment.centerLeft,
                 child: TextButton(
